@@ -24,7 +24,7 @@ uv add python-dotenv langchain-chroma langchain-community langchain-core langcha
 ### Django
 ```bash
 uv init --python 3.11
-uv add django
+uv add django langgraph
 uv run django-admin startproject config .
 uv run python manage.py startapp chat
 uv run python manage.py runserver
