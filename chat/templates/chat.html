@@ -1,943 +1,1066 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="ko" data-theme="dark">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>오버워치 코치 AI</title>
-<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet"/>
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg0:#08111f;
-  --bg1:#0d1a2e;
-  --bg2:#122038;
-  --bg3:#1a2e4a;
-  --bg4:#1f3655;
-  --cyan:#00c8ff;
-  --cyan2:#00aadd;
-  --cyan-dim:rgba(0,200,255,0.12);
-  --cyan-glow:rgba(0,200,255,0.35);
-  --orange:#ff6b2b;
-  --orange2:#e85a1a;
-  --gold:#f5c842;
-  --white:#ffffff;
-  --text:#e8f4ff;
-  --text2:#a8c8e8;
-  --muted:#4a7090;
-  --border:rgba(0,200,255,0.18);
-  --border2:rgba(0,200,255,0.35);
+[data-theme="dark"] {
+  --bg:#0b1120;--surface:#111c30;--surface2:#172240;
+  --line:rgba(255,255,255,0.08);--line2:rgba(0,200,255,0.30);
+  --accent:#00c8ff;--accent2:#0099cc;--on-accent:#001824;
+  --tx-1:#ffffff;--tx-2:#d8eaf8;--tx-3:#a8c8e8;
+  --tag-bg:rgba(0,200,255,0.14);--tag-tx:#00c8ff;
+  --user-bg:#172240;--user-bd:rgba(0,200,255,0.30);
+  --ai-bg:#111c30;--ai-bd:rgba(0,200,255,0.22);
+  --input-bg:#0e1828;--input-bd:rgba(0,200,255,0.30);
+  --err:#ff5555;--green:#3dd68c;--gold:#f5c518;--orange:#ff8c4a;
+  --map-btn-bg:rgba(255,255,255,0.06);--map-btn-active:rgba(0,200,255,0.22);
+  --stat-bg:rgba(0,200,255,0.07);--stat-bd:rgba(0,200,255,0.28);
 }
-html,body{height:100%;background:var(--bg0);color:var(--text);font-family:'Noto Sans KR',sans-serif;overflow:hidden}
-body{display:flex;flex-direction:column;height:100vh;position:relative}
-
-/* ── SCANLINE OVERLAY ── */
-body::before{
-  content:'';position:fixed;inset:0;pointer-events:none;z-index:1000;
-  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.08) 2px,rgba(0,0,0,0.08) 4px);
+[data-theme="light"] {
+  --bg:#f2f6fc;--surface:#ffffff;--surface2:#e8f0fa;
+  --line:rgba(0,0,0,0.08);--line2:rgba(0,120,200,0.30);
+  --accent:#0080cc;--accent2:#0060aa;--on-accent:#ffffff;
+  --tx-1:#06111f;--tx-2:#1a3a5c;--tx-3:#3a6080;
+  --tag-bg:rgba(0,100,180,0.10);--tag-tx:#005599;
+  --user-bg:#ddeeff;--user-bd:rgba(0,100,180,0.25);
+  --ai-bg:#ffffff;--ai-bd:rgba(0,0,0,0.10);
+  --input-bg:#ffffff;--input-bd:rgba(0,100,180,0.30);
+  --err:#cc2222;--green:#1a9a5c;--gold:#b07800;--orange:#c04a00;
+  --map-btn-bg:rgba(0,0,0,0.03);--map-btn-active:rgba(0,100,180,0.15);
+  --stat-bg:rgba(0,100,180,0.05);--stat-bd:rgba(0,100,180,0.18);
 }
-/* ── CORNER BRACKETS ── */
-body::after{
-  content:'';position:fixed;inset:8px;pointer-events:none;z-index:999;
-  border:1px solid rgba(0,200,255,0.12);
-}
-
-/* ── HEADER ── */
-.hdr{
-  flex-shrink:0;position:relative;z-index:10;
-  background:linear-gradient(180deg,#0a1628 0%,#0d1a2e 100%);
-  border-bottom:1px solid var(--border2);
-  height:68px;
-  display:flex;align-items:center;padding:0 1.5rem;gap:1.25rem;
-  overflow:hidden;
-}
-/* top cyan accent line */
-.hdr::before{
-  content:'';position:absolute;top:0;left:0;right:0;height:2px;
-  background:linear-gradient(90deg,transparent 0%,var(--cyan) 30%,var(--cyan) 70%,transparent 100%);
-  box-shadow:0 0 20px var(--cyan-glow);
-}
-/* diagonal bg lines */
-.hdr::after{
-  content:'';position:absolute;inset:0;
-  background:repeating-linear-gradient(-45deg,transparent,transparent 20px,rgba(0,200,255,0.015) 20px,rgba(0,200,255,0.015) 21px);
-  pointer-events:none;
-}
-
-.hdr-emblem{
-  width:48px;height:48px;flex-shrink:0;position:relative;
-  display:flex;align-items:center;justify-content:center;
-}
-.hdr-emblem svg{width:40px;height:40px;}
-.hdr-emblem::after{
-  content:'';position:absolute;inset:-2px;
-  background:transparent;
-  border:1px solid var(--cyan);
-  clip-path:polygon(50% 0%,95% 25%,95% 75%,50% 100%,5% 75%,5% 25%);
-  box-shadow:0 0 12px var(--cyan-glow),inset 0 0 8px rgba(0,200,255,0.1);
-  animation:hex-pulse 3s ease-in-out infinite;
-}
-@keyframes hex-pulse{0%,100%{box-shadow:0 0 12px var(--cyan-glow)}50%{box-shadow:0 0 24px var(--cyan-glow),inset 0 0 12px rgba(0,200,255,0.15)}}
-
-.hdr-text{flex:1}
-.hdr-title{
-  font-family:'Rajdhani',sans-serif;font-weight:700;font-size:1.5rem;
-  letter-spacing:4px;text-transform:uppercase;line-height:1;
-  color:var(--white);text-shadow:0 0 20px rgba(0,200,255,0.6);
-}
-.hdr-title span{color:var(--cyan)}
-.hdr-sub{
-  font-family:'Share Tech Mono',monospace;font-size:0.62rem;
-  color:var(--muted);letter-spacing:3px;text-transform:uppercase;margin-top:3px;
-}
-
-.hdr-right{margin-left:auto;display:flex;align-items:center;gap:1rem}
-.hdr-status{display:flex;align-items:center;gap:8px}
-.status-dot{
-  width:7px;height:7px;background:var(--cyan);border-radius:50%;
-  box-shadow:0 0 8px var(--cyan);animation:blink 2.5s ease-in-out infinite;
-}
-@keyframes blink{0%,100%{opacity:1;box-shadow:0 0 8px var(--cyan)}50%{opacity:0.4;box-shadow:none}}
-.status-label{
-  font-family:'Share Tech Mono',monospace;font-size:0.62rem;
-  color:var(--cyan);letter-spacing:2px;text-transform:uppercase;
-}
-.hdr-btn{
-  font-family:'Rajdhani',sans-serif;font-weight:600;font-size:0.7rem;
-  letter-spacing:2px;text-transform:uppercase;
-  background:transparent;border:1px solid rgba(0,200,255,0.25);
-  color:var(--muted);padding:6px 14px;cursor:pointer;
-  clip-path:polygon(8px 0%,100% 0%,calc(100% - 8px) 100%,0% 100%);
-  transition:all 0.2s;
-}
-.hdr-btn:hover{border-color:var(--cyan);color:var(--cyan);background:var(--cyan-dim)}
-
-/* ── MAIN ── */
-.main{flex:1;display:flex;overflow:hidden;position:relative;z-index:1}
-
-/* ── LEFT PANEL ── */
-.panel-left{
-  width:230px;flex-shrink:0;
-  background:linear-gradient(180deg,#0a1628 0%,#08111f 100%);
-  border-right:1px solid var(--border);
-  display:flex;flex-direction:column;overflow:hidden;
-}
-
-.panel-section{padding:1rem;border-bottom:1px solid var(--border)}
-
-.section-label{
-  font-family:'Rajdhani',sans-serif;font-weight:700;
-  font-size:0.6rem;letter-spacing:4px;text-transform:uppercase;
-  color:var(--cyan);margin-bottom:0.75rem;
-  display:flex;align-items:center;gap:8px;
-}
-.section-label::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--border2),transparent)}
-
-/* ROLE SELECTOR */
-.roles{display:grid;grid-template-columns:1fr 1fr;gap:5px}
-.role-btn{
-  padding:8px 6px;
-  background:transparent;border:1px solid rgba(0,200,255,0.15);
-  color:var(--text2);font-size:0.72rem;font-family:'Rajdhani',sans-serif;font-weight:600;
-  letter-spacing:1px;text-transform:uppercase;cursor:pointer;
-  display:flex;flex-direction:column;align-items:center;gap:3px;
-  transition:all 0.15s;
-}
-.role-btn:hover{background:var(--cyan-dim);border-color:var(--border2);color:var(--cyan)}
-.role-btn.active{
-  background:linear-gradient(135deg,rgba(0,200,255,0.2),rgba(0,200,255,0.05));
-  border-color:var(--cyan);color:var(--cyan);
-  box-shadow:inset 0 0 10px rgba(0,200,255,0.1);
-}
-.role-btn .ri{font-size:1.2rem}
-.role-btn.all{grid-column:1/-1}
-
-/* INTEL FEED (examples) */
-.intel-feed{flex:1;overflow-y:auto;padding:0.75rem}
-.intel-feed::-webkit-scrollbar{width:2px}
-.intel-feed::-webkit-scrollbar-thumb{background:var(--border2)}
-.intel-item{
-  padding:8px 10px;margin-bottom:5px;
-  background:transparent;border:1px solid rgba(0,200,255,0.1);
-  border-left:2px solid transparent;
-  color:var(--text2);font-size:0.77rem;line-height:1.45;
-  cursor:pointer;font-family:'Noto Sans KR',sans-serif;
-  display:block;width:100%;text-align:left;
-  transition:all 0.15s;position:relative;overflow:hidden;
-}
-.intel-item::before{
-  content:'';position:absolute;left:0;top:0;bottom:0;width:0;
-  background:var(--cyan-dim);transition:width 0.2s;
-}
-.intel-item:hover::before{width:100%}
-.intel-item:hover{border-left-color:var(--cyan);color:var(--white)}
-.intel-tag{
-  display:inline-block;font-family:'Share Tech Mono',monospace;
-  font-size:0.55rem;letter-spacing:2px;text-transform:uppercase;
-  color:var(--orange);margin-bottom:3px;
-}
-
-/* SYSTEM LOG */
-.sys-log{
-  padding:0.75rem 1rem;
-  font-family:'Share Tech Mono',monospace;font-size:0.6rem;
-  color:var(--muted);letter-spacing:1px;border-top:1px solid var(--border);
-}
-.log-line{margin-bottom:3px;display:flex;gap:6px}
-.log-ts{color:var(--cyan);opacity:0.6}
-.log-txt{color:var(--muted)}
-
-/* ── CENTER ── */
-.chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;position:relative}
-
-/* ── HUD BAR ── */
-.hud-bar{
-  flex-shrink:0;
-  background:rgba(13,26,46,0.95);
-  border-bottom:1px solid var(--border);
-  padding:0.6rem 1.5rem;
-  display:flex;align-items:center;gap:1.5rem;
-}
-.hud-stat{display:flex;flex-direction:column;align-items:center;min-width:50px}
-.hud-val{
-  font-family:'Rajdhani',sans-serif;font-weight:700;font-size:1.3rem;
-  color:var(--cyan);line-height:1;text-shadow:0 0 10px rgba(0,200,255,0.5);
-}
-.hud-lbl{
-  font-family:'Share Tech Mono',monospace;font-size:0.52rem;
-  color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-top:2px;
-}
-.hud-divider{width:1px;height:32px;background:var(--border);flex-shrink:0}
-.hud-info{flex:1}
-.hud-info h3{
-  font-family:'Rajdhani',sans-serif;font-weight:700;font-size:0.9rem;
-  color:var(--white);letter-spacing:2px;text-transform:uppercase;
-}
-.hud-info p{font-size:0.68rem;color:var(--muted);letter-spacing:1px;margin-top:2px}
-.hud-progress{
-  margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px;
-}
-.progress-bar{
-  width:120px;height:3px;background:rgba(0,200,255,0.1);
-  position:relative;overflow:hidden;
-}
-.progress-fill{
-  position:absolute;left:0;top:0;bottom:0;
-  background:linear-gradient(90deg,var(--cyan2),var(--cyan));
-  width:0%;transition:width 0.5s ease;
-  box-shadow:0 0 8px var(--cyan);
-}
-.progress-lbl{font-family:'Share Tech Mono',monospace;font-size:0.55rem;color:var(--muted);letter-spacing:1px}
-
-/* ── CHATBOX ── */
-.chatbox{
-  flex:1;overflow-y:auto;padding:1.5rem;
-  display:flex;flex-direction:column;gap:0;
-  position:relative;
-}
-.chatbox::-webkit-scrollbar{width:3px}
-.chatbox::-webkit-scrollbar-track{background:transparent}
-.chatbox::-webkit-scrollbar-thumb{background:rgba(0,200,255,0.2);border-radius:2px}
-
-/* ── WELCOME ── */
-.welcome{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  flex:1;text-align:center;padding:2rem;gap:1.5rem;
-  position:relative;
-}
-.welcome-ring{
-  position:relative;width:100px;height:100px;
-  display:flex;align-items:center;justify-content:center;
-}
-.welcome-ring::before{
-  content:'';position:absolute;inset:0;
-  border:2px solid var(--cyan);
-  clip-path:polygon(50% 0%,95% 25%,95% 75%,50% 100%,5% 75%,5% 25%);
-  box-shadow:0 0 20px var(--cyan-glow),inset 0 0 20px rgba(0,200,255,0.05);
-  animation:ring-spin 6s linear infinite;
-}
-.welcome-ring::after{
-  content:'';position:absolute;inset:6px;
-  border:1px solid rgba(0,200,255,0.3);
-  clip-path:polygon(50% 0%,95% 25%,95% 75%,50% 100%,5% 75%,5% 25%);
-  animation:ring-spin 6s linear infinite reverse;
-}
-@keyframes ring-spin{from{filter:hue-rotate(0deg)}to{filter:hue-rotate(360deg)}}
-.welcome-icon{font-size:2.5rem;position:relative;z-index:1}
-.welcome-title{
-  font-family:'Rajdhani',sans-serif;font-weight:700;font-size:2rem;
-  letter-spacing:4px;text-transform:uppercase;color:var(--white);
-  text-shadow:0 0 30px rgba(0,200,255,0.5);
-}
-.welcome-title span{color:var(--cyan)}
-.welcome-desc{
-  font-family:'Share Tech Mono',monospace;font-size:0.72rem;
-  color:var(--text2);letter-spacing:2px;text-transform:uppercase;
-  line-height:2;
-}
-.welcome-desc b{color:var(--cyan);font-weight:400}
-.quick-cmds{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:0.5rem}
-.qcmd{
-  padding:6px 16px;
-  font-family:'Rajdhani',sans-serif;font-weight:600;font-size:0.7rem;
-  letter-spacing:2px;text-transform:uppercase;
-  background:var(--cyan-dim);border:1px solid var(--border2);
-  color:var(--cyan);cursor:pointer;transition:all 0.15s;
-  clip-path:polygon(6px 0,100% 0,calc(100% - 6px) 100%,0 100%);
-}
-.qcmd:hover{background:rgba(0,200,255,0.25);color:var(--white)}
-
-/* ── MESSAGES ── */
-.msg-block{
-  display:flex;gap:14px;padding:1rem 0;
-  border-bottom:1px solid rgba(0,200,255,0.05);
-  animation:fadein 0.25s ease-out;
-  position:relative;
-}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:var(--bg);color:var(--tx-2);font-family:'Noto Sans KR',sans-serif;font-size:15px;line-height:1.6;transition:background .25s,color .25s}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--line2);border-radius:4px}
+.hdr{flex-shrink:0;height:64px;background:var(--surface);border-bottom:2px solid var(--accent);display:flex;align-items:center;padding:0 1.5rem;gap:1rem;position:relative;z-index:100}
+[data-theme="dark"] .hdr{box-shadow:0 2px 20px rgba(0,200,255,0.12)}
+[data-theme="light"] .hdr{box-shadow:0 2px 12px rgba(0,0,0,0.08)}
+.hdr-logo{width:40px;height:40px;flex-shrink:0;display:flex;align-items:center;justify-content:center;position:relative}
+.hdr-logo svg{width:34px;height:34px}
+.hdr-logo::after{content:'';position:absolute;inset:-4px;border:1.5px solid var(--accent);clip-path:polygon(50% 0%,95% 25%,95% 75%,50% 100%,5% 75%,5% 25%);animation:logopulse 3s ease-in-out infinite}
+@keyframes logopulse{0%,100%{opacity:.6}50%{opacity:1}}
+.hdr-info{flex:1}
+.hdr-title{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:1.35rem;letter-spacing:3px;text-transform:uppercase;color:var(--tx-1);line-height:1}
+.hdr-title em{color:var(--accent);font-style:normal}
+.hdr-sub{font-size:.72rem;color:var(--tx-3);letter-spacing:1px;margin-top:3px}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.online-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:blink 2.5s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.online-label{font-size:.75rem;color:var(--green);font-weight:500}
+.icon-btn{background:transparent;border:1px solid var(--line2);color:var(--tx-3);cursor:pointer;width:34px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1rem;transition:all .18s}
+.icon-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--tag-bg)}
+.text-btn{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:.8rem;letter-spacing:1.5px;text-transform:uppercase;background:transparent;border:1px solid var(--line2);color:var(--tx-3);padding:6px 14px;cursor:pointer;border-radius:4px;transition:all .18s}
+.text-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--tag-bg)}
+.main{flex:1;display:flex;overflow:hidden;min-height:0}
+.sidebar{width:240px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+.sidebar-section{padding:1.1rem .8rem .8rem;border-bottom:1px solid var(--line)}
+.s-label{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.7rem;letter-spacing:3px;text-transform:uppercase;color:var(--accent);margin-bottom:.7rem}
+.role-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.role-btn{padding:8px 2px;background:transparent;border:1px solid var(--line2);color:var(--tx-2);font-size:.68rem;font-family:'Noto Sans KR',sans-serif;font-weight:600;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;border-radius:6px;transition:all .15s;white-space:nowrap}
+.role-btn .ri{font-size:1rem}
+.role-btn:hover{background:var(--surface2);border-color:var(--accent);color:var(--tx-1)}
+.role-btn.active{background:var(--tag-bg);border-color:var(--accent);color:var(--accent)}
+.intel-list{flex:1;overflow-y:auto;padding:.7rem}
+.intel-item{display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:5px;background:transparent;border:1px solid var(--line);border-radius:6px;cursor:pointer;transition:all .15s}
+.intel-item:hover{background:var(--surface2);border-color:var(--line2)}
+.intel-cat{font-size:.68rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--orange);margin-bottom:4px}
+.intel-q{font-size:.84rem;color:var(--tx-2);line-height:1.4}
+.intel-item:hover .intel-q{color:var(--tx-1)}
+.syslog-box{padding:.9rem 1.1rem;border-top:1px solid var(--line);flex-shrink:0}
+.syslog-title{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.68rem;letter-spacing:2px;text-transform:uppercase;color:var(--tx-3);margin-bottom:.6rem}
+.syslog-entries{display:flex;flex-direction:column;gap:4px}
+.log-row{display:flex;gap:8px;align-items:baseline}
+.log-ts{font-size:.72rem;color:var(--accent);font-weight:500;flex-shrink:0;white-space:nowrap}
+.log-msg{font-size:.78rem;color:var(--tx-2);line-height:1.4}
+.chat-col{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.stat-bar{flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--line);padding:.6rem 1.5rem;display:flex;align-items:center;gap:1.5rem;flex-wrap:nowrap;overflow:hidden}
+.stat-item{display:flex;flex-direction:column;align-items:center}
+.stat-val{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:1.25rem;color:var(--accent);line-height:1;font-variant-numeric:tabular-nums;min-width:2.6ch;text-align:center}
+.stat-key{font-size:.65rem;color:var(--tx-3);letter-spacing:1px;text-transform:uppercase;margin-top:2px}
+.stat-sep{width:1px;height:32px;background:var(--line)}
+.stat-info{flex:1;min-width:0}
+.stat-info h3{font-size:.88rem;color:var(--tx-1);font-weight:700;letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat-info p{font-size:.75rem;color:var(--tx-3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prog-wrap{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.prog-track{width:100px;height:3px;background:var(--line);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;background:var(--accent);width:0%;transition:width .5s;border-radius:2px}
+.prog-label{font-size:.7rem;color:var(--tx-3)}
+/* ── 상황 설정 바 ── */
+.context-bar{flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--line);padding:.55rem 1.5rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+.ctx-label{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.68rem;letter-spacing:2px;text-transform:uppercase;color:var(--tx-2);white-space:nowrap}
+.ctx-divider{width:1px;height:20px;background:var(--line);flex-shrink:0}
+.ctx-select{background:var(--surface2);border:1px solid var(--line);color:var(--tx-1);font-family:'Noto Sans KR',sans-serif;font-size:.78rem;padding:4px 10px;border-radius:5px;cursor:pointer;outline:none;transition:all .15s;max-width:160px}
+.ctx-select option,.ctx-select optgroup{background:var(--surface2);color:var(--tx-1)}
+.ctx-select:hover,.ctx-select:focus{border-color:var(--accent);background:var(--map-btn-active)}
+/* 공수 토글 — 맵 모드에 따라 표시/숨김 */
+.side-section{display:flex;align-items:center;gap:.75rem;transition:opacity .2s}
+.side-section.hidden{opacity:0;pointer-events:none}
+.side-section.no-side .ctx-label::after{content:' (공수 없음)';color:var(--tx-3);font-size:.65rem;letter-spacing:1px}
+.side-toggle{display:flex;gap:4px}
+.side-btn{padding:4px 14px;font-size:.78rem;font-weight:700;font-family:'Noto Sans KR',sans-serif;background:var(--map-btn-bg);border:1px solid var(--line2);color:var(--tx-2);border-radius:5px;cursor:pointer;transition:all .15s}
+.side-btn:hover:not(:disabled){border-color:var(--accent);color:var(--tx-1)}
+.side-btn:disabled{opacity:.3;cursor:not-allowed}
+.side-btn.active-attack{background:rgba(255,122,61,0.18);border-color:var(--orange);color:var(--orange)}
+.side-btn.active-defense{background:rgba(0,200,255,0.15);border-color:var(--accent);color:var(--accent)}
+.ctx-badge{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:.75rem;color:var(--tx-3)}
+.ctx-badge-val{padding:2px 10px;background:var(--tag-bg);border:1px solid var(--line2);border-radius:999px;color:var(--accent);font-weight:700;font-size:.73rem}
+.ctx-clear{background:none;border:none;color:var(--tx-3);cursor:pointer;font-size:.8rem;padding:2px 6px;border-radius:4px;transition:all .15s}
+.ctx-clear:hover{color:var(--err)}
+/* ── 스탯 가이드 ── */
+.stat-guide-bar{flex-shrink:0;background:var(--stat-bg);border-bottom:1px solid var(--stat-bd);padding:.45rem 1.5rem;display:flex;align-items:center;gap:.75rem;cursor:pointer;user-select:none;transition:background .15s}
+.stat-guide-bar:hover{background:rgba(0,200,255,0.10)}
+.stat-guide-icon{font-size:.9rem;flex-shrink:0}
+.stat-guide-title{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.7rem;letter-spacing:2px;text-transform:uppercase;color:var(--accent)}
+.stat-guide-sub{font-size:.72rem;color:var(--tx-3);margin-left:.3rem}
+.stat-guide-arrow{margin-left:auto;font-size:.75rem;color:var(--tx-3);transition:transform .2s}
+.stat-guide-arrow.open{transform:rotate(180deg)}
+.stat-guide-panel{flex-shrink:0;background:var(--stat-bg);border-bottom:1px solid var(--stat-bd);padding:0 1.5rem;max-height:0;overflow:hidden;transition:max-height .25s ease,padding .25s ease}
+.stat-guide-panel.open{max-height:260px;padding:.75rem 1.5rem}
+.sg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.6rem}
+.sg-example{background:var(--surface);border:1px solid var(--stat-bd);border-radius:6px;padding:.55rem .75rem}
+.sg-example-label{font-size:.67rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--orange);margin-bottom:.3rem}
+.sg-example-text{font-size:.8rem;color:var(--tx-2);line-height:1.6;cursor:pointer;transition:color .15s;font-family:'Noto Sans KR',sans-serif}
+.sg-example-text:hover{color:var(--accent)}
+.sg-example-text code{background:var(--tag-bg);color:var(--accent);padding:1px 5px;border-radius:3px;font-size:.85em;font-family:'Noto Sans KR',sans-serif;font-weight:500}
+.sg-note{margin-top:.6rem;font-size:.75rem;color:var(--tx-3);display:flex;align-items:flex-start;gap:.4rem}
+/* ── 채팅박스 ── */
+.chatbox{flex:1;overflow-y:auto;padding:1.5rem;display:flex;flex-direction:column;gap:0;min-height:0}
+.welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;text-align:center;gap:1.5rem;padding:2rem;min-height:300px}
+.welcome-icon-wrap{width:76px;height:76px;position:relative;display:flex;align-items:center;justify-content:center}
+.welcome-icon-wrap::before{content:'';position:absolute;inset:0;border:2px solid var(--accent);clip-path:polygon(50% 0%,95% 25%,95% 75%,50% 100%,5% 75%,5% 25%);animation:hexspin 5s linear infinite}
+@keyframes hexspin{to{filter:hue-rotate(360deg)}}
+.welcome-icon{font-size:2rem;position:relative;z-index:1}
+.welcome-title{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:1.8rem;letter-spacing:4px;text-transform:uppercase;color:var(--tx-1)}
+.welcome-title em{color:var(--accent);font-style:normal}
+.welcome-body{display:flex;flex-direction:column;gap:6px}
+.welcome-row{font-size:.9rem;color:var(--tx-2);display:flex;align-items:center;gap:8px;justify-content:center}
+.welcome-row b{color:var(--accent);font-weight:700;min-width:80px;text-align:right}
+.welcome-chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:.5rem}
+.chip{padding:7px 16px;font-size:.82rem;font-weight:700;letter-spacing:1px;text-transform:uppercase;background:var(--tag-bg);border:1px solid var(--line2);color:var(--accent);cursor:pointer;border-radius:4px;transition:all .15s}
+.chip:hover{background:var(--accent);color:var(--on-accent)}
+.welcome-hint{font-size:.8rem;color:var(--tx-3);margin-top:.25rem}
+/* ── 메시지 ── */
+.msg-group{display:flex;gap:12px;padding:1rem 0;border-bottom:1px solid var(--line);animation:fadein .22s ease-out}
 @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-.msg-block.user{flex-direction:row-reverse}
-.msg-block.user::before{
-  content:'';position:absolute;right:0;top:0;bottom:0;width:2px;
-  background:linear-gradient(180deg,transparent,rgba(76,163,255,0.4),transparent);
+.msg-group.user{flex-direction:row-reverse}
+.msg-avatar{width:36px;height:36px;flex-shrink:0;clip-path:polygon(50% 0%,95% 25%,95% 75%,50% 100%,5% 75%,5% 25%);background:var(--surface2);border:1px solid var(--line2);display:flex;align-items:center;justify-content:center;font-size:1rem}
+.msg-stack{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.msg-group.user .msg-stack{align-items:flex-end}
+.msg-meta{font-size:.72rem;color:var(--tx-3);display:flex;align-items:center;gap:6px}
+.msg-name{font-weight:700;color:var(--tx-2)}
+.bubble{max-width:85%;padding:14px 18px;border-radius:2px 12px 12px 12px;font-size:.9rem;line-height:1.75;color:var(--tx-1)}
+.bubble.ai{background:var(--ai-bg);border:1px solid var(--ai-bd);border-left:3px solid var(--accent)}
+.bubble.user{background:var(--user-bg);border:1px solid var(--user-bd);border-radius:12px 2px 12px 12px}
+.stat-detected-badge{display:inline-flex;align-items:center;gap:5px;margin-top:6px;padding:3px 10px;background:rgba(61,214,140,0.12);border:1px solid rgba(61,214,140,0.35);border-radius:999px;font-size:.72rem;color:var(--green);font-weight:600}
+.map-applied-badge{display:inline-flex;align-items:center;gap:5px;margin-top:6px;margin-right:6px;padding:3px 10px;background:var(--tag-bg);border:1px solid var(--line2);border-radius:999px;font-size:.72rem;color:var(--accent);font-weight:600}
+.msg-badge-row{display:flex;flex-wrap:wrap;gap:0}
+.bubble.ai h1,.bubble.ai h2,.bubble.ai h3{font-family:'Rajdhani',sans-serif;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:var(--accent);margin:1rem 0 .35rem}
+.bubble.ai h1{font-size:1.05rem}.bubble.ai h2{font-size:.96rem}.bubble.ai h3{font-size:.88rem;color:var(--gold)}
+.bubble.ai strong{color:var(--accent);font-weight:700}
+.bubble.ai ul{list-style:none;padding:0;margin:.5rem 0}
+.bubble.ai ul li{padding:3px 0 3px 1.2rem;position:relative}
+.bubble.ai ul li::before{content:'▸';position:absolute;left:0;color:var(--accent)}
+.bubble.ai ol{padding-left:1.4rem;margin:.5rem 0}
+.bubble.ai p{margin:.3rem 0}
+.bubble.ai code{background:var(--tag-bg);color:var(--accent);padding:1px 6px;border-radius:3px;font-size:.85em}
+.bubble.ai hr{border:none;border-top:1px solid var(--line);margin:.75rem 0}
+.suggested-strip{margin-top:12px;padding-top:10px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px}
+.suggested-btn,.choice-btn{padding:7px 12px;border-radius:999px;border:1px solid var(--line2);background:var(--tag-bg);color:var(--accent);font-size:.78rem;font-family:'Noto Sans KR',sans-serif;font-weight:600;cursor:pointer;transition:all .15s}
+.suggested-btn:hover,.choice-btn:hover{background:var(--accent);color:var(--on-accent)}
+.choice-btn{border-color:var(--accent)}
+.typing-group{display:flex;gap:12px;padding:1rem 0;animation:fadein .2s ease-out}
+.typing-bubble{background:var(--ai-bg);border:1px solid var(--ai-bd);border-left:3px solid var(--accent);padding:14px 18px;border-radius:2px 12px 12px 12px;display:flex;align-items:center;gap:6px}
+.t-dot{width:7px;height:7px;background:var(--accent);border-radius:50%;animation:bounce 1.1s ease-in-out infinite}
+.t-dot:nth-child(2){animation-delay:.18s}.t-dot:nth-child(3){animation-delay:.36s}
+@keyframes bounce{0%,80%,100%{transform:scale(.5);opacity:.3}40%{transform:scale(1);opacity:1}}
+.t-label{font-size:.78rem;color:var(--tx-2);margin-left:4px}
+.msg-err{margin:.75rem 0;padding:12px 16px;background:rgba(255,60,60,.06);border:1px solid var(--err);border-left:3px solid var(--err);border-radius:6px;font-size:.84rem;color:var(--err)}
+/* ── 입력 영역 ── */
+.input-zone{flex-shrink:0;background:var(--surface);border-top:1px solid var(--line);padding:.75rem 1.5rem 1rem}
+.input-box{display:flex;align-items:flex-end;background:var(--input-bg);border:1.5px solid var(--input-bd);border-radius:8px;overflow:hidden;transition:border-color .2s}
+.input-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,200,255,.10)}
+.input-prompt{padding:14px 10px 14px 16px;font-size:.9rem;color:var(--accent);opacity:.6;flex-shrink:0;user-select:none}
+#userInput{flex:1;background:transparent;border:none;outline:none;color:var(--tx-1);font-size:.9rem;font-family:'Noto Sans KR',sans-serif;padding:14px 8px;resize:none;max-height:120px;line-height:1.55}
+#userInput::placeholder{color:var(--tx-3)}
+.send-btn{flex-shrink:0;align-self:stretch;background:linear-gradient(135deg,#00a8d4,#00c8ff);border:none;color:#001824;cursor:pointer;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:.82rem;letter-spacing:2px;text-transform:uppercase;padding:0 24px;display:flex;align-items:center;gap:8px;transition:all .17s}
+.send-btn:hover:not(:disabled){background:linear-gradient(135deg,#00c8ff,#33d9ff);box-shadow:0 0 18px rgba(0,200,255,.4)}
+.send-btn:disabled{opacity:.4;cursor:not-allowed}
+.send-btn svg{width:15px;height:15px}
+.input-footer{display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding:0 2px;flex-wrap:wrap;gap:4px}
+.input-hint{font-size:.73rem;color:var(--tx-3)}
+/* ── RAG 패널 ── */
+.rag-panel{width:260px;flex-shrink:0;background:var(--surface);border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+.rag-head{padding:1.1rem;border-bottom:1px solid var(--line)}
+.rag-search-wrap{display:flex;align-items:center;gap:8px;background:var(--input-bg);border:1.5px solid var(--input-bd);border-radius:6px;padding:0 10px;transition:border-color .2s}
+.rag-search-wrap:focus-within{border-color:var(--accent)}
+.rag-search-icon{font-size:.9rem;color:var(--tx-3);flex-shrink:0}
+#ragSearch{flex:1;background:transparent;border:none;outline:none;font-size:.84rem;font-family:'Noto Sans KR',sans-serif;color:var(--tx-1);padding:9px 0}
+#ragSearch::placeholder{color:var(--tx-3)}
+.rag-tabs{display:flex;border-bottom:1px solid var(--line)}
+.rag-tab{flex:1;padding:9px 4px;text-align:center;font-size:.78rem;font-weight:700;letter-spacing:1px;text-transform:uppercase;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--tx-2);cursor:pointer;transition:all .15s}
+.rag-tab:hover{color:var(--tx-1)}
+.rag-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.rag-list{flex:1;overflow-y:auto;padding:.75rem}
+.rag-card{display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:6px;background:transparent;border:1px solid var(--line);border-radius:6px;cursor:pointer;transition:all .15s;border-left:3px solid transparent}
+.rag-card:hover{background:var(--surface2);border-left-color:var(--orange)}
+.rag-card.active-card{background:var(--surface2);border-color:var(--line2);border-left-color:var(--accent)}
+.rag-card-top{display:flex;align-items:flex-start;gap:8px;margin-bottom:6px}
+.rag-card-icon{font-size:1rem;flex-shrink:0;margin-top:1px}
+.rag-card-title{font-size:.84rem;color:var(--tx-1);font-weight:500;line-height:1.35}
+.rag-card-tags{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+.rag-tag{font-size:.68rem;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 7px;background:var(--tag-bg);border:1px solid var(--line2);border-radius:3px;color:var(--tag-tx)}
+.rag-preview{flex-shrink:0;border-top:1px solid var(--line);background:var(--surface2);padding:1rem;max-height:220px;overflow-y:auto}
+.rp-header{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.rp-icon{font-size:1.1rem}
+.rp-title{font-size:.84rem;font-weight:700;color:var(--tx-1);flex:1}
+.rp-close{background:none;border:none;cursor:pointer;font-size:1rem;color:var(--tx-3);line-height:1;padding:2px}
+.rp-close:hover{color:var(--tx-1)}
+.rp-body{font-size:.8rem;color:var(--tx-2);line-height:1.7}
+.rp-body strong{color:var(--accent)}
+.rp-use-btn{display:block;width:100%;margin-top:10px;padding:9px;font-size:.8rem;font-weight:700;letter-spacing:1px;text-transform:uppercase;background:var(--tag-bg);border:1px solid var(--line2);color:var(--accent);cursor:pointer;border-radius:4px;transition:all .15s}
+.rp-use-btn:hover{background:var(--accent);color:var(--on-accent)}
+.rag-footer{padding:.7rem 1rem;border-top:1px solid var(--line);display:flex;align-items:center;gap:7px;flex-shrink:0}
+.rag-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 5px var(--green)}
+.rag-status{font-size:.75rem;color:var(--tx-3)}
+.rag-count{font-size:.75rem;color:var(--accent);font-weight:700;margin-left:auto}
+.rag-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem 1rem;gap:8px}
+.rag-empty-icon{font-size:2rem;opacity:.4}
+.rag-empty-text{font-size:.82rem;color:var(--tx-3)}
+@media(max-width:980px){.rag-panel{display:none}}
+@media(max-width:640px){.sidebar{display:none}}
+@media(max-width:760px){.context-bar{padding:.4rem .8rem;gap:.5rem}}
+@media(max-width:760px){
+  .stat-bar{padding:.5rem .9rem;gap:.9rem}
+  .stat-info,.prog-wrap{display:none}
 }
-.msg-block.ai::before{
-  content:'';position:absolute;left:0;top:0;bottom:0;width:2px;
-  background:linear-gradient(180deg,transparent,var(--cyan),transparent);
-}
-
-.msg-ava{flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:4px}
-.ava-hex{
-  width:38px;height:38px;
-  clip-path:polygon(50% 0%,95% 25%,95% 75%,50% 100%,5% 75%,5% 25%);
-  display:flex;align-items:center;justify-content:center;
-  font-family:'Rajdhani',sans-serif;font-weight:700;font-size:0.75rem;letter-spacing:1px;
-}
-.ava-hex.ai{
-  background:linear-gradient(135deg,#0a2840,#0d3555);
-  border:1px solid var(--cyan);color:var(--cyan);
-  box-shadow:0 0 10px rgba(0,200,255,0.3);
-  font-size:1.1rem;
-}
-.ava-hex.user{background:linear-gradient(135deg,#1a2e4a,#243d5e);color:var(--text2)}
-.ava-name{font-family:'Share Tech Mono',monospace;font-size:0.5rem;letter-spacing:1px;color:var(--muted);text-transform:uppercase}
-
-.msg-content{flex:1;min-width:0}
-.msg-block.user .msg-content{display:flex;flex-direction:column;align-items:flex-end}
-
-/* AI message frame */
-.ai-frame{
-  background:linear-gradient(135deg,#0d1e35 0%,#0a1828 100%);
-  border:1px solid rgba(0,200,255,0.2);
-  border-left:2px solid var(--cyan);
-  padding:14px 18px;
-  position:relative;max-width:85%;
-  clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%);
-}
-.ai-frame::before{
-  content:'';position:absolute;top:0;left:0;right:0;height:1px;
-  background:linear-gradient(90deg,var(--cyan),rgba(0,200,255,0.3),transparent);
-}
-.ai-frame-header{
-  display:flex;align-items:center;gap:8px;margin-bottom:10px;
-  padding-bottom:8px;border-bottom:1px solid rgba(0,200,255,0.1);
-}
-.ai-tag{
-  font-family:'Share Tech Mono',monospace;font-size:0.55rem;
-  letter-spacing:2px;text-transform:uppercase;color:var(--orange);
-}
-.ai-ts{font-family:'Share Tech Mono',monospace;font-size:0.55rem;color:var(--muted);margin-left:auto}
-.ai-body{font-size:0.85rem;line-height:1.75;color:var(--text)}
-
-/* User message frame */
-.user-frame{
-  background:linear-gradient(135deg,#1a2e4a,#16253e);
-  border:1px solid rgba(76,163,255,0.25);
-  border-right:2px solid #4ca3ff;
-  padding:12px 16px;max-width:80%;
-  clip-path:polygon(14px 0,100% 0,100% 100%,0 100%,0 14px);
-  font-size:0.85rem;line-height:1.65;color:var(--white);
-}
-
-/* AI content markdown */
-.ai-body h1,.ai-body h2,.ai-body h3{
-  font-family:'Rajdhani',sans-serif;font-weight:700;
-  letter-spacing:2px;text-transform:uppercase;margin:1rem 0 0.4rem;
-}
-.ai-body h1{font-size:1.05rem;color:var(--cyan)}
-.ai-body h2{font-size:0.95rem;color:var(--cyan)}
-.ai-body h3{font-size:0.85rem;color:var(--gold)}
-.ai-body strong{color:var(--cyan);font-weight:600}
-.ai-body em{color:var(--text2);font-style:normal;font-family:'Share Tech Mono',monospace;font-size:0.85em}
-.ai-body ul{list-style:none;padding:0;margin:0.5rem 0}
-.ai-body ul li{
-  padding:3px 0 3px 1.25rem;position:relative;color:var(--text);
-}
-.ai-body ul li::before{
-  content:'▶';position:absolute;left:0;
-  color:var(--cyan);font-size:0.55rem;top:6px;
-}
-.ai-body ol{padding-left:1.5rem;margin:0.5rem 0}
-.ai-body ol li{color:var(--text);padding:2px 0}
-.ai-body p{margin:0.4rem 0}
-.ai-body code{
-  background:rgba(0,200,255,0.08);color:var(--cyan);
-  padding:2px 7px;font-family:'Share Tech Mono',monospace;font-size:0.82em;
-  border:1px solid rgba(0,200,255,0.2);letter-spacing:1px;
-}
-.ai-body hr{border:none;border-top:1px solid rgba(0,200,255,0.15);margin:0.75rem 0}
-
-/* ── TYPING ── */
-.typing-block{display:flex;gap:14px;padding:1rem 0;animation:fadein 0.2s ease-out}
-.typing-frame{
-  background:linear-gradient(135deg,#0d1e35,#0a1828);
-  border:1px solid rgba(0,200,255,0.2);border-left:2px solid var(--cyan);
-  padding:14px 20px;
-  clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%);
-  display:flex;align-items:center;gap:6px;
-}
-.t-dot{
-  width:7px;height:7px;background:var(--cyan);border-radius:50%;
-  box-shadow:0 0 6px var(--cyan);
-  animation:tdot 1.1s ease-in-out infinite;
-}
-.t-dot:nth-child(2){animation-delay:0.18s}
-.t-dot:nth-child(3){animation-delay:0.36s}
-@keyframes tdot{0%,80%,100%{transform:scale(0.6);opacity:0.3}40%{transform:scale(1);opacity:1}}
-.typing-label{
-  font-family:'Share Tech Mono',monospace;font-size:0.6rem;
-  color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-left:4px;
-}
-
-/* ── INPUT ZONE ── */
-.input-zone{
-  flex-shrink:0;
-  background:linear-gradient(180deg,#0a1628 0%,#08111f 100%);
-  border-top:1px solid var(--border);
-  padding:1rem 1.5rem 1.25rem;
-}
-.input-wrapper{
-  background:linear-gradient(135deg,#0d1e35,#0a1828);
-  border:1px solid rgba(0,200,255,0.25);
-  display:flex;align-items:flex-end;gap:0;
-  position:relative;transition:border-color 0.2s;
-}
-.input-wrapper::before{
-  content:'';position:absolute;top:0;left:0;right:0;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(0,200,255,0.4),transparent);
-}
-.input-wrapper:focus-within{border-color:var(--cyan);box-shadow:0 0 15px rgba(0,200,255,0.1)}
-.input-prefix{
-  padding:14px 12px 14px 14px;
-  font-family:'Share Tech Mono',monospace;font-size:0.75rem;
-  color:var(--cyan);opacity:0.6;flex-shrink:0;user-select:none;
-}
-#userInput{
-  flex:1;background:transparent;border:none;outline:none;
-  color:var(--white);font-size:0.875rem;font-family:'Noto Sans KR',sans-serif;
-  padding:14px 8px;resize:none;max-height:120px;line-height:1.55;
-}
-#userInput::placeholder{color:var(--muted);font-size:0.8rem}
-
-/* ── SEND BUTTON — 오버워치 하늘색 ── */
-.send-btn{
-  flex-shrink:0;
-  background:linear-gradient(135deg,#00aadd 0%,#00c8ff 50%,#29d4ff 100%);
-  border:none;color:#001824;cursor:pointer;
-  font-family:'Rajdhani',sans-serif;font-weight:700;font-size:0.75rem;
-  letter-spacing:3px;text-transform:uppercase;
-  padding:0 22px;align-self:stretch;
-  clip-path:polygon(10px 0%,100% 0%,100% 100%,0% 100%);
-  transition:all 0.18s;display:flex;align-items:center;gap:8px;
-  box-shadow:inset 0 0 20px rgba(255,255,255,0.1);
-}
-.send-btn:hover:not(:disabled){
-  background:linear-gradient(135deg,#29d4ff 0%,#00e8ff 100%);
-  box-shadow:0 0 20px rgba(0,200,255,0.5),inset 0 0 20px rgba(255,255,255,0.15);
-  color:#000;
-}
-.send-btn:active:not(:disabled){transform:scale(0.98)}
-.send-btn:disabled{opacity:0.35;cursor:not-allowed}
-.send-btn svg{width:15px;height:15px;flex-shrink:0}
-.send-txt{letter-spacing:3px}
-
-.input-footer{
-  display:flex;justify-content:space-between;align-items:center;
-  margin-top:8px;padding:0 2px;
-}
-.input-hint{font-family:'Share Tech Mono',monospace;font-size:0.58rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase}
-.input-hint b{color:rgba(0,200,255,0.5);font-weight:400}
-
-/* ── RIGHT MINI PANEL ── */
-.panel-right{
-  width:180px;flex-shrink:0;
-  background:linear-gradient(180deg,#0a1628 0%,#08111f 100%);
-  border-left:1px solid var(--border);
-  display:flex;flex-direction:column;overflow:hidden;
-}
-.pr-section{padding:0.85rem;border-bottom:1px solid var(--border)}
-.pr-label{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:0.58rem;letter-spacing:3px;text-transform:uppercase;color:var(--orange);margin-bottom:0.6rem}
-
-/* hero portrait cards */
-.hero-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}
-.hero-card{
-  aspect-ratio:1;background:var(--bg3);
-  border:1px solid rgba(0,200,255,0.1);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:3px;cursor:pointer;transition:all 0.15s;font-size:1.5rem;
-  position:relative;overflow:hidden;
-}
-.hero-card::before{
-  content:'';position:absolute;inset:0;
-  background:linear-gradient(135deg,rgba(0,200,255,0.08),transparent);
-  opacity:0;transition:opacity 0.15s;
-}
-.hero-card:hover::before{opacity:1}
-.hero-card:hover{border-color:var(--cyan)}
-.hero-card:hover .hero-name{color:var(--cyan)}
-.hero-name{font-family:'Share Tech Mono',monospace;font-size:0.48rem;letter-spacing:1px;text-transform:uppercase;color:var(--muted);text-align:center}
-
-/* meta tier */
-.meta-item{
-  display:flex;align-items:center;gap:8px;padding:5px 0;
-  border-bottom:1px solid rgba(0,200,255,0.05);font-size:0.72rem;
-}
-.tier-badge{
-  font-family:'Rajdhani',sans-serif;font-weight:700;font-size:0.65rem;
-  width:22px;height:22px;display:flex;align-items:center;justify-content:center;
-  clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
-}
-.tier-S{background:linear-gradient(135deg,#ff4444,#cc0000);color:#fff}
-.tier-A{background:linear-gradient(135deg,#ff8800,#cc5500);color:#fff}
-.tier-B{background:linear-gradient(135deg,#4488ff,#2255cc);color:#fff}
-.meta-hero{color:var(--text2);font-size:0.72rem}
-.meta-role{font-family:'Share Tech Mono',monospace;font-size:0.52rem;color:var(--muted);margin-left:auto}
-
-@media(max-width:900px){.panel-right{display:none}}
-@media(max-width:600px){.panel-left{display:none}.hud-bar{padding:0.5rem 1rem;gap:0.75rem}}
 </style>
 </head>
 <body>
 
-<!-- HEADER -->
 <header class="hdr">
-  <div class="hdr-emblem">
-    <svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
-      <polygon points="20,2 36,10 36,30 20,38 4,30 4,10" fill="none" stroke="#00c8ff" stroke-width="1.5" opacity="0.3"/>
-      <circle cx="20" cy="20" r="9" fill="none" stroke="#00c8ff" stroke-width="2"/>
-      <circle cx="20" cy="20" r="4" fill="#00c8ff"/>
-      <line x1="20" y1="8" x2="20" y2="14" stroke="#00c8ff" stroke-width="1.5"/>
-      <line x1="20" y1="26" x2="20" y2="32" stroke="#00c8ff" stroke-width="1.5"/>
-      <line x1="8" y1="20" x2="14" y2="20" stroke="#00c8ff" stroke-width="1.5"/>
-      <line x1="26" y1="20" x2="32" y2="20" stroke="#00c8ff" stroke-width="1.5"/>
+  <div class="hdr-logo">
+    <svg viewBox="0 0 34 34">
+      <polygon points="17,1 31,8.5 31,25.5 17,33 3,25.5 3,8.5" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".25"/>
+      <circle cx="17" cy="17" r="7.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <circle cx="17" cy="17" r="3.2" fill="currentColor"/>
+      <line x1="17" y1="7" x2="17" y2="12" stroke="currentColor" stroke-width="1.5"/>
+      <line x1="17" y1="22" x2="17" y2="27" stroke="currentColor" stroke-width="1.5"/>
+      <line x1="7" y1="17" x2="12" y2="17" stroke="currentColor" stroke-width="1.5"/>
+      <line x1="22" y1="17" x2="27" y2="17" stroke="currentColor" stroke-width="1.5"/>
     </svg>
   </div>
-  <div class="hdr-text">
-    <div class="hdr-title">OVERWATCH <span>COACH</span></div>
-    <div class="hdr-sub">TACTICAL AI // SYS v2.4.1 // CLASSIFIED</div>
+  <div class="hdr-info">
+    <div class="hdr-title">OVERWATCH <em>COACH</em></div>
+    <div class="hdr-sub">전술 AI 어시스턴트</div>
   </div>
   <div class="hdr-right">
-    <div class="hdr-status">
-      <div class="status-dot"></div>
-      <div class="status-label">ACTIVE</div>
-    </div>
-    <button class="hdr-btn" onclick="clearChat()">[ 초기화 ]</button>
+    <div class="online-dot"></div>
+    <span class="online-label">온라인</span>
+    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="테마 전환">🌙</button>
+    <button class="text-btn" onclick="clearChat()">초기화</button>
   </div>
 </header>
 
 <div class="main">
-
-  <!-- LEFT PANEL -->
-  <aside class="panel-left">
-    <div class="panel-section">
-      <div class="section-label">ROLE SELECT</div>
-      <div class="roles" id="roles">
-        <button class="role-btn all active" onclick="setRole(this,'all')"><span class="ri">🎮</span>ALL</button>
-        <button class="role-btn" onclick="setRole(this,'tank')"><span class="ri">🛡️</span>TANK</button>
-        <button class="role-btn" onclick="setRole(this,'dps')"><span class="ri">⚔️</span>DPS</button>
-        <button class="role-btn" onclick="setRole(this,'supp')"><span class="ri">💊</span>SUPP</button>
-      </div>
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="s-label">역할 선택</div>
+    <div class="role-grid">
+      <button class="role-btn all active" onclick="setRole(this,'all')"><span class="ri">🎮</span> 전체</button>
+      <button class="role-btn" onclick="setRole(this,'tank')"><span class="ri">🛡️</span> 탱커</button>
+      <button class="role-btn" onclick="setRole(this,'dps')"><span class="ri">⚔️</span> 딜러</button>
+      <button class="role-btn" onclick="setRole(this,'supp')"><span class="ri">💊</span> 지원가</button>
     </div>
-
-    <div class="panel-section" style="padding-bottom:0.5rem">
-      <div class="section-label">INTEL DATABASE</div>
+  </div>
+  <div class="sidebar-section" style="padding-bottom:.5rem;border-bottom:none">
+    <div class="s-label">추천 질문</div>
+  </div>
+  <div class="intel-list" id="intelList"></div>
+  <div class="syslog-box">
+    <div class="syslog-title">시스템 로그</div>
+    <div class="syslog-entries" id="sysLog">
+      <div class="log-row"><span class="log-ts">--:--</span><span class="log-msg">시스템 초기화 완료</span></div>
+      <div class="log-row"><span class="log-ts">--:--</span><span class="log-msg">코치 AI 대기 중</span></div>
     </div>
-    <div class="intel-feed" id="intelFeed"></div>
+  </div>
+</aside>
 
-    <div class="sys-log" id="sysLog">
-      <div class="log-line"><span class="log-ts">[00:00]</span><span class="log-txt">시스템 초기화 완료</span></div>
-      <div class="log-line"><span class="log-ts">[00:01]</span><span class="log-txt">전술 DB 로드됨</span></div>
-      <div class="log-line"><span class="log-ts">[00:02]</span><span class="log-txt">코치 AI 대기 중...</span></div>
-    </div>
-  </aside>
-
-  <!-- CHAT CENTER -->
-  <div class="chat-area">
-    <!-- HUD BAR -->
-    <div class="hud-bar">
-      <div class="hud-stat">
-        <div class="hud-val" id="qCount">0</div>
-        <div class="hud-lbl">QUERIES</div>
-      </div>
-      <div class="hud-divider"></div>
-      <div class="hud-stat">
-        <div class="hud-val" id="sesTime">00:00</div>
-        <div class="hud-lbl">SESSION</div>
-      </div>
-      <div class="hud-divider"></div>
-      <div class="hud-stat">
-        <div class="hud-val" style="color:var(--gold)">32</div>
-        <div class="hud-lbl">HEROES</div>
-      </div>
-      <div class="hud-divider"></div>
-      <div class="hud-info">
-        <h3>⚡ TACTICAL BRIEFING ACTIVE</h3>
-        <p>메타 분석 · 카운터 픽 · 조합 전략 · 맵 운영</p>
-      </div>
-      <div class="hud-progress">
-        <div class="progress-bar"><div class="progress-fill" id="progFill"></div></div>
-        <div class="progress-lbl" id="progLbl">AI 대기 중</div>
-      </div>
-    </div>
-
-    <!-- MESSAGES -->
-    <div class="chatbox" id="chatBox">
-      <div class="welcome" id="welcomeMsg">
-        <div class="welcome-ring"><div class="welcome-icon">🎯</div></div>
-        <div>
-          <div class="welcome-title">MISSION <span>BRIEFING</span></div>
-          <div class="welcome-desc" style="margin-top:0.75rem">
-            <b>AGENT</b>: 오버워치 코치 AI가 배정되었습니다<br>
-            <b>MISSION</b>: 전술 분석 · 영웅 카운터 · 팀 조합<br>
-            <b>CLEARANCE</b>: 전 등급 질의 허용
-          </div>
-        </div>
-        <div class="quick-cmds">
-          <button class="qcmd" onclick="fillInput('현재 메타 최강 영웅은?')">META</button>
-          <button class="qcmd" onclick="fillInput('팀 조합 추천해줘')">COMP</button>
-          <button class="qcmd" onclick="fillInput('카운터 픽 알려줘')">COUNTER</button>
-          <button class="qcmd" onclick="fillInput('랭크 올리는 팁 알려줘')">RANKED</button>
-        </div>
-        <div style="font-family:'Share Tech Mono',monospace;font-size:0.6rem;color:var(--muted);letter-spacing:3px;text-transform:uppercase;margin-top:0.5rem">
-          &gt; 왼쪽 INTEL 또는 직접 입력 후 DEPLOY
-        </div>
-      </div>
-    </div>
-
-    <!-- INPUT ZONE -->
-    <div class="input-zone">
-      <div class="input-wrapper">
-        <span class="input-prefix">&gt;_</span>
-        <textarea id="userInput" rows="1"
-          placeholder="전략 질의 입력... (영웅 카운터 / 팀 조합 / 맵 운영 / 메타 분석)"
-          oninput="autoResize(this)" onkeydown="handleKey(event)"></textarea>
-        <button class="send-btn" id="sendBtn" onclick="sendMessage()">
-          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-          </svg>
-          <span class="send-txt">DEPLOY</span>
-        </button>
-      </div>
-      <div class="input-footer">
-        <div class="input-hint"><b>ENTER</b> 전송 &nbsp;·&nbsp; <b>SHIFT+ENTER</b> 줄바꿈</div>
-        <div class="input-hint">POWERED BY OVERWATCH TACTICAL AI</div>
-      </div>
+<div class="chat-col">
+  <div class="stat-bar">
+    <div class="stat-item"><div class="stat-val" id="qCount">0</div><div class="stat-key">질문 수</div></div>
+    <div class="stat-sep"></div>
+    <div class="stat-item"><div class="stat-val" id="sesTime">00:00</div><div class="stat-key">세션</div></div>
+    <div class="stat-sep"></div>
+    <div class="stat-item"><div class="stat-val" style="color:var(--gold)">51</div><div class="stat-key">영웅 DB</div></div>
+    <div class="stat-sep"></div>
+    <div class="stat-info"><h3>⚡ 전술 브리핑 활성화</h3><p>메타 분석 · 카운터 픽 · 조합 전략 · 맵 운영</p></div>
+    <div class="prog-wrap">
+      <div class="prog-track"><div class="prog-fill" id="progFill"></div></div>
+      <div class="prog-label" id="progLabel">대기 중</div>
     </div>
   </div>
 
-  <!-- RIGHT PANEL -->
-  <aside class="panel-right">
-    <div class="pr-section">
-      <div class="pr-label">QUICK PICK</div>
-      <div class="hero-grid">
-        <div class="hero-card" onclick="fillInput('겐지 운영 팁 알려줘')">💚<div class="hero-name">GENJI</div></div>
-        <div class="hero-card" onclick="fillInput('트레이서 카운터는?')">🧡<div class="hero-name">TRACER</div></div>
-        <div class="hero-card" onclick="fillInput('라인하르트 운영법은?')">🔵<div class="hero-name">REIN</div></div>
-        <div class="hero-card" onclick="fillInput('아나 운영 팁 알려줘')">🟣<div class="hero-name">ANA</div></div>
-        <div class="hero-card" onclick="fillInput('솜브라 전략 알려줘')">🩶<div class="hero-name">SOMBRA</div></div>
-        <div class="hero-card" onclick="fillInput('루시우 운영법은?')">🟢<div class="hero-name">LUCIO</div></div>
-      </div>
-    </div>
-    <div class="pr-section">
-      <div class="pr-label">META TIER</div>
-      <div id="metaList">
-        <div class="meta-item"><div class="tier-badge tier-S">S</div><div class="meta-hero">아나</div><div class="meta-role">SUPP</div></div>
-        <div class="meta-item"><div class="tier-badge tier-S">S</div><div class="meta-hero">시그마</div><div class="meta-role">TANK</div></div>
-        <div class="meta-item"><div class="tier-badge tier-A">A</div><div class="meta-hero">겐지</div><div class="meta-role">DPS</div></div>
-        <div class="meta-item"><div class="tier-badge tier-A">A</div><div class="meta-hero">루시우</div><div class="meta-role">SUPP</div></div>
-        <div class="meta-item"><div class="tier-badge tier-B">B</div><div class="meta-hero">트레이서</div><div class="meta-role">DPS</div></div>
-        <div class="meta-item"><div class="tier-badge tier-B">B</div><div class="meta-hero">오리사</div><div class="meta-role">TANK</div></div>
-      </div>
-    </div>
-    <div class="pr-section" style="border:none">
-      <div class="pr-label">SYSTEM</div>
-      <div style="font-family:'Share Tech Mono',monospace;font-size:0.58rem;color:var(--muted);line-height:2;letter-spacing:1px">
-        <div>INTEL DB: <span style="color:var(--cyan)">ONLINE</span></div>
-        <div>AI CORE: <span style="color:var(--cyan)">ACTIVE</span></div>
-        <div>PATCH: <span style="color:var(--gold)">v2.4.1</span></div>
-      </div>
-    </div>
-  </aside>
+  <!-- 상황 설정 바 -->
+  <div class="context-bar">
+    <span class="ctx-label">🗺 맵</span>
+    <select class="ctx-select" id="mapSelect" onchange="onMapChange()">
+      <option value="">맵 선택 (선택사항)</option>
+      <optgroup label="🔵 쟁탈 (Control)">
+        <option value="남극 반도|control">남극 반도</option>
+        <option value="네팔|control">네팔</option>
+        <option value="리장 타워|control">리장 타워</option>
+        <option value="부산|control">부산</option>
+        <option value="사모아|control">사모아</option>
+        <option value="오아시스|control">오아시스</option>
+        <option value="일리오스|control">일리오스</option>
+      </optgroup>
+      <optgroup label="🟠 호위 (Escort)">
+        <option value="66번 국도|escort">66번 국도</option>
+        <option value="감시 기지: 지브롤터|escort">감시 기지: 지브롤터</option>
+        <option value="도라도|escort">도라도</option>
+        <option value="리알토|escort">리알토</option>
+        <option value="샴발리 수도원|escort">샴발리 수도원</option>
+        <option value="서킷 로얄|escort">서킷 로얄</option>
+        <option value="쓰레기촌|escort">쓰레기촌</option>
+        <option value="하바나|escort">하바나</option>
+      </optgroup>
+      <optgroup label="🟡 혼합 (Hybrid)">
+        <option value="눔바니|hybrid">눔바니</option>
+        <option value="미드타운|hybrid">미드타운</option>
+        <option value="블리자드 월드|hybrid">블리자드 월드</option>
+        <option value="아이헨발데|hybrid">아이헨발데</option>
+        <option value="왕의 길|hybrid">왕의 길</option>
+        <option value="파라이수|hybrid">파라이수</option>
+        <option value="할리우드|hybrid">할리우드</option>
+      </optgroup>
+      <optgroup label="🟢 밀기 (Push)">
+        <option value="뉴 퀸 스트리트|push">뉴 퀸 스트리트</option>
+        <option value="이스페란사|push">이스페란사</option>
+        <option value="콜로세오|push">콜로세오</option>
+        <option value="루나사피|push">루나사피</option>
+      </optgroup>
+      <optgroup label="🔴 플래시포인트 (Flashpoint)">
+        <option value="뉴 정크 시티|flashpoint">뉴 정크 시티</option>
+        <option value="수라바사|flashpoint">수라바사</option>
+        <option value="아틀리스|flashpoint">아틀리스</option>
+      </optgroup>
+    </select>
 
+    <!-- 공수 섹션: 모드에 따라 표시/숨김 -->
+    <div class="side-section hidden" id="sideSection">
+      <div class="ctx-divider"></div>
+      <span class="ctx-label" id="sideLabel">⚔ 공수</span>
+      <div class="side-toggle">
+        <button class="side-btn" id="btnAttack" onclick="setSide('attack')">공격</button>
+        <button class="side-btn" id="btnDefense" onclick="setSide('defense')">수비</button>
+      </div>
+    </div>
+
+    <div class="ctx-badge" id="ctxBadge" style="display:none">
+      <span class="ctx-badge-val" id="ctxBadgeText"></span>
+      <button class="ctx-clear" onclick="clearContext()" title="상황 초기화">✕</button>
+    </div>
+  </div>
+
+  <!-- 스탯 입력 가이드 -->
+  <div class="stat-guide-bar" onclick="toggleStatGuide()" id="statGuideBar">
+    <span class="stat-guide-icon">📊</span>
+    <span class="stat-guide-title">STAT INPUT</span>
+    <span class="stat-guide-sub">— 스탯을 텍스트로 입력하면 분석해드려요</span>
+    <span class="stat-guide-arrow" id="statGuideArrow">▾</span>
+  </div>
+  <div class="stat-guide-panel" id="statGuidePanel">
+    <div class="sg-grid">
+      <div class="sg-example">
+        <div class="sg-example-label">📌 상대팀 스탯</div>
+        <div class="sg-example-text" onclick="fillInput(this.dataset.v)" data-v="상대 둠피스트 6킬 3데스 8000딜, 리퍼 2킬 5데스 5500딜이야. 어떻게 대처해?">
+          <code>상대 둠피스트 6킬 3데스 8000딜</code><br>
+          <code>리퍼 2킬 5데스 5500딜이야. 어떻게 대처해?</code>
+        </div>
+      </div>
+      <div class="sg-example">
+        <div class="sg-example-label">📌 내 스탯 분석</div>
+        <div class="sg-example-text" onclick="fillInput(this.dataset.v)" data-v="내 솔저76 스탯: 킬 4 데스 8 딜 6000. 뭘 고쳐야 해?">
+          <code>내 솔저76: 킬 4 데스 8 딜 6000</code><br>
+          <code>뭘 고쳐야 해?</code>
+        </div>
+      </div>
+      <div class="sg-example">
+        <div class="sg-example-label">📌 혼합 입력</div>
+        <div class="sg-example-text" onclick="fillInput(this.dataset.v)" data-v="나는 아나 킬2 데스4 힐8000인데, 상대 라인하르트 딜3000 킬1. 어떻게 해야 해?">
+          <code>나 아나 킬2 데스4 힐8000</code><br>
+          <code>상대 라인하르트 딜3000 킬1</code>
+        </div>
+      </div>
+    </div>
+    <div class="sg-note">
+      <span>💡</span>
+      <span>킬·도움·데스·딜량·힐량 중 아는 것만 입력해도 괜찮아요. 형식은 자유롭게, AI가 알아서 파악합니다.</span>
+    </div>
+  </div>
+
+  <!-- 채팅 영역 -->
+  <div class="chatbox" id="chatBox">
+    <div class="welcome" id="welcomeMsg">
+      <div class="welcome-icon-wrap"><div class="welcome-icon">🎯</div></div>
+      <div><div class="welcome-title">MISSION <em>BRIEFING</em></div></div>
+      <div class="welcome-body">
+        <div class="welcome-row"><b>AGENT</b><span>코치 AI가 배정되었습니다</span></div>
+        <div class="welcome-row"><b>MISSION</b><span>전술 분석 · 영웅 카운터 · 팀 조합</span></div>
+      </div>
+      <div class="welcome-chips">
+        <button class="chip" onclick="fillInput('현재 메타 최강 영웅은?')">META</button>
+        <button class="chip" onclick="fillInput('팀 조합 추천해줘')">COMP</button>
+        <button class="chip" onclick="fillInput('카운터 픽 알려줘')">COUNTER</button>
+        <button class="chip" onclick="fillInput('랭크 올리는 팁은?')">RANKED</button>
+      </div>
+      <div class="welcome-hint">맵/모드 설정 시 더 정확한 분석 가능 · 스탯은 텍스트로 자유롭게 입력하세요</div>
+    </div>
+  </div>
+
+  <!-- 입력 영역 -->
+  <div class="input-zone">
+    <div class="input-box">
+      <span class="input-prompt">&gt;_</span>
+      <textarea id="userInput" rows="1"
+        placeholder="질문 또는 스탯 입력 — 예: 둠피 6킬 3데스 8000딜, 어떻게 카운터쳐?"
+        oninput="autoResize(this)" onkeydown="handleKey(event)"></textarea>
+      <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+        </svg>
+        전송
+      </button>
+    </div>
+    <div class="input-footer">
+      <span class="input-hint">Enter 전송 · Shift+Enter 줄바꿈 · 스탯은 텍스트로 자유 형식 입력</span>
+      <span class="input-hint">오버워치 운영 가이드 기반</span>
+    </div>
+  </div>
+</div>
+
+<aside class="rag-panel">
+  <div class="rag-head">
+    <div class="rag-search-wrap">
+      <span class="rag-search-icon">🔍</span>
+      <input id="ragSearch" type="text" placeholder="영웅·맵·전략 검색..." oninput="filterDocs()"/>
+    </div>
+  </div>
+  <div class="rag-tabs" id="ragTabs"></div>
+  <div class="rag-list" id="ragList"></div>
+  <div class="rag-preview" id="ragPreview" style="display:none">
+    <div class="rp-header">
+      <span class="rp-icon" id="rpIcon"></span>
+      <span class="rp-title" id="rpTitle"></span>
+      <button class="rp-close" onclick="closePreview()">✕</button>
+    </div>
+    <div class="rp-body" id="rpBody"></div>
+    <button class="rp-use-btn" onclick="useDoc()">▸ 이 내용으로 질문하기</button>
+  </div>
+</aside>
 </div>
 
 <script>
+/* ══ 맵 모드 분류 ══
+   공수 있음: escort, hybrid
+   공수 없음: control, push, flashpoint
+*/
+const MAP_MODE_WITH_SIDE = new Set(['escort','hybrid']);
+
+/* ══ 지식 베이스 (문서 기반) ══ */
+const KB = [
+  /* ── 탱커 ── */
+  {id:1,cat:'hero',icon:'🔵',title:'D.Va',tags:['탱커','다이브','고지대'],
+   body:`<strong>기본 위치</strong>: 고지대 점령 최우선. 고지대에서 아군 피해 분산·어그로 견제, 상대가 자리야·라마트라면 더욱 중요.<br>
+<strong>방어 매트릭스(우클)</strong>: 투사체·탄환 궁극기 흡수 가능. 광선·근접·장판·이미 붙은 상태이상은 막지 못함.<br>
+<strong>부스터(Shift)</strong>: 고지대 진입·탈출 핵심. 공중 영웅·저격수 압박, 이동 방해에 끊김 주의.<br>
+<strong>자폭(Q)</strong>: 개활지·넓은 거점에서 극대화. 좁은 실내는 엄폐·방벽으로 회피 쉬워 상성 최악.<br>
+<strong>취약 판정</strong>: 자리야·시메트라·모이라·윈스턴 광선, 해킹·수면·사슬 갈고리로 진입/복귀 끊김.<br>
+<strong>특전 기본</strong>: 토끼 파워(좌클)+보호막 시스템(좌클) / 공격 운용: 토끼 파워(좌클)+집중 융합(우클).`},
+
+  {id:2,cat:'hero',icon:'⚙️',title:'시그마',tags:['탱커','장거리','방벽'],
+   body:`<strong>기본 위치</strong>: 중장거리 엄폐 뒤에서 방벽과 키네틱 손아귀로 자원 교환.<br>
+<strong>실험용 방벽(우클)</strong>: 저격 각·힐러 시야 차단. 조준 위치에 설치해 팀 시야 보호.<br>
+<strong>키네틱 손아귀(Shift)</strong>: 투사체·탄환 흡수 후 추가 생명력. 광선·근접·군중제어기는 흡수 불가.<br>
+<strong>강착(E)</strong>: 돌진·다이브 진입 타이밍에 맞춰 사용해 넘어뜨림.<br>
+<strong>중력 붕괴(Q)</strong>: 좁은 공간에서 뭉친 적 대상으로 가치 최대. 기절·해킹·무적·방벽으로 차단 가능.<br>
+<strong>취약 판정</strong>: 윈스턴·D.Va·트레이서 다이브, 자리야·시메트라 광선, 루시우 러시 조합.<br>
+<strong>시너지</strong>: 애쉬·한조·위도우메이커·젠야타·바티스트와 방벽 뒤 포킹 조합.`},
+
+  {id:3,cat:'hero',icon:'🔨',title:'라인하르트',tags:['탱커','방벽','러시'],
+   body:`<strong>기본 위치</strong>: 본대 전방에서 방어막 방패로 팀 진입로 엄호.<br>
+<strong>방어막 방패(우클)</strong>: HP 500 이하 시 즉시 취소 후 재생. 과잉 소모 금지. 정크랫 유탄·솜브라 해킹 주의.<br>
+<strong>화염 강타(E)</strong>: 방벽 뒤 엄폐 중 적이 진입하는 타이밍에 사용.<br>
+<strong>돌진(Shift)</strong>: 맵 경계 벽에 핀 → 처치 확정. 낙사 지형에서 라인하르트 본인도 낙사 주의.<br>
+<strong>대지분쇄(Q)</strong>: 다수 적이 뭉쳤을 때. 아나 나노 강화제·자리야 중력자탄 연계로 극대화.<br>
+<strong>취약 판정</strong>: 파라(방벽 우회 공중 폭격), 정크랫(방벽 뒤 유탄 스팸), 솜브라 해킹(방어막 즉시 소멸).`},
+
+  {id:4,cat:'hero',icon:'🪙',title:'자리야',tags:['탱커','에너지','방벽씌우기'],
+   body:`<strong>기본 위치</strong>: 본대 뒤에서 방벽 씌우기로 아군 보호하며 에너지 충전.<br>
+<strong>방벽 씌우기(E)</strong>: 아군이 집중 사격받는 타이밍에 씌우기. 방벽 내구도가 낮을수록 에너지 더 빠르게 충전.<br>
+<strong>에너지 관리</strong>: 에너지 높을수록 딜량·자힐 강화. 에너지 80 이상에서 1:1 최강 수준.<br>
+<strong>중력자탄(Q)</strong>: 뭉친 적에게 사용. 사용 전 아군 연계 궁 약속 필수.<br>
+<strong>취약 판정</strong>: 아나 힐밴(에너지 충전 중 유지력 급락), 젠야타 부조화, 오리사 투창+방어 강화.<br>
+<strong>시너지</strong>: 겐지·한조·바티스트·젠야타와 중력자탄 연계 조합이 최상.`},
+
+  {id:5,cat:'hero',icon:'👊',title:'둠피스트',tags:['탱커','다이브','교란'],
+   body:`<strong>기본 위치</strong>: 본대와 다른 각에서 짧게 진입 후 이탈. 지진 강타(Shift)·로켓 펀치(우클) 중 하나는 탈출용 보존.<br>
+<strong>파워 블락(E)</strong>: 집중 사격을 받아 강화 펀치를 충전. 방향·타이밍 판단이 핵심.<br>
+<strong>파멸의 일격(Q)</strong>: 분산된 적보다 뭉친 적에게 가치 극대화.<br>
+<strong>취약 판정</strong>: 솜브라 해킹·아나 수면총·캐서디 섬광탄·오리사 투창이 모든 스킬 차단. 로드호그 갈고리 원콤 위협.<br>
+<strong>시너지</strong>: 트레이서·솜브라·겐지와 0.5초 간격 동시 진입. 키리코 정화로 CC 탈출 보조.`},
+
+  {id:6,cat:'hero',icon:'🐗',title:'로드호그',tags:['탱커','픽','낙사'],
+   body:`<strong>기본 위치</strong>: 코너와 낙사 지형 근처에서 위협각 유지.<br>
+<strong>사슬 갈고리(Shift)</strong>: 적 생존기·방벽이 빠진 직후 시도. 방벽·방어기·정화·거리 관리에 약함.<br>
+<strong>숨 돌리기(E)</strong>: 힐밴·수면·기절이 빠진 직후 사용. 아나 수류탄 직후 사용하면 효과 없음.<br>
+<strong>낙사 활용 맵</strong>: 일리오스 우물·등대, 리장 타워 정원, 네팔 성소, 리알토 다리에서 갈고리 낙사 극대화.<br>
+<strong>취약 판정</strong>: 아나 생체 수류탄(힐 차단 후 숨 돌리기 무력화), 젠야타 부조화, 오리사 투창.<br>
+<strong>시너지</strong>: 메이 빙벽(탈출 차단)·키리코 정화·일리아리 태양석으로 갈고리 후 생존 보조.`},
+
+  /* ── 딜러 ── */
+  {id:7,cat:'hero',icon:'⚡',title:'겐지',tags:['딜러','다이브','기동'],
+   body:`<strong>기본 위치</strong>: 옆길·고지대를 타고 체력 낮은 대상을 마무리.<br>
+<strong>질풍참(Shift)</strong>: 처치 관여 시 재사용 대기시간 초기화. 마무리용으로 아끼고 생존기는 벽타기로 확보.<br>
+<strong>튕겨내기(E)</strong>: 전방 투사체·탄환 반사. 광선·근접·범위 폭발·장판·해킹류 군중제어기는 반사 불가.<br>
+<strong>용검(Q)</strong>: 뭉친 적·좁은 공간에서 가치 최대. 아나 나노 강화제 연계로 극대화.<br>
+<strong>취약 판정</strong>: 모이라 생체 손아귀(광선, 벽타기 중 추적), 윈스턴 테슬라 캐논(광선), 브리기테 방패 밀쳐내기.<br>
+<strong>시너지</strong>: 윈스턴·D.Va 진입 후 같은 대상에 질풍참, 아나 나노 강화제·자리야 중력자탄 연계.`},
+
+  {id:8,cat:'hero',icon:'🕵️',title:'솜브라',tags:['딜러','해킹','정보'],
+   body:`<strong>기본 위치</strong>: 은신·위치변환기(E)로 후방 핵심 스킬을 끊음. 위치변환기는 귀환기가 아닌 즉시 이동기.<br>
+<strong>해킹(우클)</strong>: 레킹볼·둠피스트·바스티온처럼 핵심 스킬 의존도 높은 영웅에게 압박 큼. 피해 받으면 끊김.<br>
+<strong>EMP(Q)</strong>: 보호막 포함 즉시 제거 후 광역 해킹. 자리야 방벽이 있으면 효과 감소 — 방벽 소진 타이밍을 노릴 것.<br>
+<strong>힐팩 해킹</strong>: 해킹한 힐팩은 아군이 쿨 감소로 사용 가능, 적은 사용 불가.<br>
+<strong>취약 판정</strong>: 브리기테·키리코·모이라·토르비욘 포탑 등 후방 방어 조합, 5명이 뭉친 본대.<br>
+<strong>시너지</strong>: 윈스턴·트레이서와 해킹 대상 동시 압박, 젠야타 부조화 대상 마무리.`},
+
+  {id:9,cat:'hero',icon:'🏹',title:'파라',tags:['딜러','공중','투사체'],
+   body:`<strong>기본 위치</strong>: 건물·벽·지붕 엄폐를 끼고 짧게 공중 노출. 하늘에 오래 떠 있으면 히트스캔에 취약.<br>
+<strong>로켓 런처(좌클)</strong>: 직격보다 발 주변 폭발로 안정적인 피해.<br>
+<strong>충격탄(E)</strong>: 낙사 지형 밀쳐내기, 자기 이동·거리 벌리기에 활용.<br>
+<strong>포화(Q)</strong>: 시전 중 고정되어 매우 취약 — 팀이 시야를 끊어줘야 안전하게 사용 가능.<br>
+<strong>취약 판정</strong>: 애쉬·캐서디·솔저: 76·바티스트·일리아리 히트스캔 공중 견제, D.Va 부스터 압박.<br>
+<strong>시너지</strong>: 메르시 포켓(피해 증폭·생존 보조), D.Va가 상대 히트스캔 시야 압박.`},
+
+  {id:10,cat:'hero',icon:'🎯',title:'애쉬',tags:['딜러','중장거리','화염'],
+   body:`<strong>기본 위치</strong>: 고지대와 엄폐 뒤에서 중장거리 시야 장악.<br>
+<strong>다이너마이트(E)</strong>: 방벽 위·옆으로 넣어 지원가 자원을 빼는 용도. 원격 기폭(좌클 특전) 선택 시 타이밍 조절 가능.<br>
+<strong>충격 샷건(Shift)</strong>: 고지대 유지와 다이브 회피의 핵심 생존기.<br>
+<strong>B.O.B.(Q)</strong>: 개활지 거점 압박에 극강. 수면총·해킹·집중 사격으로 대응 가능.<br>
+<strong>취약 판정</strong>: 윈스턴·D.Va·솜브라·겐지의 고지대 압박, 시그마 방벽으로 시야 차단.<br>
+<strong>시너지</strong>: 시그마 방벽 뒤 포킹, 메르시 피해 증폭, 젠야타 부조화와 포킹 조합.`},
+
+  {id:11,cat:'hero',icon:'🤠',title:'캐서디',tags:['딜러','중거리','안티다이브'],
+   body:`<strong>기본 위치</strong>: 본대 옆 코너에서 중거리 화력을 넣으며 옆길 진입을 받아침.<br>
+<strong>섬광탄(E)</strong>: 트레이서·겐지·솜브라·벤처처럼 들어오는 영웅을 멈추는 가치가 큼. 이동 방해 판정.<br>
+<strong>황야의 무법자(Q)</strong>: 엄폐·방벽·기절에 약하므로 팀원이 CC를 먼저 넣어줘야 안전하게 사용 가능.<br>
+<strong>취약 판정</strong>: 위도우메이커·애쉬의 장거리 우위, 파라·에코 먼 공중 각, 시그마 방벽 시야 차단.<br>
+<strong>시너지</strong>: 오리사·시그마와 투창 후 집중 사격, 브리기테와 후방 보호 병행.`},
+
+  {id:12,cat:'hero',icon:'⚡',title:'트레이서',tags:['딜러','옆길','기동'],
+   body:`<strong>기본 위치</strong>: 본대와 다른 각에서 짧게 때리고 빠짐. 점멸 하나는 탈출용으로 반드시 보존.<br>
+<strong>핵심 가치</strong>: 한 번에 처치보다 수면총·정화의 방울·생체장 같은 지원가 생존기를 빼는 것이 더 큰 기여.<br>
+<strong>시간 역행(E)</strong>: 해킹·폭딜에 사용 전 사망할 수 있어 타이밍 판단이 중요.<br>
+<strong>펄스 폭탄(Q)</strong>: 단일 대상 부착 후 즉시 빠지기. 정화·무적·방벽으로 대응 가능하므로 CC 후 사용이 안전.<br>
+<strong>취약 판정</strong>: 토르비욘 포탑(자동 추적), 브리기테 방패 밀쳐내기, 캐서디 섬광탄, 모이라 생체 손아귀.<br>
+<strong>시너지</strong>: 윈스턴·레킹볼이 만든 혼란에 후속 진입, 젠야타 부조화 대상 마무리.`},
+
+  /* ── 힐러 ── */
+  {id:13,cat:'hero',icon:'💉',title:'아나',tags:['힐러','장거리','수면'],
+   body:`<strong>기본 위치</strong>: 후방 엄폐에서 탱커·핵심 딜러 시야 유지. 방벽·다이브 심하면 시야 확보 어려움.<br>
+<strong>생체 수류탄(E)</strong>: 아군 적중 시 힐량 증폭, 적 적중 시 4초 힐 차단. 적 탱커+지원가를 동시에 맞힐 때 가치 최대.<br>
+<strong>수면총(Shift)</strong>: 자기 방어·궁극기 차단에 높은 가치. 방어기·튕겨내기에 막힘. 수면 중 피해 받으면 깨어남.<br>
+<strong>나노 강화제(Q)</strong>: 피해 증가+피해 감소 동시 부여. 교전 중인 핵심 딜러·탱커에게 사용, 교전 전 낭비 금지.<br>
+<strong>취약 판정</strong>: 트레이서·솜브라·겐지·윈스턴·D.Va 후방 압박, 시그마·라인하르트 방벽으로 시야 차단.<br>
+<strong>시너지</strong>: 브리기테가 옆에서 후방 보호 시 가장 안정적.`},
+
+  {id:14,cat:'hero',icon:'⚕️',title:'바티스트',tags:['힐러','불사장치','딜힐'],
+   body:`<strong>기본 위치</strong>: 본대 뒤 코너와 고지대에서 광역 유지.<br>
+<strong>불사 장치(E)</strong>: 코너·방벽 뒤에 설치해야 파괴되기 어려움. 폭딜·즉사기 세이브용으로 아끼기.<br>
+<strong>증폭 매트릭스(Q)</strong>: 투사체·탄환 피해·치유 모두 증폭. 팀이 집결해 방벽 뒤서 포킹할 때 가치 최대.<br>
+<strong>엑소 부츠(Ctrl)</strong>: 고지대 이동용. 차징 중 노출 위험이 있어 안전 각 확인 후 사용.<br>
+<strong>취약 판정</strong>: 하드 다이브로 불사 장치 사용 전 사망, 아군이 넓게 흩어지면 광역 치유 가치 감소.<br>
+<strong>시너지</strong>: 시그마·라인하르트·라마트라 본대 유지, 캐서디·소전과 중거리 화력 병행.`},
+
+  {id:15,cat:'hero',icon:'🦊',title:'키리코',tags:['힐러','정화','기동'],
+   body:`<strong>기본 위치</strong>: 다이브 아군을 따라가거나 후방에서 정화·치유 제공.<br>
+<strong>정화의 방울(E)</strong>: 수면·해킹·힐밴 등 상태이상 즉시 제거. 아나 수면총·솜브라 해킹 직후 최우선 사용.<br>
+<strong>순보(Shift)</strong>: 시야에 있는 아군 위치로 벽 통과 텔레포트. 아군이 시야 내에 있어야만 사용 가능.<br>
+<strong>쿠나이(우클릭)</strong>: 투사체 3발 동시 발사. 치명타 피해가 높아 포커싱 조합에서 추가 화력 기여.<br>
+<strong>여우길(Q)</strong>: 무적+힐+이속 버프. 아군 생존 위기·궁극기 교환 타이밍에 사용.<br>
+<strong>시너지</strong>: 겐지·트레이서·윈스턴·D.Va·해저드 다이브 조합에서 순보로 즉각 합류하며 정화 제공.`},
+
+  {id:16,cat:'hero',icon:'🎵',title:'루시우',tags:['힐러','이속','낙사'],
+   body:`<strong>기본 위치</strong>: 팀 이동 경로를 따라가며 비트 스위칭으로 힐·속도 제공.<br>
+<strong>비트 스위칭</strong>: 전투 중→힐 비트, 코너 진입 직전→속도 비트. 상황에 맞게 즉각 전환.<br>
+<strong>방음장벽(Q)</strong>: 팀 전체가 모였을 때 사용. 아군이 흩어진 상태에서 사용하면 낭비.<br>
+<strong>밀쳐내기·벽타기</strong>: 일리오스 우물·등대, 리장 타워 정원·야시장, 네팔 성소 낙사 지형에서 극대화.<br>
+<strong>밀기 맵 핵심 역할</strong>: 중앙 포인트 선점을 위해 속도 비트로 팀 전체를 먼저 도착시키는 것이 최우선.<br>
+<strong>취약 판정</strong>: 위도우메이커·한조 장거리 정밀 사격, 모이라·바스티온 추적형 광역 공격.`},
+
+  {id:17,cat:'hero',icon:'🛡️',title:'브리기테',tags:['힐러','안티다이브','후방보호'],
+   body:`<strong>기본 위치</strong>: 아나·젠야타·바티스트 옆에서 옆길 진입을 받아침.<br>
+<strong>방패 밀쳐내기(우클+좌클)</strong>: 트레이서·솜브라·겐지·윈스턴의 첫 진입을 밀어내는 핵심 기술.<br>
+<strong>도리깨 투척(Shift)</strong>: 격려(주변 힐) 발동용. 적이 먼 거리에 있어도 도리깨 적중 시 격려 활성화.<br>
+<strong>집결(Q)</strong>: 아군에게 추가 생명력 부여. 러시 진입 직전 사용이 가장 효과적.<br>
+<strong>취약 판정</strong>: 파라·에코·위도우메이커처럼 닿지 않는 원거리 위협, 긴 시야 포킹 조합.<br>
+<strong>시너지</strong>: 아나·젠야타·바티스트와 함께 후방 보호 최적.`},
+
+  {id:18,cat:'hero',icon:'🚀',title:'주노',tags:['힐러','기동','이속'],
+   body:`<strong>기본 위치</strong>: 팀 이동 경로를 따라 빠르게 합류하고 하이퍼 링으로 돌파 보조.<br>
+<strong>하이퍼 링(E)</strong>: 이동 가속 장치. 한타 시작 전 이동 경로와 돌파 타이밍을 만드는 데 사용.<br>
+<strong>펄사 어뢰(우클)</strong>: 락온 후 다중 대상 지원·피해. 시야와 락온 조건이 필요.<br>
+<strong>궤도 광선(Q)</strong>: 이동하는 광역 강화·피해 궁극기. 팀이 궤도 광선 경로 안에 있어야 효과 최대.<br>
+<strong>취약 판정</strong>: 하드 다이브에 고립, 힐 고정 시야가 필요한 조합에서는 아나·바티스트 우선.<br>
+<strong>시너지</strong>: 윈스턴·D.Va·트레이서·겐지·정커퀸과 빠른 재진입 조합에서 최강.`},
+
+  /* 전략 */
+  {id:9,cat:'strat',icon:'⚔️',title:'카운터 픽 핵심 원칙',tags:['카운터','전략'],
+   body:`<strong>판정으로 생각하기</strong>: 특정 영웅 이름보다 판정(광선·근접·투사체·장판)으로 접근한다. 방벽 탱커 상대면 방벽을 무시하는 광선·근접 판정 영웅이 유리하다.<br>
+<strong>공중 대상 카운터</strong>: 히트스캔(솔저: 76, 캐서디, 애쉬)과 아나 수면총, D.Va 부스터가 공중 영웅 압박의 기본. 투사체 딜러는 공중 대상에게 효율이 크게 떨어진다.<br>
+<strong>다이브 카운터</strong>: 토르비욘 포탑(자동 추적), 브리기테 방패 밀쳐내기, 캐서디 섬광탄, 모이라 생체 손아귀(광선)가 기동형 영웅 진입을 받아친다.<br>
+<strong>방벽 카운터</strong>: 솜브라 해킹(방어막 즉시 소멸), 정크랫 유탄(방벽 뒤 투사체 우회), 파라(방벽 위·옆 공중 각).<br>
+<strong>교체 타이밍</strong>: 상대 조합이 확인되면 15초 이내에 교체. 늦을수록 전선 주도권을 내줌. 역할 유지(딜러→딜러)를 원칙으로 하되, 조합 구조가 바뀌는 경우는 팀원과 소통 후 교체.`},
+
+  {id:10,cat:'strat',icon:'💥',title:'궁극기 연계 원칙',tags:['궁극기','콤보'],
+   body:`<strong>집결 → 마무리 구조</strong>: 적을 한 곳에 모은 뒤 광역기로 처리하는 것이 궁극기 연계의 기본 구조다. 자리야 중력자탄·메이 눈보라·솜브라 EMP처럼 집결·고정 궁극기를 먼저 사용하고, 광역 딜 궁극기로 마무리한다.<br>
+<strong>궁극기 차단</strong>: 적 궁극기를 먼저 막는 것도 연계다. 아나 수면총으로 적 궁극기 시전을 캔슬하거나, 키리코 여우길·바티스트 불사 장치로 팀이 살아남으면 수적 우위를 이어갈 수 있다.<br>
+<strong>강화 → 교전 구조</strong>: 아나 나노 강화제, 루시우 방음장벽, 바티스트 증폭 매트릭스처럼 팀 능력치를 올리는 궁극기는 교전이 시작되는 시점에 맞춰 써야 가치가 크다. 이동 중이나 교전이 끝난 뒤 사용은 낭비.<br>
+<strong>EMP 타이밍</strong>: 솜브라 EMP는 자리야 방벽이 소진된 타이밍을 골라야 효과가 최대다. 방벽이 남아있으면 보호막은 제거되지만 방벽이 흡수해 전멸 효과가 줄어든다.<br>
+<strong>궁극기 낭비 방지</strong>: 플래시포인트·밀기처럼 이동 경로가 긴 전장에서는 활성화된 거점·로봇 근처가 아닌 곳에서 궁극기 사용을 최소화한다. 교전에서 이겨도 거점을 비우면 의미가 없다.`},
+
+  {id:11,cat:'strat',icon:'🏆',title:'랭크 상승 핵심 원칙',tags:['랭크','운영'],
+   body:`<strong>영웅 풀</strong>: 역할당 2~3개 영웅 마스터가 핵심. 만능픽보다 상황 대응형 픽 준비.<br>
+<strong>포지션</strong>: 항상 아군 근처 유지, 고립 상황 절대 금지. 1:1 교전보다 팀파이트 기여 우선.<br>
+<strong>궁극기 관리</strong>: 궁극기 게이지 추적, 상대 궁 대응 궁을 아껴두는 습관.<br>
+<strong>사망 원인 분석</strong>: 매 교전 후 왜 죽었는지 확인. 포지션 실수 vs 판단 실수를 구분.<br>
+<strong>역할 책임</strong>: 딜러는 딜 순위 1~2위, 탱커는 팀 진입 타이밍 결정, 힐러는 생존 우선 힐.`},
+
+  {id:12,cat:'strat',icon:'🔄',title:'다이브·러시·포킹 조합',tags:['조합','전략'],
+   body:`<strong>다이브 조합</strong>: 윈스턴+D.Va+겐지/트레이서+루시우+키리코. 이동기로 후방 동시 압박.<br>
+<strong>러시 조합</strong>: 라인하르트+자리야+리퍼+모이라+루시우. 코너 근접 난전 강제.<br>
+<strong>포킹 조합</strong>: 시그마+오리사+한조+위도우메이커+아나+바티스트. 긴 시야 체력 소모.<br>
+<strong>밀기 맵 핵심</strong>: 루시우 속도로 중앙 선점 → 정커퀸/시메트라 텔포로 팀 합류 가속.<br>
+<strong>조합 전환 타이밍</strong>: 상대 조합이 확인되면 15초 내 교체. 늦어질수록 불리.`},
+
+  /* 맵 */
+  {id:13,cat:'map',icon:'🗺️',title:'쟁탈 맵 운영 핵심',tags:['쟁탈','맵'],
+   body:`<strong>공통 원칙</strong>: 공수 구분 없음. 거점 점령이 전부 — 거점 밖 교전은 최소화.<br>
+<strong>일리오스 우물</strong>: 낙사 구간. 로드호그 갈고리, 루시우 밀쳐내기, 자리야 중력자탄으로 낙사 유도.<br>
+<strong>리장 타워 관제센터</strong>: 실내 구조 → 라인하르트 방벽 강세. 저격수·다이브 영웅 제한.<br>
+<strong>부산 사찰</strong>: 거점 중앙 북 위 기동형 영웅 비비기 전략. 범위 궁극기 대박 주의.<br>
+<strong>오아시스 도심</strong>: 점프패드 → 2층 테라스. 기동성 높은 영웅(윈스턴·D.Va·겐지) 강세.`},
+
+  {id:14,cat:'map',icon:'🚛',title:'호위 맵 운영 핵심',tags:['호위','화물'],
+   body:`<strong>공통 원칙</strong>: 고지대 장악이 핵심. 공격=기동성으로 자리 점거, 수비=사거리로 압박.<br>
+<strong>66번 국도</strong>: 공격 승률 높은 맵. 최종 구간 좁은 통로라 공격측이 유리.<br>
+<strong>하바나 최종</strong>: 개활지+긴 구간. 위도우메이커 최강 맵. 수비 극히 유리.<br>
+<strong>샴발리 수도원</strong>: 고저차 심화. 공격=화물에 뭉쳐 돌파 또는 기동 영웅 고지 전진.<br>
+<strong>감시 기지 최종</strong>: 엄폐물 없는 개활지. 시간 여유 없이 오면 난이도 급상승.`},
+
+  {id:15,cat:'map',icon:'🏙️',title:'혼합·밀기·플래시포인트 운영',tags:['혼합','밀기','플래시포인트'],
+   body:`<strong>혼합 맵</strong>: 거점 점령 후 화물 전환. 눔바니·왕의 길은 거점 밀리면 수비 부활이 최종 지점으로.<br>
+<strong>밀기 맵 핵심</strong>: 맵 정중앙 첫 한타 포인트 선점이 가장 중요. 루시우 속도 버프로 먼저 도착.<br>
+<strong>밀기 주의</strong>: 우위 상태에서 무리하게 로봇 밀지 않기. 로봇에 항상 최소 1명 붙어있기 필수.<br>
+<strong>플래시포인트</strong>: 공수 구분 없음. 3점 선취 목표. 활성화된 거점 외 교전·궁극기 최소화.<br>
+<strong>플래시포인트 이동</strong>: 거점 점령 즉시 다음 활성화 거점으로 이동해 선점. 이동속도 영웅 필수.`},
+
+  {id:16,cat:'map',icon:'🏛️',title:'왕의 길 운영법',tags:['혼합','좁은맵'],
+   body:`<strong>구조 특징</strong>: 샛길·골목·쥐구멍이 많아 카운터 픽 다양. 위도우메이커·레킹볼의 최강 맵.<br>
+<strong>공격 추천</strong>: 위도우메이커, 레킹볼, 정크랫, 한조, 정커퀸. 아나(직선 시야 힐+나노 시너지).<br>
+<strong>수비 추천</strong>: 정크랫(유탄+덫+충격 지뢰 최적 맵), 바스티온(창문 화력), 위도우메이커.<br>
+<strong>레킹볼 활용</strong>: 갈고리 포인트 풍부. 화물 경로에 지뢰 → 최소 2~3명 즉사.<br>
+<strong>정크랫 활용</strong>: 전 구간에서 유탄+타이어가 효율 최강. 좁은 샛길로 덫 매복 반드시.`},
+];
+
 const INTEL = {
   all:[
-    {tag:'COUNTER',q:'겐지를 카운터하는 영웅은?'},
-    {tag:'COMP',q:'팀 조합 어떻게 짜야 해?'},
-    {tag:'MAP',q:'공격 맵 최적 영웅 추천'},
-    {tag:'ULT',q:'궁극기 활용 전략은?'},
-    {tag:'RANK',q:'랭크 올리기 좋은 영웅은?'},
-    {tag:'COUNTER',q:'실드 조합 카운터 픽은?'},
-    {tag:'TIP',q:'솜브라 운영 팁 알려줘'},
-    {tag:'META',q:'현재 메타 최강 영웅은?'},
+    {cat:'COUNTER',q:'파라 카운터하는 영웅 알려줘'},
+    {cat:'COUNTER',q:'위도우메이커 잡는 법은?'},
+    {cat:'COMP',q:'다이브 조합 어떻게 운영해?'},
+    {cat:'MAP',q:'일리오스 우물에서 낙사킬 영웅 추천'},
+    {cat:'RANK',q:'랭크 올리기 좋은 영웅은?'},
+    {cat:'META',q:'현재 메타 최강 영웅은?'},
+    {cat:'STAT',q:'상대 둠피스트 6킬 3데스 8000딜, 어떻게 카운터쳐?'},
+    {cat:'STAT',q:'내 솔저76 킬4 데스8 딜6000, 뭘 고쳐야 해?'},
   ],
   tank:[
-    {tag:'TANK',q:'라인하르트 운영 팁'},
-    {tag:'TANK',q:'오리사 방어 전략은?'},
-    {tag:'TANK',q:'D.Va 기동전 어떻게?'},
-    {tag:'TANK',q:'시그마 조합 전략은?'},
-    {tag:'COUNTER',q:'탱커 카운터 조합은?'},
+    {cat:'TANK',q:'라인하르트 방어막 관리 팁'},
+    {cat:'TANK',q:'D.Va 방어 매트릭스 활용법'},
+    {cat:'TANK',q:'둠피스트 진입·이탈 타이밍은?'},
+    {cat:'STAT',q:'내 라인하르트 킬1 데스6 딜4000, 어떻게 개선해?'},
   ],
   dps:[
-    {tag:'DPS',q:'겐지 칼갈기 타이밍은?'},
-    {tag:'DPS',q:'위도우메이커 포지션 팁'},
-    {tag:'COUNTER',q:'트레이서 카운터 영웅은?'},
-    {tag:'DPS',q:'솜브라 EMP 콤보 전략'},
-    {tag:'DPS',q:'에코 운영 방법은?'},
+    {cat:'DPS',q:'겐지 질풍참 타이밍은?'},
+    {cat:'DPS',q:'솜브라 EMP 타이밍 알려줘'},
+    {cat:'COUNTER',q:'트레이서 카운터 영웅은?'},
+    {cat:'STAT',q:'내 애쉬 킬5 데스6 딜9000, 개선 방법은?'},
   ],
   supp:[
-    {tag:'SUPP',q:'아나 수면 타이밍 알려줘'},
-    {tag:'SUPP',q:'루시우 속도부스트 전략'},
-    {tag:'SUPP',q:'젠야타 불화 오브 활용법'},
-    {tag:'SUPP',q:'모이라 생존 운영 팁'},
-    {tag:'SUPP',q:'커스터디 운영 방법은?'},
+    {cat:'SUPP',q:'아나 수면총 타이밍 알려줘'},
+    {cat:'SUPP',q:'루시우 밀기 맵에서 역할은?'},
+    {cat:'SUPP',q:'키리코 정화의 방울 언제 써?'},
+    {cat:'STAT',q:'내 아나 힐12000 킬0 데스5, 잘하고 있는 건가?'},
   ],
 };
+const CATS=[{id:'all',label:'전체'},{id:'hero',label:'영웅'},{id:'strat',label:'전략'},{id:'map',label:'맵'}];
 
-let qCount=0, sesStart=Date.now();
+/* ══ 상태 ══ */
+let qCount=0, sesStart=Date.now(), activeDoc=null, curCat='all', searchQ='';
+let ctxMapName='', ctxSide='', ctxMode='';
+let statGuideOpen=false;
 
-function getCsrf(){
-  return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]||'';
+/* ══ 스탯 키워드 감지 ══ */
+const STAT_KEYWORDS=['킬','데스','딜','힐','도움','어시','사망','피해','치유'];
+function hasStatInput(text){
+  return STAT_KEYWORDS.some(k=>text.includes(k)) && /\d{2,}/.test(text);
 }
 
-function buildIntel(role){
-  const feed=document.getElementById('intelFeed');
-  feed.innerHTML='';
-  (INTEL[role]||INTEL.all).forEach(item=>{
-    const btn=document.createElement('button');
-    btn.className='intel-item';
-    btn.innerHTML=`<div class="intel-tag">[${item.tag}]</div>${item.q}`;
-    btn.onclick=()=>fillInput(item.q);
-    feed.appendChild(btn);
+/* ══ 유틸 ══ */
+function getCsrf(){return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('csrftoken='))?.split('=')[1]||'';}
+function ts(){return new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});}
+function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
+function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}
+function fillInput(t){const i=document.getElementById('userInput');i.value=t;autoResize(i);i.focus();}
+function setP(v,l){document.getElementById('progFill').style.width=v+'%';document.getElementById('progLabel').textContent=l;}
+function addLog(msg){
+  const el=document.getElementById('sysLog');
+  const row=document.createElement('div');row.className='log-row';
+  row.innerHTML=`<span class="log-ts">${ts()}</span><span class="log-msg">${msg}</span>`;
+  el.appendChild(row);
+  while(el.children.length>5)el.firstChild.remove();
+}
+function toggleTheme(){
+  const h=document.documentElement;const dark=h.dataset.theme==='dark';
+  h.dataset.theme=dark?'light':'dark';
+  document.getElementById('themeBtn').textContent=dark?'🌙':'☀️';
+}
+function toggleStatGuide(){
+  statGuideOpen=!statGuideOpen;
+  document.getElementById('statGuidePanel').classList.toggle('open',statGuideOpen);
+  document.getElementById('statGuideArrow').classList.toggle('open',statGuideOpen);
+}
+
+/* ══ 상황 설정 바 ══ */
+function onMapChange(){
+  const sel=document.getElementById('mapSelect');
+  const val=sel.value; // "맵이름|mode" 형식
+  if(!val){ctxMapName='';ctxMode='';ctxSide='';updateSideSection();updateCtxBadge();return;}
+  const parts=val.split('|');
+  ctxMapName=parts[0];
+  ctxMode=parts[1]||'';
+  ctxSide=''; // 맵 바꾸면 공수 초기화
+  document.getElementById('btnAttack').className='side-btn';
+  document.getElementById('btnDefense').className='side-btn';
+  updateSideSection();
+  updateCtxBadge();
+  addLog('맵 설정: '+ctxMapName+' ('+modeLabel(ctxMode)+')');
+}
+
+function modeLabel(m){
+  const lbl={control:'쟁탈',escort:'호위',hybrid:'혼합',push:'밀기',flashpoint:'플래시포인트'};
+  return lbl[m]||m;
+}
+
+function updateSideSection(){
+  const sec=document.getElementById('sideSection');
+  const hasSide=MAP_MODE_WITH_SIDE.has(ctxMode);
+  if(!ctxMapName){sec.classList.add('hidden');return;}
+  sec.classList.remove('hidden');
+  // 공수 없는 모드는 버튼 disabled + 라벨 안내
+  const btnA=document.getElementById('btnAttack');
+  const btnD=document.getElementById('btnDefense');
+  if(hasSide){
+    sec.classList.remove('no-side');
+    btnA.disabled=false; btnD.disabled=false;
+  } else {
+    sec.classList.add('no-side');
+    btnA.disabled=true; btnD.disabled=true;
+    btnA.className='side-btn'; btnD.className='side-btn';
+    ctxSide='';
+  }
+}
+
+function setSide(side){
+  if(!MAP_MODE_WITH_SIDE.has(ctxMode))return;
+  ctxSide=(ctxSide===side)?'':side;
+  document.getElementById('btnAttack').className='side-btn'+(ctxSide==='attack'?' active-attack':'');
+  document.getElementById('btnDefense').className='side-btn'+(ctxSide==='defense'?' active-defense':'');
+  updateCtxBadge();
+  if(ctxSide)addLog('공수 설정: '+(ctxSide==='attack'?'공격':'수비'));
+}
+
+function updateCtxBadge(){
+  const badge=document.getElementById('ctxBadge');
+  const txt=document.getElementById('ctxBadgeText');
+  const parts=[];
+  if(ctxMapName)parts.push(ctxMapName+' ('+modeLabel(ctxMode)+')');
+  if(ctxSide)parts.push(ctxSide==='attack'?'⚔ 공격':'🛡 수비');
+  if(parts.length){txt.textContent=parts.join(' · ');badge.style.display='flex';}
+  else badge.style.display='none';
+}
+
+function clearContext(){
+  ctxMapName='';ctxSide='';ctxMode='';
+  document.getElementById('mapSelect').value='';
+  document.getElementById('btnAttack').className='side-btn';
+  document.getElementById('btnDefense').className='side-btn';
+  document.getElementById('sideSection').classList.add('hidden');
+  updateCtxBadge();addLog('상황 설정 초기화');
+}
+
+/* ══ 인텔/역할 ══ */
+function buildIntel(r){
+  const list=document.getElementById('intelList');list.innerHTML='';
+  (INTEL[r]||INTEL.all).forEach(x=>{
+    const b=document.createElement('button');b.className='intel-item';
+    b.innerHTML=`<div class="intel-cat">${x.cat}</div><div class="intel-q">${x.q}</div>`;
+    b.onclick=()=>fillInput(x.q);list.appendChild(b);
+  });
+}
+function setRole(el,r){document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');buildIntel(r);}
+
+/* ══ RAG 패널 ══ */
+function buildTabs(){
+  const w=document.getElementById('ragTabs');w.innerHTML='';
+  CATS.forEach(c=>{
+    const b=document.createElement('button');b.className='rag-tab'+(c.id===curCat?' active':'');
+    b.textContent=c.label;b.onclick=()=>{curCat=c.id;renderDocs();buildTabs();};w.appendChild(b);
+  });
+}
+function filterDocs(){searchQ=document.getElementById('ragSearch').value.toLowerCase();renderDocs();}
+function renderDocs(){
+  const list=document.getElementById('ragList');
+  const f=KB.filter(d=>{
+    const co=curCat==='all'||d.cat===curCat;
+    const to=!searchQ||d.title.toLowerCase().includes(searchQ)||d.tags.some(t=>t.toLowerCase().includes(searchQ))||d.body.toLowerCase().includes(searchQ);
+    return co&&to;
+  });
+  if(!f.length){list.innerHTML='<div class="rag-empty"><div class="rag-empty-icon">📭</div><div class="rag-empty-text">검색 결과 없음</div></div>';return;}
+  list.innerHTML='';
+  f.forEach(doc=>{
+    const b=document.createElement('button');b.className='rag-card'+(activeDoc&&activeDoc.id===doc.id?' active-card':'');
+    b.innerHTML=`<div class="rag-card-top"><span class="rag-card-icon">${doc.icon}</span><span class="rag-card-title">${doc.title}</span></div><div class="rag-card-tags">${doc.tags.map(t=>`<span class="rag-tag">${t}</span>`).join('')}</div>`;
+    b.onclick=()=>openDoc(doc);list.appendChild(b);
+  });
+}
+function openDoc(doc){
+  activeDoc=doc;renderDocs();
+  document.getElementById('rpIcon').textContent=doc.icon;
+  document.getElementById('rpTitle').textContent=doc.title;
+  document.getElementById('rpBody').innerHTML=doc.body;
+  document.getElementById('ragPreview').style.display='block';
+}
+function closePreview(){document.getElementById('ragPreview').style.display='none';activeDoc=null;renderDocs();}
+function useDoc(){if(!activeDoc)return;fillInput(activeDoc.title+'에 대해 자세히 알려줘');addLog('문서 선택: '+activeDoc.title);}
+
+/* ══ 마크다운 ══ */
+function md(t){
+  if(!t)return'';
+  return t
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/^### (.+)$/gm,'<h3>$1</h3>').replace(/^## (.+)$/gm,'<h2>$1</h2>').replace(/^# (.+)$/gm,'<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/`(.+?)`/g,'<code>$1</code>')
+    .replace(/^[\-\*] (.+)$/gm,'<li>$1</li>').replace(/(<li>.*?<\/li>\n?)+/gs,m=>'<ul>'+m+'</ul>')
+    .replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>').replace(/^(?!<[hpuoli]|$)(.+)$/gm,'<p>$1</p>');
+}
+
+/* ══ 버튼 스트립 ══ */
+function createSuggestedStrip(questions){
+  if(!Array.isArray(questions)||!questions.length)return null;
+  const strip=document.createElement('div');strip.className='suggested-strip';
+  questions.slice(0,3).forEach(q=>{
+    const btn=document.createElement('button');btn.className='suggested-btn';btn.textContent=q;
+    btn.onclick=()=>fillInput(q);strip.appendChild(btn);
+  });
+  return strip;
+}
+function createChoiceStrip(buttons){
+  if(!Array.isArray(buttons)||!buttons.length)return null;
+  const strip=document.createElement('div');strip.className='suggested-strip';
+  buttons.forEach(item=>{
+    const btn=document.createElement('button');btn.className='choice-btn';btn.textContent=item.label;
+    btn.onclick=()=>{
+      if(item.type==='role_filter'){sendWithRoleFilter(item.value);return;}
+      fillInput(item.label);
+    };
+    strip.appendChild(btn);
+  });
+  return strip;
+}
+
+/* ══ 메시지 렌더 ══ */
+function appendMsg(role,text,suggestedQuestions,choiceButtons,hasStat,mapInfo){
+  document.getElementById('welcomeMsg')?.remove();
+  const box=document.getElementById('chatBox');
+  const grp=document.createElement('div');grp.className='msg-group '+role;
+  const ava=document.createElement('div');ava.className='msg-avatar';ava.textContent=role==='user'?'👤':'🎯';
+  const stack=document.createElement('div');stack.className='msg-stack';
+  const meta=document.createElement('div');meta.className='msg-meta';
+  meta.innerHTML=`<span class="msg-name">${role==='user'?'나':'코치 AI'}</span><span>${ts()}</span>`;
+  const bubble=document.createElement('div');bubble.className='bubble '+role;
+  if(role==='user'){
+    const p=document.createElement('p');p.textContent=text;bubble.appendChild(p);
+    // 이번 질문에 실제로 반영된 상황(스탯 입력 / 맵 선택)을 사용자가 바로 확인할 수
+    // 있도록 배지로 보여준다. 맵을 켜둔 채 깜빡하고 안 끄면 계속 그 맵 기준으로
+    // 답이 나오는데, 이 배지가 있어야 "아 지금 이 맵으로 인식됐구나"를 보고
+    // 필요하면 ✕로 맵 설정을 끌 수 있다.
+    if(hasStat||mapInfo){
+      const badgeRow=document.createElement('div');badgeRow.className='msg-badge-row';
+      if(hasStat){
+        const badge=document.createElement('div');badge.className='stat-detected-badge';
+        badge.textContent='📊 스탯 감지 — 수치 기반 분석 실행';badgeRow.appendChild(badge);
+      }
+      if(mapInfo){
+        const badge=document.createElement('div');badge.className='map-applied-badge';
+        badge.textContent='🗺 '+mapInfo+' 기준으로 답변';badgeRow.appendChild(badge);
+      }
+      bubble.appendChild(badgeRow);
+    }
+  } else {
+    bubble.innerHTML=md(text);
+    const cs=createChoiceStrip(choiceButtons);if(cs)bubble.appendChild(cs);
+    const ss=createSuggestedStrip(suggestedQuestions);if(ss)bubble.appendChild(ss);
+  }
+  stack.appendChild(meta);stack.appendChild(bubble);
+  grp.appendChild(ava);grp.appendChild(stack);
+  box.appendChild(grp);box.scrollTop=box.scrollHeight;
+  if(role==='user'){qCount++;document.getElementById('qCount').textContent=qCount;}
+}
+function appendTyping(label){
+  const box=document.getElementById('chatBox');const id='ty'+Date.now();
+  const grp=document.createElement('div');grp.className='typing-group';grp.id=id;
+  const ava=document.createElement('div');ava.className='msg-avatar';ava.textContent='🎯';
+  const bub=document.createElement('div');bub.className='typing-bubble';
+  bub.innerHTML=`<div class="t-dot"></div><div class="t-dot"></div><div class="t-dot"></div><span class="t-label">${label||'분석 중...'}</span>`;
+  grp.appendChild(ava);grp.appendChild(bub);box.appendChild(grp);box.scrollTop=box.scrollHeight;
+  return id;
+}
+function remTyping(id){document.getElementById(id)?.remove();}
+function showErr(msg){
+  const box=document.getElementById('chatBox');
+  const d=document.createElement('div');d.className='msg-err';d.textContent='⚠ 오류: '+msg;
+  box.appendChild(d);box.scrollTop=box.scrollHeight;
+}
+
+/* ══ API 호출 (JSON 전용) ══ */
+async function callChatApi({message, roleFilter=null}){
+  const body={message};
+  if(roleFilter) body.role_filter=roleFilter;
+  const extra={};
+  if(ctxMapName) extra.map_name=ctxMapName;
+  if(ctxSide)    extra.side=ctxSide;
+  if(Object.keys(extra).length) body.extra_context=extra;
+  return fetch('/chat/api/',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body:JSON.stringify(body),
   });
 }
 
-function setRole(el,role){
-  document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));
-  el.classList.add('active');
-  buildIntel(role);
-}
-
-function fillInput(text){
+/* ══ 메시지 전송 ══ */
+async function sendMessage(forcedMsg){
   const inp=document.getElementById('userInput');
-  inp.value=text;autoResize(inp);inp.focus();
-}
-
-function autoResize(el){
-  el.style.height='auto';
-  el.style.height=Math.min(el.scrollHeight,120)+'px';
-}
-
-function handleKey(e){
-  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}
-}
-
-function now(){return new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}
-
-function addLog(txt){
-  const log=document.getElementById('sysLog');
-  const line=document.createElement('div');
-  line.className='log-line';
-  line.innerHTML=`<span class="log-ts">[${now()}]</span><span class="log-txt">${txt}</span>`;
-  log.appendChild(line);
-  if(log.children.length>6) log.firstChild.remove();
-}
-
-function markdown(t){
-  return t
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/^### (.+)$/gm,'<h3>$1</h3>')
-    .replace(/^## (.+)$/gm,'<h2>$1</h2>')
-    .replace(/^# (.+)$/gm,'<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g,'<em>$1</em>')
-    .replace(/`(.+?)`/g,'<code>$1</code>')
-    .replace(/^---$/gm,'<hr>')
-    .replace(/^[\-\*] (.+)$/gm,'<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/gs,'<ul>$1</ul>')
-    .replace(/\n\n/g,'</p><p>')
-    .replace(/\n/g,'<br>')
-    .replace(/^(?!<[hpuolibr]|$)(.+)$/gm,'<p>$1</p>');
-}
-
-function appendMsg(role,text){
-  document.getElementById('welcomeMsg')?.remove();
-  const box=document.getElementById('chatBox');
-  const block=document.createElement('div');
-  block.className='msg-block '+(role==='user'?'user':'ai');
-
-  const ava=document.createElement('div');
-  ava.className='msg-ava';
-  const hex=document.createElement('div');
-  hex.className='ava-hex '+(role==='user'?'user':'ai');
-  hex.textContent=role==='user'?'YOU':'🎯';
-  const name=document.createElement('div');
-  name.className='ava-name';
-  name.textContent=role==='user'?'AGENT':'COACH';
-  ava.appendChild(hex);ava.appendChild(name);
-
-  const content=document.createElement('div');
-  content.className='msg-content';
-
-  if(role==='user'){
-    const frame=document.createElement('div');
-    frame.className='user-frame';
-    frame.textContent=text;
-    content.appendChild(frame);
-  } else {
-    const frame=document.createElement('div');
-    frame.className='ai-frame';
-    const hdr=document.createElement('div');
-    hdr.className='ai-frame-header';
-    hdr.innerHTML=`<span class="ai-tag">▶ TACTICAL ANALYSIS</span><span class="ai-ts">${now()}</span>`;
-    const body=document.createElement('div');
-    body.className='ai-body';
-    body.innerHTML=markdown(text);
-    frame.appendChild(hdr);frame.appendChild(body);
-    content.appendChild(frame);
-  }
-
-  block.appendChild(ava);block.appendChild(content);
-  box.appendChild(block);
-  box.scrollTop=box.scrollHeight;
-
-  if(role==='user'){
-    qCount++;
-    document.getElementById('qCount').textContent=qCount;
-    setProgress(30,'분석 중...');
-  }
-}
-
-function appendTyping(){
-  const box=document.getElementById('chatBox');
-  const id='typ-'+Date.now();
-  const block=document.createElement('div');
-  block.className='typing-block';block.id=id;
-
-  const ava=document.createElement('div');
-  ava.className='msg-ava';
-  const hex=document.createElement('div');
-  hex.className='ava-hex ai';hex.textContent='🎯';
-  const name=document.createElement('div');
-  name.className='ava-name';name.textContent='COACH';
-  ava.appendChild(hex);ava.appendChild(name);
-
-  const frame=document.createElement('div');
-  frame.className='typing-frame';
-  frame.innerHTML='<div class="t-dot"></div><div class="t-dot"></div><div class="t-dot"></div><span class="typing-label">ANALYZING...</span>';
-
-  block.appendChild(ava);block.appendChild(frame);
-  box.appendChild(block);
-  box.scrollTop=box.scrollHeight;
-  return id;
-}
-
-function removeTyping(id){document.getElementById(id)?.remove();}
-
-function setProgress(pct,label){
-  document.getElementById('progFill').style.width=pct+'%';
-  document.getElementById('progLbl').textContent=label;
-}
-
-async function sendMessage(){
-  const inp=document.getElementById('userInput');
-  const msg=inp.value.trim();
+  const msg=typeof forcedMsg==='string'?forcedMsg.trim():inp.value.trim();
   if(!msg)return;
-
-  appendMsg('user',msg);
-  addLog('질의 수신: '+msg.slice(0,20)+'...');
-  inp.value='';autoResize(inp);
-
-  const btn=document.getElementById('sendBtn');
-  btn.disabled=true;
-  const tid=appendTyping();
-  setProgress(60,'전술 DB 조회 중...');
-
-  try{
-    const res=await fetch('/chat/api/',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','X-CSRFToken':getCsrf()},
-      body:JSON.stringify({message:msg})
-    });
-    const data=await res.json();
-    removeTyping(tid);
-    setProgress(100,'분석 완료');
-    setTimeout(()=>setProgress(0,'AI 대기 중'),2000);
-
-    if(!res.ok){showErr(data.error||'서버 오류');return;}
-    appendMsg('ai',data.answer);
-    addLog('분석 완료. 응답 전송됨.');
-  }catch(e){
-    removeTyping(tid);
-    setProgress(0,'오류 발생');
-    showErr('네트워크 오류: '+e.message);
-    addLog('ERROR: '+e.message);
-  }finally{
-    btn.disabled=false;inp.focus();
+  const hasStat=hasStatInput(msg);
+  // 이번 메시지에 실제로 반영될 맵/공수 정보를 사람이 읽을 수 있는 문자열로 구성.
+  // ctxMapName이 설정돼 있어야만(즉 callChatApi가 extra_context로 같이 보낼 때만)
+  // 배지를 보여준다 — 설정 안 했는데 배지가 뜨면 오히려 혼란을 준다.
+  let mapInfo='';
+  if(ctxMapName){
+    mapInfo=ctxMapName;
+    if(ctxSide) mapInfo+=' · '+(ctxSide==='attack'?'공격':'수비');
   }
+  appendMsg('user',msg,[],[],hasStat,mapInfo);
+  addLog('질의: '+msg.slice(0,28)+'...');
+  if(typeof forcedMsg!=='string'){inp.value='';autoResize(inp);}
+  const btn=document.getElementById('sendBtn');btn.disabled=true;
+  const tid=appendTyping(hasStat?'스탯 분석 중...':'AI 답변 중...');
+  setP(35,hasStat?'스탯 분석 중...':'AI 답변 중...');
+  setTimeout(()=>setP(65,'전술 DB 조회 중...'),600);
+  try{
+    const res=await callChatApi({message:msg});
+    const ct=res.headers.get('content-type')||'';
+    if(!ct.includes('application/json')){await res.text();throw new Error(`서버가 JSON이 아닌 응답 (${res.status}).`);}
+    const data=await res.json();
+    remTyping(tid);setP(100,'분석 완료');setTimeout(()=>setP(0,'대기 중'),2200);
+    if(!res.ok||data.error){showErr(data.error||`HTTP ${res.status}`);addLog('응답 실패');return;}
+    appendMsg('ai',data.answer||'응답이 없습니다.',
+      Array.isArray(data.suggested_questions)?data.suggested_questions:[],
+      Array.isArray(data.choice_buttons)?data.choice_buttons:[]);
+    addLog('응답 완료'+(data.has_stats?' (스탯 분석)':''));
+  }catch(e){
+    remTyping(tid);setP(0,'오류');
+    showErr(e instanceof SyntaxError?'서버 응답 파싱 실패.':e.message);
+    addLog('오류: '+e.message.slice(0,30));
+  }finally{btn.disabled=false;inp.focus();}
 }
 
-function showErr(msg){
-  const box=document.getElementById('chatBox');
-  const div=document.createElement('div');
-  div.style.cssText='margin:1rem 0;padding:12px 16px;font-family:Share Tech Mono,monospace;font-size:0.7rem;color:#ff4455;letter-spacing:2px;border:1px solid rgba(255,68,85,0.3);border-left:2px solid #ff4455;background:rgba(255,68,85,0.05);text-transform:uppercase';
-  div.textContent='⚠ SYSTEM ERROR: '+msg;
-  box.appendChild(div);box.scrollTop=box.scrollHeight;
+/* ══ 역할 필터 버튼 ══ */
+async function sendWithRoleFilter(roleFilterValue){
+  const btn=document.getElementById('sendBtn');btn.disabled=true;
+  const tid=appendTyping('역할 필터 적용 중...');setP(35,'역할 필터 적용 중...');
+  try{
+    const body={message:'',role_filter:roleFilterValue};
+    const extra={};
+    if(ctxMapName) extra.map_name=ctxMapName;
+    if(ctxSide)    extra.side=ctxSide;
+    if(Object.keys(extra).length) body.extra_context=extra;
+    const res=await fetch('/chat/api/',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':getCsrf()},body:JSON.stringify(body)});
+    const ct=res.headers.get('content-type')||'';
+    if(!ct.includes('application/json'))throw new Error(`서버 오류 (${res.status})`);
+    const data=await res.json();
+    remTyping(tid);setP(100,'완료');setTimeout(()=>setP(0,'대기 중'),2000);
+    if(!res.ok||data.error){showErr(data.error||`HTTP ${res.status}`);return;}
+    appendMsg('ai',data.answer||'응답 없음.',
+      Array.isArray(data.suggested_questions)?data.suggested_questions:[],
+      Array.isArray(data.choice_buttons)?data.choice_buttons:[]);
+    addLog('역할 필터 응답 완료');
+  }catch(e){remTyping(tid);setP(0,'오류');showErr(e.message);}
+  finally{btn.disabled=false;}
 }
 
+/* ══ 대화 초기화 ══ */
+async function resetServerContext(){
+  try{await fetch('/chat/api/',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':getCsrf()},body:JSON.stringify({reset:true})});}
+  catch(e){console.warn('reset failed',e);}
+}
 function clearChat(){
   if(!confirm('대화를 초기화할까요?'))return;
+  resetServerContext();clearContext();
   document.getElementById('chatBox').innerHTML=`
     <div class="welcome" id="welcomeMsg">
-      <div class="welcome-ring"><div class="welcome-icon">🎯</div></div>
-      <div>
-        <div class="welcome-title">MISSION <span>BRIEFING</span></div>
-        <div class="welcome-desc" style="margin-top:.75rem">
-          <b>AGENT</b>: 세션이 초기화되었습니다<br>
-          <b>STATUS</b>: 코치 AI 재배정 완료<br>
-          <b>CLEARANCE</b>: 전 등급 질의 허용
-        </div>
+      <div class="welcome-icon-wrap"><div class="welcome-icon">🎯</div></div>
+      <div><div class="welcome-title">MISSION <em>BRIEFING</em></div></div>
+      <div class="welcome-body">
+        <div class="welcome-row"><b>AGENT</b><span>세션 초기화 완료</span></div>
+        <div class="welcome-row"><b>STATUS</b><span>코치 AI 재배정 완료</span></div>
       </div>
-      <div class="quick-cmds">
-        <button class="qcmd" onclick="fillInput('현재 메타 최강 영웅은?')">META</button>
-        <button class="qcmd" onclick="fillInput('팀 조합 추천해줘')">COMP</button>
-        <button class="qcmd" onclick="fillInput('카운터 픽 알려줘')">COUNTER</button>
-        <button class="qcmd" onclick="fillInput('랭크 올리는 팁 알려줘')">RANKED</button>
+      <div class="welcome-chips">
+        <button class="chip" onclick="fillInput('현재 메타 최강 영웅은?')">META</button>
+        <button class="chip" onclick="fillInput('팀 조합 추천해줘')">COMP</button>
+        <button class="chip" onclick="fillInput('카운터 픽 알려줘')">COUNTER</button>
+        <button class="chip" onclick="fillInput('랭크 올리는 팁은?')">RANKED</button>
       </div>
+      <div class="welcome-hint">맵/모드 설정 시 더 정확한 분석 가능 · 스탯은 텍스트로 자유롭게 입력하세요</div>
     </div>`;
-  qCount=0;document.getElementById('qCount').textContent='0';
-  setProgress(0,'AI 대기 중');
-  addLog('세션 초기화 완료.');
+  qCount=0;document.getElementById('qCount').textContent='0';setP(0,'대기 중');addLog('세션 초기화 완료');
 }
 
-function updateTimer(){
+function updateSessionTime(){
   const s=Math.floor((Date.now()-sesStart)/1000);
-  document.getElementById('sesTime').textContent=
-    String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+  document.getElementById('sesTime').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
 }
+setInterval(updateSessionTime,1000);
+updateSessionTime();
 
-buildIntel('all');
-setInterval(updateTimer,1000);
+buildIntel('all');buildTabs();renderDocs();
 </script>
 </body>
 </html>

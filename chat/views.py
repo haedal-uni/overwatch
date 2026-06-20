@@ -1,26 +1,15 @@
 import json
+import logging
 
-from django.shortcuts import render
+from django.conf import settings
 from django.http import JsonResponse
+from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from rag_class import ChatBot
+from .chatbot_graph import run_chatbot_graph
 
-_rag = None
-_llm = None
-_retriever = None
-
-def get_rag_components():
-    global _rag, _llm, _retriever
-
-    if _rag is None:
-        _rag = ChatBot()
-        _llm = _rag.get_llm()
-        _retriever = _rag.build_rag_components()
-
-    return _rag, _llm, _retriever
-
+logger = logging.getLogger(__name__)
 
 def index(request):
     return render(request, "chat.html")
@@ -30,44 +19,58 @@ def index(request):
 @require_http_methods(["POST"])
 def chat_api(request):
     try:
-        data = json.loads(request.body)
-        message = data.get("message", "").strip()
+        data = json.loads(request.body or b"{}")
 
-        if not message:
-            return JsonResponse(
-                {"error": "질문을 입력해주세요."},
-                status=400,
-            )
-        rag, llm, retriever = get_rag_components()
+        message = str(data.get("message", "")).strip()
+        role_filter = data.get("role_filter") or None
+        reset = bool(data.get("reset", False))
+        extra_context = data.get("extra_context") or {}
 
-        result = rag.answer(
-            retriever=retriever,
-            llm=llm,
+        # 대화 초기화
+        if reset:
+            request.session.pop("coach_context", None)
+            request.session.modified = True
+            return JsonResponse({"ok": True})
+
+        if not message and not role_filter:
+            return JsonResponse({"error": "질문을 입력해주세요."}, status=400)
+
+        # 세션 컨텍스트 + extra_context 병합
+        conversation_context = {
+            **(request.session.get("coach_context", {}) or {}),
+            **extra_context,
+        }
+
+        # LangGraph 실행
+        graph_result = run_chatbot_graph(
             message=message,
+            conversation_context=conversation_context,
+            role_filter=role_filter,
         )
+
+        if "error" in graph_result:
+            return JsonResponse(graph_result, status=500)
+
+        result = dict(graph_result)
+        context_patch = result.pop("context_patch", {}) or {}
+
+        base_context = request.session.get("coach_context", {}) or {}
+        updated_context = {**base_context, **context_patch}
+
+        if not result.get("choice_buttons"):
+            updated_context.pop("pending_question", None)
+            updated_context.pop("pending_intent", None)
+
+        request.session["coach_context"] = updated_context
+        request.session.modified = True
 
         return JsonResponse(result)
 
-    except FileNotFoundError as e:
-        return JsonResponse(
-            {
-                "error": (
-                    "VectorDB가 없습니다. "
-                    "create_vectorstore()를 먼저 실행하세요.\n"
-                    f"{str(e)}"
-                )
-            },
-            status=500,
-        )
-
     except json.JSONDecodeError:
-        return JsonResponse(
-            {"error": "요청 body가 올바른 JSON 형식이 아닙니다."},
-            status=400,
-        )
-
-    except Exception as e:
-        return JsonResponse(
-            {"error": str(e)},
-            status=500,
-        )
+        return JsonResponse({"error": "요청 body가 올바른 JSON 형식이 아닙니다."}, status=400)
+    except Exception as exc:
+        logger.exception("chat_api 오류: %s", exc)
+        payload = {"error": "서버 내부 오류 발생"}
+        if settings.DEBUG:
+            payload["detail"] = str(exc)
+        return JsonResponse(payload, status=500)

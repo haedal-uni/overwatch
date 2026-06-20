@@ -12,6 +12,7 @@ dependencies = [
     "langchain-google-genai>=4.2.4",
     "langchain-huggingface>=1.2.2",
     "langchain-text-splitters>=1.1.2",
+    "langgraph>=1.2.4",
     "python-dotenv>=1.2.2",
     "sentence-transformers>=5.5.1",
 ]
