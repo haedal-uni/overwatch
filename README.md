@@ -9,6 +9,8 @@
 
 <img src="https://github.com/user-attachments/assets/e3e2bfe1-c0e7-441c-8060-3772d8f1ab5d" width="40%" />
 
+<br><br> 
+
 <img src="https://github.com/user-attachments/assets/76d20276-4ca0-437e-b11a-09fe1cc62d50" />
 
 공수 구분이 있을 경우 선택 버튼 
@@ -52,7 +54,8 @@
 
 <br>
 
-<img src="https://github.com/user-attachments/assets/8426af95-fe6e-4c81-994d-7b85d5ff359b" width="70%"/>         
+<img src="https://github.com/user-attachments/assets/5368c7d4-0f2c-40c6-9fd7-3c8f57dc64eb" width="60%"/>
+
 
 <br><br>
 
