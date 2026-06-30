@@ -186,6 +186,7 @@ class ChatBot:
                 model=self.llm_model,
                 google_api_key=api_key,
                 temperature=self.temperature,
+                max_output_tokens=512, ###
             )
 
         return self._llm
