@@ -1,828 +1,1498 @@
 <!DOCTYPE html>
 <html lang="ko" data-theme="light">
+
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>오버워치 코치 AI</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet">
-<style>
-:root{
-  --bg:#eef5ff;
-  --bg2:#f8fbff;
-  --card:rgba(255,255,255,.86);
-  --card-solid:#ffffff;
-  --line:#dbe7fb;
-  --line-strong:#bcd1f5;
-  --text:#132033;
-  --muted:#6b7a92;
-  --soft:#f3f7ff;
-  --primary:#2563eb;
-  --primary2:#4f8cff;
-  --primary-soft:#eaf1ff;
-  --accent:#ff9f1c;
-  --danger:#ef4444;
-  --success:#16a34a;
-  --shadow:0 22px 60px rgba(33,74,132,.14);
-  --radius:28px;
-}
-html[data-theme="dark"]{
-  --bg:#081120;
-  --bg2:#0e1a2f;
-  --card:rgba(15,28,49,.84);
-  --card-solid:#101d33;
-  --line:#203756;
-  --line-strong:#315783;
-  --text:#eef6ff;
-  --muted:#a9b8cc;
-  --soft:#13233a;
-  --primary:#5aa2ff;
-  --primary2:#79b7ff;
-  --primary-soft:#102a4f;
-  --accent:#ffb84d;
-  --danger:#ff6b6b;
-  --success:#5ee087;
-  --shadow:0 22px 60px rgba(0,0,0,.35);
-}
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%}
-body{
-  min-height:100vh;
-  font-family:'Noto Sans KR',system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
-  color:var(--text);
-  background:
-    radial-gradient(circle at 16% 8%, rgba(37,99,235,.16), transparent 32%),
-    radial-gradient(circle at 84% 12%, rgba(255,159,28,.15), transparent 34%),
-    linear-gradient(135deg,var(--bg),var(--bg2));
-  overflow:hidden;
-}
-button,input,textarea{font:inherit}
-button{cursor:pointer}
-.app{
-  height:100vh;
-  padding:22px;
-  display:grid;
-  grid-template-columns:290px minmax(0,1fr);
-  gap:18px;
-}
-.panel,.chat-shell{
-  background:var(--card);
-  backdrop-filter:blur(18px);
-  border:1px solid var(--line);
-  box-shadow:var(--shadow);
-}
-.panel{
-  border-radius:var(--radius);
-  padding:18px;
-  display:flex;
-  flex-direction:column;
-  min-height:0;
-  overflow:hidden;
-}
-.brand{
-  display:flex;
-  align-items:center;
-  gap:12px;
-  padding:6px 4px 18px;
-  border-bottom:1px solid var(--line);
-}
-.logo{
-  width:46px;height:46px;border-radius:16px;
-  display:grid;place-items:center;
-  background:linear-gradient(135deg,var(--primary),var(--primary2));
-  color:white;font-size:23px;
-  box-shadow:0 12px 26px rgba(37,99,235,.25);
-}
-.brand-title{font-size:18px;font-weight:800;letter-spacing:-.03em}
-.brand-sub{font-size:12px;color:var(--muted);margin-top:2px}
-.side-section{padding:18px 0;border-bottom:1px solid var(--line)}
-.side-section:last-child{border-bottom:0}
-.section-title{font-size:12px;font-weight:800;color:var(--muted);letter-spacing:.08em;margin-bottom:10px}
-.role-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.role-btn{
-  border:1px solid var(--line);
-  background:var(--soft);
-  color:var(--text);
-  border-radius:14px;
-  padding:10px 8px;
-  font-size:13px;
-  font-weight:700;
-  transition:.16s;
-}
-.role-btn:hover,.role-btn.active{border-color:var(--primary);background:var(--primary-soft);color:var(--primary)}
-.quick-list{display:flex;flex-direction:column;gap:8px;overflow:auto;min-height:0;max-height:260px;padding-right:3px}
-.quick-btn{
-  text-align:left;
-  border:1px solid var(--line);
-  background:var(--card-solid);
-  color:var(--text);
-  border-radius:16px;
-  padding:11px 12px;
-  line-height:1.45;
-  font-size:13px;
-  transition:.16s;
-}
-.quick-btn:hover{transform:translateY(-1px);border-color:var(--primary);box-shadow:0 8px 22px rgba(37,99,235,.12)}
-.quick-tag{display:block;color:var(--primary);font-size:11px;font-weight:800;margin-bottom:4px}
-.status-card{
-  margin-top:auto;
-  border-radius:20px;
-  padding:14px;
-  background:linear-gradient(135deg,var(--primary-soft),transparent);
-  border:1px solid var(--line);
-}
-.status-row{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted);margin-top:8px}
-.status-row:first-child{margin-top:0}
-.status-value{font-weight:800;color:var(--text)}
-.chat-shell{
-  border-radius:var(--radius);
-  display:grid;
-  grid-template-rows:auto auto minmax(0,1fr) auto;
-  min-width:0;
-  overflow:hidden;
-}
-.topbar{
-  min-height:76px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-  padding:18px 22px;
-  border-bottom:1px solid var(--line);
-  background:linear-gradient(180deg,rgba(255,255,255,.3),transparent);
-}
-html[data-theme="dark"] .topbar{background:linear-gradient(180deg,rgba(255,255,255,.03),transparent)}
-.title-wrap h1{font-size:22px;font-weight:800;letter-spacing:-.04em}
-.title-wrap p{font-size:13px;color:var(--muted);margin-top:3px}
-.actions{display:flex;gap:8px;align-items:center}
-.icon-btn,.plain-btn{
-  border:1px solid var(--line);
-  background:var(--card-solid);
-  color:var(--text);
-  height:42px;
-  border-radius:14px;
-  padding:0 14px;
-  font-weight:800;
-  transition:.16s;
-}
-.icon-btn{width:42px;padding:0;display:grid;place-items:center;font-size:18px}
-.icon-btn:hover,.plain-btn:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-soft)}
-.context-wrap{
-  padding:14px 22px;
-  border-bottom:1px solid var(--line);
-  display:grid;
-  grid-template-columns:minmax(240px,1fr) auto auto;
-  gap:10px;
-  align-items:center;
-  background:rgba(255,255,255,.22);
-}
-html[data-theme="dark"] .context-wrap{background:rgba(255,255,255,.02)}
-.custom-select{position:relative;min-width:0}
-.select-trigger{
-  width:100%;
-  min-height:48px;
-  border:1.5px solid var(--line-strong);
-  background:var(--card-solid);
-  color:var(--text);
-  border-radius:18px;
-  padding:0 48px 0 16px;
-  display:flex;
-  align-items:center;
-  text-align:left;
-  font-weight:700;
-  transition:.16s;
-  position:relative;
-}
-.select-trigger::after{
-  content:'⌄';
-  position:absolute;
-  right:16px;
-  top:50%;
-  transform:translateY(-54%);
-  color:var(--primary);
-  font-size:22px;
-}
-.select-trigger:hover,.custom-select.open .select-trigger{border-color:var(--primary);box-shadow:0 0 0 4px rgba(37,99,235,.10)}
-.select-menu{
-  position:absolute;
-  left:0;right:0;top:calc(100% + 8px);
-  z-index:50;
-  background:var(--card-solid);
-  border:1px solid var(--line-strong);
-  border-radius:20px;
-  box-shadow:0 24px 56px rgba(24,54,97,.22);
-  overflow:hidden;
-  display:none;
-}
-.custom-select.open .select-menu{display:block;animation:pop .14s ease-out}
-@keyframes pop{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:translateY(0)}}
-.select-search{padding:10px;border-bottom:1px solid var(--line);background:var(--soft)}
-.select-search input{
-  width:100%;height:38px;border:1px solid var(--line);border-radius:13px;background:var(--card-solid);color:var(--text);padding:0 12px;outline:none;
-}
-.select-list{
-  max-height:260px;
-  overflow:auto;
-  padding:10px;
-  scrollbar-width:thin;
-}
-.select-group{
-  margin:10px 4px 6px;
-  padding:8px 12px;
-  font-size:15px;
-  font-weight:900;
-  color:var(--primary);
-  letter-spacing:-.02em;
-  background:var(--primary-soft);
-  border:1px solid rgba(37,99,235,.18);
-  border-radius:12px;
-}
-.select-option{
-  width:100%;
-  border:0;
-  background:transparent;
-  color:var(--text);
-  text-align:left;
-  border-radius:12px;
-  padding:12px 14px;
-  font-size:17px;
-  font-weight:800;
-  line-height:1.35;
-  transition:.12s;
-}
-.select-option:hover,.select-option.active{background:var(--primary-soft);color:var(--primary)}
-.select-empty{padding:20px;text-align:center;color:var(--muted);font-size:15px}
-.side-toggle{display:none;gap:6px;align-items:center;white-space:nowrap}
-.side-toggle.show{display:flex}
-.side-btn{
-  height:44px;
-  border:1px solid var(--line);
-  background:var(--card-solid);
-  color:var(--muted);
-  border-radius:15px;
-  padding:0 15px;
-  font-weight:900;
-}
-.side-btn.active{border-color:var(--primary);background:var(--primary-soft);color:var(--primary)}
-.context-pill{
-  min-height:42px;
-  display:none;
-  align-items:center;
-  gap:8px;
-  border:1px solid var(--line);
-  background:var(--soft);
-  color:var(--primary);
-  border-radius:999px;
-  padding:0 12px;
-  font-size:13px;
-  font-weight:800;
-  white-space:nowrap;
-}
-.context-pill.show{display:flex}
-.context-pill button{border:0;background:transparent;color:var(--muted);font-weight:900;font-size:16px}
-.messages{
-  overflow:auto;
-  padding:24px;
-  display:flex;
-  flex-direction:column;
-  gap:16px;
-}
-.welcome{
-  margin:auto;
-  max-width:680px;
-  text-align:center;
-  padding:34px 24px;
-}
-.hero-mark{
-  width:86px;height:86px;border-radius:30px;
-  display:grid;place-items:center;
-  margin:0 auto 18px;
-  font-size:40px;
-  background:linear-gradient(135deg,var(--primary),var(--primary2));
-  color:#fff;
-  box-shadow:0 18px 38px rgba(37,99,235,.25);
-}
-.welcome h2{font-size:30px;letter-spacing:-.06em;margin-bottom:10px}
-.welcome p{
-  max-width:760px;
-  margin:0 auto;
-  color:var(--muted);
-  font-size:15px;
-  line-height:1.8;
-}
-.sample-chips{display:flex;flex-wrap:wrap;gap:9px;justify-content:center;margin-top:22px}
-.chip{
-  border:1px solid var(--line-strong);
-  background:var(--card-solid);
-  color:var(--text);
-  border-radius:999px;
-  padding:10px 14px;
-  font-weight:800;
-  font-size:13px;
-}
-.chip:hover{background:var(--primary);border-color:var(--primary);color:white}
-.msg{display:flex;gap:10px;align-items:flex-start;animation:fade .18s ease-out}
-@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-.msg.user{justify-content:flex-end}
-.avatar{width:38px;height:38px;border-radius:15px;display:grid;place-items:center;background:var(--soft);border:1px solid var(--line);flex:0 0 auto}
-.msg.user .avatar{order:2;background:var(--primary);color:white;border-color:var(--primary)}
-.bubble-wrap{max-width:min(780px,78%)}
-.msg.user .bubble-wrap{display:flex;flex-direction:column;align-items:flex-end}
-.meta{font-size:12px;color:var(--muted);margin:0 0 5px 2px}
-.msg.user .meta{margin-right:2px}
-.bubble{
-  border:1px solid var(--line);
-  background:var(--card-solid);
-  border-radius:20px;
-  padding:10px 13px;
-  line-height:1.58;
-  font-size:14.5px;
-  white-space:normal;
-}
-.msg.user .bubble{background:linear-gradient(135deg,var(--primary),var(--primary2));border-color:transparent;color:white;border-bottom-right-radius:7px}
-.msg.ai .bubble{border-bottom-left-radius:7px}
-.bubble h1,.bubble h2,.bubble h3{font-size:17px;margin:12px 0 6px;color:var(--primary)}
-.bubble p{margin:2px 0}.bubble ul,.bubble ol{padding-left:18px;margin:6px 0}.bubble strong{color:var(--primary)}
-.msg.user .bubble strong{color:white}
-.badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.badge{border:1px solid rgba(255,255,255,.42);background:rgba(255,255,255,.16);border-radius:999px;padding:4px 9px;font-size:12px;font-weight:800}
-.suggestions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
-.suggest-btn{border:1px solid var(--line-strong);background:var(--primary-soft);color:var(--primary);border-radius:999px;padding:8px 12px;font-size:13px;font-weight:800}
-.suggest-btn:hover{background:var(--primary);color:white;border-color:var(--primary)}
-.typing{display:flex;gap:6px;align-items:center;color:var(--muted)}
-.dot{width:7px;height:7px;border-radius:50%;background:var(--primary);animation:bounce 1.1s infinite ease-in-out}.dot:nth-child(2){animation-delay:.15s}.dot:nth-child(3){animation-delay:.3s}@keyframes bounce{0%,80%,100%{opacity:.3;transform:scale(.6)}40%{opacity:1;transform:scale(1)}}
-.composer{
-  padding:16px 22px 20px;
-  border-top:1px solid var(--line);
-  background:rgba(255,255,255,.25);
-}
-html[data-theme="dark"] .composer{background:rgba(255,255,255,.02)}
-.input-box{
-  display:flex;
-  gap:10px;
-  align-items:flex-end;
-  border:1.5px solid var(--line-strong);
-  background:var(--card-solid);
-  border-radius:22px;
-  padding:10px;
-}
-.input-box:focus-within{border-color:var(--primary);box-shadow:0 0 0 4px rgba(37,99,235,.10)}
-textarea{
-  flex:1;
-  min-height:42px;
-  max-height:130px;
-  resize:none;
-  border:0;
-  outline:none;
-  background:transparent;
-  color:var(--text);
-  padding:9px 6px;
-  line-height:1.55;
-}
-.send-btn{
-  height:42px;
-  border:0;
-  border-radius:15px;
-  background:linear-gradient(135deg,var(--primary),var(--primary2));
-  color:white;
-  padding:0 18px;
-  font-weight:900;
-  box-shadow:0 12px 26px rgba(37,99,235,.22);
-}
-.send-btn:disabled{opacity:.55;cursor:not-allowed}
-.composer-hint{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:12px;margin-top:8px;padding:0 4px}
-.error{border:1px solid rgba(239,68,68,.35);background:rgba(239,68,68,.08);color:var(--danger);border-radius:16px;padding:12px 14px;font-weight:700}
-.mobile-quick{display:none;padding:0 22px 12px;border-bottom:1px solid var(--line);gap:8px;overflow:auto}
-.mobile-quick button{white-space:nowrap}
-@media(max-width:1050px){
-  .app{grid-template-columns:1fr}
-  .panel{display:none}
-  .mobile-quick{display:flex}
-  .context-wrap{grid-template-columns:1fr auto}
-  .context-pill{grid-column:1/-1;justify-self:start}
-  .side-toggle{justify-self:end}
-}
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>오버워치 코치 AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #eef5ff;
+      --bg2: #f8fbff;
+      --card: rgba(255, 255, 255, .86);
+      --card-solid: #ffffff;
+      --line: #dbe7fb;
+      --line-strong: #bcd1f5;
+      --text: #132033;
+      --muted: #6b7a92;
+      --soft: #f3f7ff;
+      --primary: #2563eb;
+      --primary2: #4f8cff;
+      --primary-soft: #eaf1ff;
+      --accent: #ff9f1c;
+      --danger: #ef4444;
+      --success: #16a34a;
+      --shadow: 0 22px 60px rgba(33, 74, 132, .14);
+      --radius: 28px;
+    }
 
-@media(max-width:720px){
-  html{font-size:90%}
-  body{overflow:auto;font-size:90%}
-  .app{height:100dvh;padding:0;gap:0}
-  .chat-shell{border-radius:0;border:0;box-shadow:none}
-  .topbar{min-height:62px;padding:12px 14px}
-  .title-wrap h1{font-size:17px}
-  .title-wrap p{display:none}
-  .plain-btn{display:inline-flex;align-items:center;justify-content:center;height:38px;padding:0 11px;border-radius:13px;font-size:12px}
-  .actions{gap:6px}
-  .icon-btn{height:38px;width:38px;border-radius:13px}
+    html[data-theme="dark"] {
+      --bg: #081120;
+      --bg2: #0e1a2f;
+      --card: rgba(15, 28, 49, .84);
+      --card-solid: #101d33;
+      --line: #203756;
+      --line-strong: #315783;
+      --text: #eef6ff;
+      --muted: #a9b8cc;
+      --soft: #13233a;
+      --primary: #5aa2ff;
+      --primary2: #79b7ff;
+      --primary-soft: #102a4f;
+      --accent: #ffb84d;
+      --danger: #ff6b6b;
+      --success: #5ee087;
+      --shadow: 0 22px 60px rgba(0, 0, 0, .35);
+    }
 
-  /* 모바일에서는 역할 선택 / 추천 질문 영역을 숨김 */
-  .mobile-quick{display:none !important}
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0
+    }
 
-  .context-wrap{padding:10px 14px;grid-template-columns:1fr}
-  .custom-select{width:100%}
-  .select-trigger{min-height:42px;border-radius:16px;padding-left:14px;font-size:13px}
-  .select-menu{border-radius:18px}
-  .select-list{max-height:220px;padding:8px}
-  .select-group{font-size:14px;padding:7px 10px;margin:8px 3px 5px}
-  .select-option{font-size:15px;padding:10px 12px}
-  .side-toggle{justify-self:start}
-  .side-btn{height:39px;border-radius:13px;padding:0 13px;font-size:13px}
-  .context-pill{min-height:36px;font-size:12px}
+    html,
+    body {
+      height: 100%
+    }
 
-  .messages{padding:16px 14px}
-  .bubble-wrap{max-width:88%}
-  .bubble{font-size:13px;padding:8px 10px;line-height:1.55}
-  .avatar{width:34px;height:34px;border-radius:13px}
+    body {
+      min-height: 100vh;
+      font-family: 'Noto Sans KR', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 16% 8%, rgba(37, 99, 235, .16), transparent 32%),
+        radial-gradient(circle at 84% 12%, rgba(255, 159, 28, .15), transparent 34%),
+        linear-gradient(135deg, var(--bg), var(--bg2));
+      overflow: hidden;
+    }
 
-  .welcome{max-width:100%;padding:24px 10px;text-align:center}
-  .hero-mark{width:76px;height:76px;border-radius:27px;font-size:34px;margin-bottom:16px}
-  .welcome h2{font-size:22px;line-height:1.32;margin-bottom:9px}
-  .welcome p{font-size:12.5px;line-height:1.7;max-width:100%}
+    button,
+    input,
+    textarea {
+      font: inherit
+    }
 
-  /* 빠른 버튼은 줄바꿈하지 않고 한 줄로 유지 */
-  .sample-chips{
-    flex-wrap:nowrap;
-    justify-content:flex-start;
-    gap:7px;
-    margin-top:17px;
-    overflow-x:auto;
-    padding-bottom:4px;
-    -webkit-overflow-scrolling:touch;
-    scrollbar-width:none;
-  }
-  .sample-chips::-webkit-scrollbar{display:none}
-  .chip{flex:0 0 auto;padding:8px 12px;font-size:11.5px}
+    button {
+      cursor: pointer
+    }
 
-  .composer{padding:11px 12px 12px}
-  .composer-hint{display:none}
-  .input-box{border-radius:20px;padding:8px;gap:8px}
-  textarea{min-height:38px;font-size:13px;padding:8px 5px}
-  .send-btn{height:38px;border-radius:14px;padding:0 13px;font-size:13px}
-}
+    .app {
+      height: 100vh;
+      padding: 22px;
+      display: grid;
+      grid-template-columns: 290px minmax(0, 1fr);
+      gap: 18px;
+    }
 
-@media(max-width:420px){
-  .bubble-wrap{max-width:92%}
-  .bubble{padding:7px 10px;font-size:12.8px}
-  .select-list{max-height:210px}
-}
-</style>
+    .panel,
+    .chat-shell {
+      background: var(--card);
+      backdrop-filter: blur(18px);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+
+    .panel {
+      border-radius: var(--radius);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 4px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .logo {
+      width: 46px;
+      height: 46px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, var(--primary), var(--primary2));
+      color: white;
+      font-size: 23px;
+      box-shadow: 0 12px 26px rgba(37, 99, 235, .25);
+    }
+
+    .brand-title {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -.03em
+    }
+
+    .brand-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px
+    }
+
+    .side-section {
+      padding: 18px 0;
+      border-bottom: 1px solid var(--line)
+    }
+
+    .side-section:last-child {
+      border-bottom: 0
+    }
+
+    .section-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--muted);
+      letter-spacing: .08em;
+      margin-bottom: 10px
+    }
+
+    .role-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px
+    }
+
+    .role-btn {
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: var(--text);
+      border-radius: 14px;
+      padding: 10px 8px;
+      font-size: 13px;
+      font-weight: 700;
+      transition: .16s;
+    }
+
+    .role-btn:hover,
+    .role-btn.active {
+      border-color: var(--primary);
+      background: var(--primary-soft);
+      color: var(--primary)
+    }
+
+    .quick-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow: auto;
+      min-height: 0;
+      max-height: 260px;
+      padding-right: 3px
+    }
+
+    .quick-btn {
+      text-align: left;
+      border: 1px solid var(--line);
+      background: var(--card-solid);
+      color: var(--text);
+      border-radius: 16px;
+      padding: 11px 12px;
+      line-height: 1.45;
+      font-size: 13px;
+      transition: .16s;
+    }
+
+    .quick-btn:hover {
+      transform: translateY(-1px);
+      border-color: var(--primary);
+      box-shadow: 0 8px 22px rgba(37, 99, 235, .12)
+    }
+
+    .quick-tag {
+      display: block;
+      color: var(--primary);
+      font-size: 11px;
+      font-weight: 800;
+      margin-bottom: 4px
+    }
+
+    .status-card {
+      margin-top: auto;
+      border-radius: 20px;
+      padding: 14px;
+      background: linear-gradient(135deg, var(--primary-soft), transparent);
+      border: 1px solid var(--line);
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 8px
+    }
+
+    .status-row:first-child {
+      margin-top: 0
+    }
+
+    .status-value {
+      font-weight: 800;
+      color: var(--text)
+    }
+
+    .chat-shell {
+      border-radius: var(--radius);
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .topbar {
+      min-height: 76px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255, 255, 255, .3), transparent);
+    }
+
+    html[data-theme="dark"] .topbar {
+      background: linear-gradient(180deg, rgba(255, 255, 255, .03), transparent)
+    }
+
+    .title-wrap h1 {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -.04em
+    }
+
+    .title-wrap p {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 3px
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      align-items: center
+    }
+
+    .icon-btn,
+    .plain-btn {
+      border: 1px solid var(--line);
+      background: var(--card-solid);
+      color: var(--text);
+      height: 42px;
+      border-radius: 14px;
+      padding: 0 14px;
+      font-weight: 800;
+      transition: .16s;
+    }
+
+    .icon-btn {
+      width: 42px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      font-size: 18px
+    }
+
+    .icon-btn:hover,
+    .plain-btn:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+      background: var(--primary-soft)
+    }
+
+    .context-wrap {
+      padding: 14px 22px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) auto auto;
+      gap: 10px;
+      align-items: center;
+      background: rgba(255, 255, 255, .22);
+    }
+
+    html[data-theme="dark"] .context-wrap {
+      background: rgba(255, 255, 255, .02)
+    }
+
+    .custom-select {
+      position: relative;
+      min-width: 0
+    }
+
+    .select-trigger {
+      width: 100%;
+      min-height: 48px;
+      border: 1.5px solid var(--line-strong);
+      background: var(--card-solid);
+      color: var(--text);
+      border-radius: 18px;
+      padding: 0 48px 0 16px;
+      display: flex;
+      align-items: center;
+      text-align: left;
+      font-weight: 700;
+      transition: .16s;
+      position: relative;
+    }
+
+    .select-trigger::after {
+      content: '⌄';
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      transform: translateY(-54%);
+      color: var(--primary);
+      font-size: 22px;
+    }
+
+    .select-trigger:hover,
+    .custom-select.open .select-trigger {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, .10)
+    }
+
+    .select-menu {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 8px);
+      z-index: 50;
+      background: var(--card-solid);
+      border: 1px solid var(--line-strong);
+      border-radius: 20px;
+      box-shadow: 0 24px 56px rgba(24, 54, 97, .22);
+      overflow: hidden;
+      display: none;
+    }
+
+    .custom-select.open .select-menu {
+      display: block;
+      animation: pop .14s ease-out
+    }
+
+    @keyframes pop {
+      from {
+        opacity: 0;
+        transform: translateY(-5px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0)
+      }
+    }
+
+    .select-search {
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      background: var(--soft)
+    }
+
+    .select-search input {
+      width: 100%;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: var(--card-solid);
+      color: var(--text);
+      padding: 0 12px;
+      outline: none;
+    }
+
+    .select-list {
+      max-height: 260px;
+      overflow: auto;
+      padding: 10px;
+      scrollbar-width: thin;
+    }
+
+    .select-group {
+      margin: 10px 4px 6px;
+      padding: 8px 12px;
+      font-size: 15px;
+      font-weight: 900;
+      color: var(--primary);
+      letter-spacing: -.02em;
+      background: var(--primary-soft);
+      border: 1px solid rgba(37, 99, 235, .18);
+      border-radius: 12px;
+    }
+
+    .select-option {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 17px;
+      font-weight: 800;
+      line-height: 1.35;
+      transition: .12s;
+    }
+
+    .select-option:hover,
+    .select-option.active {
+      background: var(--primary-soft);
+      color: var(--primary)
+    }
+
+    .select-empty {
+      padding: 20px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 15px
+    }
+
+    .side-toggle {
+      display: none;
+      gap: 6px;
+      align-items: center;
+      white-space: nowrap
+    }
+
+    .side-toggle.show {
+      display: flex
+    }
+
+    .side-btn {
+      height: 44px;
+      border: 1px solid var(--line);
+      background: var(--card-solid);
+      color: var(--muted);
+      border-radius: 15px;
+      padding: 0 15px;
+      font-weight: 900;
+    }
+
+    .side-btn.active {
+      border-color: var(--primary);
+      background: var(--primary-soft);
+      color: var(--primary)
+    }
+
+    .context-pill {
+      min-height: 42px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: var(--primary);
+      border-radius: 999px;
+      padding: 0 12px;
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .context-pill.show {
+      display: flex
+    }
+
+    .context-pill button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 900;
+      font-size: 16px
+    }
+
+    .messages {
+      overflow: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .welcome {
+      margin: auto;
+      max-width: 680px;
+      text-align: center;
+      padding: 34px 24px;
+    }
+
+    .hero-mark {
+      width: 86px;
+      height: 86px;
+      border-radius: 30px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 18px;
+      font-size: 40px;
+      background: linear-gradient(135deg, var(--primary), var(--primary2));
+      color: #fff;
+      box-shadow: 0 18px 38px rgba(37, 99, 235, .25);
+    }
+
+    .welcome h2 {
+      font-size: 30px;
+      letter-spacing: -.06em;
+      margin-bottom: 10px
+    }
+
+    .welcome p {
+      max-width: 760px;
+      margin: 0 auto;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.8;
+    }
+
+    .sample-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      justify-content: center;
+      margin-top: 22px
+    }
+
+    .chip {
+      border: 1px solid var(--line-strong);
+      background: var(--card-solid);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 10px 14px;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .chip:hover {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: white
+    }
+
+    .msg {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      animation: fade .18s ease-out
+    }
+
+    @keyframes fade {
+      from {
+        opacity: 0;
+        transform: translateY(6px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0)
+      }
+    }
+
+    .msg.user {
+      justify-content: flex-end
+    }
+
+    .avatar {
+      width: 38px;
+      height: 38px;
+      border-radius: 15px;
+      display: grid;
+      place-items: center;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      flex: 0 0 auto
+    }
+
+    .msg.user .avatar {
+      order: 2;
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary)
+    }
+
+    .bubble-wrap {
+      max-width: min(780px, 78%)
+    }
+
+    .msg.user .bubble-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end
+    }
+
+    .meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin: 0 0 5px 2px
+    }
+
+    .msg.user .meta {
+      margin-right: 2px
+    }
+
+    .bubble {
+      border: 1px solid var(--line);
+      background: var(--card-solid);
+      border-radius: 20px;
+      padding: 10px 13px;
+      line-height: 1.58;
+      font-size: 14.5px;
+      white-space: normal;
+    }
+
+    .msg.user .bubble {
+      background: linear-gradient(135deg, var(--primary), var(--primary2));
+      border-color: transparent;
+      color: white;
+      border-bottom-right-radius: 7px
+    }
+
+    .msg.ai .bubble {
+      border-bottom-left-radius: 7px
+    }
+
+    .bubble h1,
+    .bubble h2,
+    .bubble h3 {
+      font-size: 17px;
+      margin: 12px 0 6px;
+      color: var(--primary)
+    }
+
+    .bubble p {
+      margin: 2px 0
+    }
+
+    .bubble ul,
+    .bubble ol {
+      padding-left: 18px;
+      margin: 6px 0
+    }
+
+    .bubble strong {
+      color: var(--primary)
+    }
+
+    .msg.user .bubble strong {
+      color: white
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px
+    }
+
+    .badge {
+      border: 1px solid rgba(255, 255, 255, .42);
+      background: rgba(255, 255, 255, .16);
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 12px;
+      font-weight: 800
+    }
+
+    .suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line)
+    }
+
+    .suggest-btn {
+      border: 1px solid var(--line-strong);
+      background: var(--primary-soft);
+      color: var(--primary);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 800
+    }
+
+    .suggest-btn:hover {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary)
+    }
+
+    .typing {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      color: var(--muted)
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--primary);
+      animation: bounce 1.1s infinite ease-in-out
+    }
+
+    .dot:nth-child(2) {
+      animation-delay: .15s
+    }
+
+    .dot:nth-child(3) {
+      animation-delay: .3s
+    }
+
+    @keyframes bounce {
+
+      0%,
+      80%,
+      100% {
+        opacity: .3;
+        transform: scale(.6)
+      }
+
+      40% {
+        opacity: 1;
+        transform: scale(1)
+      }
+    }
+
+    .composer {
+      padding: 16px 22px 20px;
+      border-top: 1px solid var(--line);
+      background: rgba(255, 255, 255, .25);
+    }
+
+    html[data-theme="dark"] .composer {
+      background: rgba(255, 255, 255, .02)
+    }
+
+    .input-box {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      border: 1.5px solid var(--line-strong);
+      background: var(--card-solid);
+      border-radius: 22px;
+      padding: 10px;
+    }
+
+    .input-box:focus-within {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, .10)
+    }
+
+    textarea {
+      flex: 1;
+      min-height: 42px;
+      max-height: 130px;
+      resize: none;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--text);
+      padding: 9px 6px;
+      line-height: 1.55;
+    }
+
+    .send-btn {
+      height: 42px;
+      border: 0;
+      border-radius: 15px;
+      background: linear-gradient(135deg, var(--primary), var(--primary2));
+      color: white;
+      padding: 0 18px;
+      font-weight: 900;
+      box-shadow: 0 12px 26px rgba(37, 99, 235, .22);
+    }
+
+    .send-btn:disabled {
+      opacity: .55;
+      cursor: not-allowed
+    }
+
+    .composer-hint {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 8px;
+      padding: 0 4px
+    }
+
+    .error {
+      border: 1px solid rgba(239, 68, 68, .35);
+      background: rgba(239, 68, 68, .08);
+      color: var(--danger);
+      border-radius: 16px;
+      padding: 12px 14px;
+      font-weight: 700
+    }
+
+    .mobile-quick {
+      display: none;
+      padding: 0 22px 12px;
+      border-bottom: 1px solid var(--line);
+      gap: 8px;
+      overflow: auto
+    }
+
+    .mobile-quick button {
+      white-space: nowrap
+    }
+
+    @media(max-width:1050px) {
+      .app {
+        grid-template-columns: 1fr
+      }
+
+      .panel {
+        display: none
+      }
+
+      .mobile-quick {
+        display: flex
+      }
+
+      .context-wrap {
+        grid-template-columns: 1fr auto
+      }
+
+      .context-pill {
+        grid-column: 1/-1;
+        justify-self: start
+      }
+
+      .side-toggle {
+        justify-self: end
+      }
+    }
+
+    @media(max-width:720px) {
+      html {
+        font-size: 90%
+      }
+
+      body {
+        overflow: auto;
+        font-size: 90%
+      }
+
+      .app {
+        height: 100dvh;
+        padding: 0;
+        gap: 0
+      }
+
+      .chat-shell {
+        border-radius: 0;
+        border: 0;
+        box-shadow: none
+      }
+
+      .topbar {
+        min-height: 62px;
+        padding: 12px 14px
+      }
+
+      .title-wrap h1 {
+        font-size: 17px
+      }
+
+      .title-wrap p {
+        display: none
+      }
+
+      .plain-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 38px;
+        padding: 0 11px;
+        border-radius: 13px;
+        font-size: 12px
+      }
+
+      .actions {
+        gap: 6px
+      }
+
+      .icon-btn {
+        height: 38px;
+        width: 38px;
+        border-radius: 13px
+      }
+
+      /* 모바일에서는 역할 선택 / 추천 질문 영역을 숨김 */
+      .mobile-quick {
+        display: none !important
+      }
+
+      .context-wrap {
+        padding: 10px 14px;
+        grid-template-columns: 1fr
+      }
+
+      .custom-select {
+        width: 100%
+      }
+
+      .select-trigger {
+        min-height: 42px;
+        border-radius: 16px;
+        padding-left: 14px;
+        font-size: 13px
+      }
+
+      .select-menu {
+        border-radius: 18px
+      }
+
+      .select-list {
+        max-height: 220px;
+        padding: 8px
+      }
+
+      .select-group {
+        font-size: 14px;
+        padding: 7px 10px;
+        margin: 8px 3px 5px
+      }
+
+      .select-option {
+        font-size: 15px;
+        padding: 10px 12px
+      }
+
+      .side-toggle {
+        justify-self: start
+      }
+
+      .side-btn {
+        height: 39px;
+        border-radius: 13px;
+        padding: 0 13px;
+        font-size: 13px
+      }
+
+      .context-pill {
+        min-height: 36px;
+        font-size: 12px
+      }
+
+      .messages {
+        padding: 16px 14px
+      }
+
+      .bubble-wrap {
+        max-width: 88%
+      }
+
+      .bubble {
+        font-size: 13px;
+        padding: 8px 10px;
+        line-height: 1.55
+      }
+
+      .avatar {
+        width: 34px;
+        height: 34px;
+        border-radius: 13px
+      }
+
+      .welcome {
+        max-width: 100%;
+        padding: 24px 10px;
+        text-align: center
+      }
+
+      .hero-mark {
+        width: 76px;
+        height: 76px;
+        border-radius: 27px;
+        font-size: 34px;
+        margin-bottom: 16px
+      }
+
+      .welcome h2 {
+        font-size: 22px;
+        line-height: 1.32;
+        margin-bottom: 9px
+      }
+
+      .welcome p {
+        font-size: 12.5px;
+        line-height: 1.7;
+        max-width: 100%
+      }
+
+      /* 빠른 버튼은 줄바꿈하지 않고 한 줄로 유지 */
+      .sample-chips {
+        flex-wrap: nowrap;
+        justify-content: flex-start;
+        gap: 7px;
+        margin-top: 17px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+      }
+
+      .sample-chips::-webkit-scrollbar {
+        display: none
+      }
+
+      .chip {
+        flex: 0 0 auto;
+        padding: 8px 12px;
+        font-size: 11.5px
+      }
+
+      .composer {
+        padding: 11px 12px 12px
+      }
+
+      .composer-hint {
+        display: none
+      }
+
+      .input-box {
+        border-radius: 20px;
+        padding: 8px;
+        gap: 8px
+      }
+
+      textarea {
+        min-height: 38px;
+        font-size: 13px;
+        padding: 8px 5px
+      }
+
+      .send-btn {
+        height: 38px;
+        border-radius: 14px;
+        padding: 0 13px;
+        font-size: 13px
+      }
+    }
+
+    @media(max-width:420px) {
+      .bubble-wrap {
+        max-width: 92%
+      }
+
+      .bubble {
+        padding: 7px 10px;
+        font-size: 12.8px
+      }
+
+      .select-list {
+        max-height: 210px
+      }
+    }
+
+    /* AI 답변 말풍선 가독성 개선 */
+    .msg.ai .bubble {
+      white-space: normal;
+      line-height: 1.75;
+      font-size: 15px;
+    }
+
+    /* AI 답변 문단 간격 */
+    .msg.ai .bubble p {
+      margin: 0 0 12px;
+    }
+
+    /* AI 답변 제목 간격 */
+    .msg.ai .bubble h1,
+    .msg.ai .bubble h2,
+    .msg.ai .bubble h3 {
+      margin: 16px 0 8px;
+      line-height: 1.45;
+    }
+
+    /* AI 답변 목록 간격 */
+    .msg.ai .bubble ul,
+    .msg.ai .bubble ol {
+      margin: 10px 0 14px;
+      padding-left: 22px;
+    }
+
+    /* AI 답변 목록 항목 간격 */
+    .msg.ai .bubble li {
+      margin: 6px 0;
+    }
+
+    /* AI 답변 줄바꿈 간격 */
+    .msg.ai .bubble br {
+      display: block;
+      content: "";
+      margin-top: 6px;
+    }
+  </style>
 </head>
+
 <body>
-<div class="app">
-  <aside class="panel">
-    <div class="brand">
-      <div class="logo">🎯</div>
-      <div>
-        <div class="brand-title">오버워치 코치 AI</div>
-        <div class="brand-sub">상황 기반 전술 상담</div>
-      </div>
-    </div>
-
-    <div class="side-section">
-      <div class="section-title">역할 선택</div>
-      <div class="role-grid">
-        <button class="role-btn active" data-role="all">전체</button>
-        <button class="role-btn" data-role="tank">탱커</button>
-        <button class="role-btn" data-role="dps">딜러</button>
-        <button class="role-btn" data-role="support">지원가</button>
-      </div>
-    </div>
-
-    <div class="side-section" style="display:flex;flex-direction:column;min-height:0;flex:1;">
-      <div class="section-title">추천 질문</div>
-      <div class="quick-list" id="quickList"></div>
-    </div>
-
-    <div class="status-card">
-      <div class="status-row"><span>질문 수</span><span class="status-value" id="questionCount">0</span></div>
-      <div class="status-row"><span>세션 시간</span><span class="status-value" id="sessionTime">00:00</span></div>
-      <div class="status-row"><span>상태</span><span class="status-value" style="color:var(--success)">준비 완료</span></div>
-    </div>
-  </aside>
-
-  <main class="chat-shell">
-    <header class="topbar">
-      <div class="title-wrap">
-        <h1>오버워치 코치 AI</h1>
-        <p>영웅 카운터, 조합, 맵 운영, 스탯 피드백을 질문해보세요.</p>
-      </div>
-      <div class="actions">
-        <button class="icon-btn" id="themeBtn" title="테마 변경">🌙</button>
-        <button class="plain-btn" id="resetBtn">초기화</button>
-      </div>
-    </header>
-
-    <div class="context-wrap">
-      <div class="custom-select" id="mapSelect">
-        <button type="button" class="select-trigger" id="mapTrigger">맵 선택 없이 질문하기</button>
-        <div class="select-menu">
-          <div class="select-search"><input type="text" id="mapSearch" placeholder="맵 이름 검색" autocomplete="off"></div>
-          <div class="select-list" id="mapList"></div>
+  <div class="app">
+    <aside class="panel">
+      <div class="brand">
+        <div class="logo">🎯</div>
+        <div>
+          <div class="brand-title">오버워치 코치 AI</div>
+          <div class="brand-sub">상황 기반 전술 상담</div>
         </div>
       </div>
 
-      <div class="side-toggle" id="sideToggle">
-        <button class="side-btn" data-side="attack">공격</button>
-        <button class="side-btn" data-side="defense">수비</button>
-      </div>
-
-      <div class="context-pill" id="contextPill">
-        <span id="contextText"></span>
-        <button type="button" id="clearContextBtn" aria-label="맵 선택 지우기">×</button>
-      </div>
-    </div>
-
-    <div class="mobile-quick" id="mobileQuick"></div>
-
-    <section class="messages" id="messages">
-      <div class="welcome" id="welcome">
-        <div class="hero-mark">🎮</div>
-        <h2>게임 상황을 알려주세요</h2>
-        <p>예를 들어 “상대 파라가 계속 압박해”, “왕의 길 수비 조합 추천해줘”, “내 솔저 스탯이 킬 4 데스 8 딜 6000이야”처럼 입력하면 됩니다.</p>
-        <div class="sample-chips">
-          <button class="chip" data-fill="파라 카운터 영웅 알려줘">파라 카운터</button>
-          <button class="chip" data-fill="팀 조합 추천해줘">조합 추천</button>
-          <button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button>
-          <button class="chip" data-fill="나는 솔저76인데 킬 4 데스 8 딜 6000이야 어떻게 운영해야해?">스탯 피드백</button>
+      <div class="side-section">
+        <div class="section-title">역할 선택</div>
+        <div class="role-grid">
+          <button class="role-btn active" data-role="all">전체</button>
+          <button class="role-btn" data-role="tank">탱커</button>
+          <button class="role-btn" data-role="dps">딜러</button>
+          <button class="role-btn" data-role="support">지원가</button>
         </div>
       </div>
-    </section>
 
-    <footer class="composer">
-      <div class="input-box">
-        <textarea id="userInput" rows="1" placeholder="질문을 입력하세요. Enter 전송, Shift+Enter 줄바꿈"></textarea>
-        <button class="send-btn" id="sendBtn">전송</button>
+      <div class="side-section" style="display:flex;flex-direction:column;min-height:0;flex:1;">
+        <div class="section-title">추천 질문</div>
+        <div class="quick-list" id="quickList"></div>
       </div>
-      <div class="composer-hint">
-        <span>맵을 선택하면 해당 맵 기준으로 답변합니다.</span>
-        <span>스탯은 자유 형식으로 입력해도 됩니다.</span>
+
+      <div class="status-card">
+        <div class="status-row"><span>질문 수</span><span class="status-value" id="questionCount">0</span></div>
+        <div class="status-row"><span>세션 시간</span><span class="status-value" id="sessionTime">00:00</span></div>
+        <div class="status-row"><span>상태</span><span class="status-value" style="color:var(--success)">준비 완료</span>
+        </div>
       </div>
-    </footer>
-  </main>
-</div>
+    </aside>
 
-<script>
-const maps = [
-  {group:'전체', name:'맵 선택 없이 질문하기', mode:'none'},
-  {group:'호위 · 공수 있음', name:'쓰레기촌', mode:'escort'},
-  {group:'호위 · 공수 있음', name:'하바나', mode:'escort'},
-  {group:'혼합 · 공수 있음', name:'눔바니', mode:'hybrid'},
-  {group:'혼합 · 공수 있음', name:'미드타운', mode:'hybrid'},
-  {group:'혼합 · 공수 있음', name:'블리자드 월드', mode:'hybrid'},
-  {group:'혼합 · 공수 있음', name:'아이헨발데', mode:'hybrid'},
-  {group:'혼합 · 공수 있음', name:'왕의 길', mode:'hybrid'},
-  {group:'혼합 · 공수 있음', name:'파라이수', mode:'hybrid'},
-  {group:'혼합 · 공수 있음', name:'할리우드', mode:'hybrid'},
-  {group:'밀기 · 공수 없음', name:'뉴 퀸 스트리트', mode:'push'},
-  {group:'밀기 · 공수 없음', name:'이스페란사', mode:'push'},
-  {group:'밀기 · 공수 없음', name:'콜로세오', mode:'push'},
-  {group:'밀기 · 공수 없음', name:'루나사피', mode:'push'},
-  {group:'플래시포인트 · 공수 없음', name:'뉴 정크 시티', mode:'flashpoint'},
-  {group:'플래시포인트 · 공수 없음', name:'수라바사', mode:'flashpoint'},
-  {group:'플래시포인트 · 공수 없음', name:'아틀리스', mode:'flashpoint'},
-  {group:'쟁탈 · 공수 없음', name:'남극 반도', mode:'control'},
-  {group:'쟁탈 · 공수 없음', name:'네팔', mode:'control'},
-  {group:'쟁탈 · 공수 없음', name:'리장 타워', mode:'control'},
-  {group:'쟁탈 · 공수 없음', name:'부산', mode:'control'},
-  {group:'쟁탈 · 공수 없음', name:'사모아', mode:'control'},
-  {group:'쟁탈 · 공수 없음', name:'오아시스', mode:'control'},
-  {group:'쟁탈 · 공수 없음', name:'일리오스', mode:'control'},
-  {group:'호위 · 공수 있음', name:'66번 국도', mode:'escort'},
-  {group:'호위 · 공수 있음', name:'감시 기지: 지브롤터', mode:'escort'},
-  {group:'호위 · 공수 있음', name:'도라도', mode:'escort'},
-  {group:'호위 · 공수 있음', name:'리알토', mode:'escort'},
-  {group:'호위 · 공수 있음', name:'샴발리 수도원', mode:'escort'},
-  {group:'호위 · 공수 있음', name:'서킷 로얄', mode:'escort'}
-];
-const sideModes = new Set(['escort','hybrid']);
-const modeName = {escort:'호위',hybrid:'혼합',push:'밀기',flashpoint:'플래시포인트',control:'쟁탈'};
-const quicks = {
-  all:[['COUNTER','파라 카운터 영웅 알려줘'],['MAP','왕의 길 수비 운영 알려줘'],['COMP','팀 조합 추천해줘'],['STAT','내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?']],
-  tank:[['TANK','라인하르트 방어막 관리 팁 알려줘'],['TANK','D.Va 매트릭스 언제 써야 해?'],['TANK','둠피스트 진입 타이밍 알려줘']],
-  dps:[['DPS','겐지 질풍참 타이밍 알려줘'],['DPS','솜브라 EMP 타이밍 알려줘'],['COUNTER','트레이서 카운터 알려줘']],
-  support:[['SUPPORT','아나 수면총 타이밍 알려줘'],['SUPPORT','키리코 정화 언제 써야 해?'],['SUPPORT','루시우 밀기 맵 운영 알려줘']]
-};
-let state = {map:null, side:'', q:0, start:Date.now(), busy:false};
+    <main class="chat-shell">
+      <header class="topbar">
+        <div class="title-wrap">
+          <h1>오버워치 코치 AI</h1>
+          <p>영웅 카운터, 조합, 맵 운영, 스탯 피드백을 질문해보세요.</p>
+        </div>
+        <div class="actions">
+          <button class="icon-btn" id="themeBtn" title="테마 변경">🌙</button>
+          <button class="plain-btn" id="resetBtn">초기화</button>
+        </div>
+      </header>
 
-const $ = (id)=>document.getElementById(id);
-const messages = $('messages');
-const input = $('userInput');
-const sendBtn = $('sendBtn');
+      <div class="context-wrap">
+        <div class="custom-select" id="mapSelect">
+          <button type="button" class="select-trigger" id="mapTrigger">맵 선택 없이 질문하기</button>
+          <div class="select-menu">
+            <div class="select-search"><input type="text" id="mapSearch" placeholder="맵 이름 검색" autocomplete="off"></div>
+            <div class="select-list" id="mapList"></div>
+          </div>
+        </div>
 
-function getCsrf(){
-  return document.cookie.split(';').map(v=>v.trim()).find(v=>v.startsWith('csrftoken='))?.split('=')[1] || '';
-}
-function timeText(){return new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});}
-function escapeHtml(text){
-  return String(text).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
-}
-function simpleMarkdown(text){
-  let s = escapeHtml(text || '');
-  s = s.replace(/^### (.*)$/gm,'<h3>$1</h3>').replace(/^## (.*)$/gm,'<h2>$1</h2>').replace(/^# (.*)$/gm,'<h1>$1</h1>');
-  s = s.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>');
-  s = s.replace(/^- (.*)$/gm,'<li>$1</li>');
-  s = s.replace(/(<li>.*?<\/li>\n?)+/gs, m=>'<ul>'+m+'</ul>');
-  s = s.replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>');
-  if(!/^<h|^<ul|^<p/.test(s)) s = '<p>'+s+'</p>';
-  return s;
-}
-function hasStats(text){return /\d/.test(text) && /(킬|데스|딜|힐|도움|어시|피해|치유|사망)/.test(text);}
-function contextLabel(){
-  if(!state.map || state.map.mode === 'none') return '';
-  let txt = `${state.map.name} · ${modeName[state.map.mode] || ''}`;
-  if(state.side) txt += ` · ${state.side === 'attack' ? '공격' : '수비'}`;
-  return txt;
-}
-function updateContext(){
-  const hasMap = state.map && state.map.mode !== 'none';
-  $('mapTrigger').textContent = hasMap ? `${state.map.name} (${modeName[state.map.mode]})` : '맵 선택 없이 질문하기';
-  $('sideToggle').classList.toggle('show', hasMap && sideModes.has(state.map.mode));
-  document.querySelectorAll('.side-btn').forEach(btn=>btn.classList.toggle('active', btn.dataset.side === state.side));
-  const label = contextLabel();
-  $('contextPill').classList.toggle('show', !!label);
-  $('contextText').textContent = label;
-}
-function clearContext(){
-  state.map = null; state.side = '';
-  $('mapSearch').value = '';
-  renderMapList(); updateContext(); closeSelect();
-}
+        <div class="side-toggle" id="sideToggle">
+          <button class="side-btn" data-side="attack">공격</button>
+          <button class="side-btn" data-side="defense">수비</button>
+        </div>
 
-function renderMapList(){
-  const q = $('mapSearch').value.trim().toLowerCase();
-  const list = $('mapList');
-  const filtered = maps.filter(m => !q || m.name.toLowerCase().includes(q) || m.group.toLowerCase().includes(q));
-  if(!filtered.length){list.innerHTML = '<div class="select-empty">검색 결과가 없습니다.</div>'; return;}
-  let html = ''; let last = '';
-  filtered.forEach(m=>{
-    if(m.group !== last){last = m.group; html += `<div class="select-group">${escapeHtml(last)}</div>`;}
-    const active = state.map && state.map.name === m.name && state.map.mode === m.mode ? ' active' : '';
-    html += `<button type="button" class="select-option${active}" data-name="${escapeHtml(m.name)}" data-mode="${escapeHtml(m.mode)}">${escapeHtml(m.name)}</button>`;
-  });
-  list.innerHTML = html;
-}
-function openSelect(){ $('mapSelect').classList.add('open'); $('mapSearch').focus(); renderMapList(); }
-function closeSelect(){ $('mapSelect').classList.remove('open'); }
-$('mapTrigger').addEventListener('click',()=> $('mapSelect').classList.contains('open') ? closeSelect() : openSelect());
-$('mapSearch').addEventListener('input',renderMapList);
-$('mapList').addEventListener('click',(e)=>{
-  const btn = e.target.closest('.select-option'); if(!btn) return;
-  state.map = {name:btn.dataset.name, mode:btn.dataset.mode};
-  if(!sideModes.has(state.map.mode)) state.side = '';
-  updateContext(); closeSelect();
-});
-document.addEventListener('click',(e)=>{ if(!$('mapSelect').contains(e.target)) closeSelect(); });
-$('clearContextBtn').addEventListener('click',clearContext);
-document.querySelectorAll('.side-btn').forEach(btn=>btn.addEventListener('click',()=>{
-  state.side = state.side === btn.dataset.side ? '' : btn.dataset.side;
-  updateContext();
-}));
+        <div class="context-pill" id="contextPill">
+          <span id="contextText"></span>
+          <button type="button" id="clearContextBtn" aria-label="맵 선택 지우기">×</button>
+        </div>
+      </div>
 
-function renderQuick(role='all'){
-  const items = quicks[role] || quicks.all;
-  const html = items.map(([tag,q])=>`<button class="quick-btn" data-fill="${escapeHtml(q)}"><span class="quick-tag">${escapeHtml(tag)}</span>${escapeHtml(q)}</button>`).join('');
-  $('quickList').innerHTML = html;
-  $('mobileQuick').innerHTML = items.map(([tag,q])=>`<button class="chip" data-fill="${escapeHtml(q)}">${escapeHtml(tag)}</button>`).join('');
-}
-renderQuick();
-document.querySelectorAll('.role-btn').forEach(btn=>btn.addEventListener('click',()=>{
-  document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active'); renderQuick(btn.dataset.role);
-}));
-document.addEventListener('click',(e)=>{
-  const fill = e.target.closest('[data-fill]');
-  if(fill){ input.value = fill.dataset.fill; autoResize(); input.focus(); }
-});
+      <div class="mobile-quick" id="mobileQuick"></div>
 
-function autoResize(){ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,130)+'px'; }
-input.addEventListener('input',autoResize);
-input.addEventListener('keydown',(e)=>{ if(e.key==='Enter' && !e.shiftKey){e.preventDefault(); sendMessage();} });
+      <section class="messages" id="messages">
+        <div class="welcome" id="welcome">
+          <div class="hero-mark">🎮</div>
+          <h2>게임 상황을 알려주세요</h2>
+          <p>예를 들어 “상대 파라가 계속 압박해”, “왕의 길 수비 조합 추천해줘”, “내 솔저 스탯이 킬 4 데스 8 딜 6000이야”처럼 입력하면 됩니다.</p>
+          <div class="sample-chips">
+            <button class="chip" data-fill="파라 카운터 영웅 알려줘">파라 카운터</button>
+            <button class="chip" data-fill="팀 조합 추천해줘">조합 추천</button>
+            <button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button>
+            <button class="chip" data-fill="나는 솔저76인데 킬 4 데스 8 딜 6000이야 어떻게 운영해야해?">스탯 피드백</button>
+          </div>
+        </div>
+      </section>
 
-function addMessage(role, text, options={}){
-  $('welcome')?.remove();
-  const row = document.createElement('div');
-  row.className = `msg ${role}`;
-  const avatar = document.createElement('div'); avatar.className='avatar'; avatar.textContent = role === 'user' ? '나' : 'AI';
-  const wrap = document.createElement('div'); wrap.className='bubble-wrap';
-  const meta = document.createElement('div'); meta.className='meta'; meta.textContent = `${role === 'user' ? '나' : '코치 AI'} · ${timeText()}`;
-  const bubble = document.createElement('div'); bubble.className='bubble';
-  bubble.innerHTML = role === 'ai' ? simpleMarkdown(text) : `<p>${escapeHtml(text)}</p>`;
-  if(role === 'user'){
-    const badges=[];
-    if(options.stats) badges.push('스탯 입력 감지');
-    if(options.context) badges.push(options.context);
-    if(badges.length) bubble.innerHTML += `<div class="badges">${badges.map(b=>`<span class="badge">${escapeHtml(b)}</span>`).join('')}</div>`;
-  }
-  if(role === 'ai'){
-    const buttons = buildResponseButtons(options);
-    if(buttons) bubble.appendChild(buttons);
-  }
-  wrap.appendChild(meta); wrap.appendChild(bubble);
-  row.appendChild(avatar); row.appendChild(wrap);
-  messages.appendChild(row); messages.scrollTop = messages.scrollHeight;
-}
-function buildResponseButtons(options){
-  const box = document.createElement('div'); box.className='suggestions';
-  let has = false;
-  (options.choiceButtons || []).forEach(item=>{
-    if(!item || !item.label) return;
-    const btn = document.createElement('button'); btn.className='suggest-btn'; btn.textContent=item.label;
-    btn.addEventListener('click',()=>{
-      if(item.type === 'role_filter') sendRoleFilter(item.value);
-      else { input.value = item.label; autoResize(); input.focus(); }
+      <footer class="composer">
+        <div class="input-box">
+          <textarea id="userInput" rows="1" placeholder="질문을 입력하세요. Enter 전송, Shift+Enter 줄바꿈"></textarea>
+          <button class="send-btn" id="sendBtn">전송</button>
+        </div>
+        <div class="composer-hint">
+          <span>맵을 선택하면 해당 맵 기준으로 답변합니다.</span>
+          <span>스탯은 자유 형식으로 입력해도 됩니다.</span>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    const maps = [
+      { group: '전체', name: '맵 선택 없이 질문하기', mode: 'none' },
+      { group: '호위 · 공수 있음', name: '쓰레기촌', mode: 'escort' },
+      { group: '호위 · 공수 있음', name: '하바나', mode: 'escort' },
+      { group: '혼합 · 공수 있음', name: '눔바니', mode: 'hybrid' },
+      { group: '혼합 · 공수 있음', name: '미드타운', mode: 'hybrid' },
+      { group: '혼합 · 공수 있음', name: '블리자드 월드', mode: 'hybrid' },
+      { group: '혼합 · 공수 있음', name: '아이헨발데', mode: 'hybrid' },
+      { group: '혼합 · 공수 있음', name: '왕의 길', mode: 'hybrid' },
+      { group: '혼합 · 공수 있음', name: '파라이수', mode: 'hybrid' },
+      { group: '혼합 · 공수 있음', name: '할리우드', mode: 'hybrid' },
+      { group: '밀기 · 공수 없음', name: '뉴 퀸 스트리트', mode: 'push' },
+      { group: '밀기 · 공수 없음', name: '이스페란사', mode: 'push' },
+      { group: '밀기 · 공수 없음', name: '콜로세오', mode: 'push' },
+      { group: '밀기 · 공수 없음', name: '루나사피', mode: 'push' },
+      { group: '플래시포인트 · 공수 없음', name: '뉴 정크 시티', mode: 'flashpoint' },
+      { group: '플래시포인트 · 공수 없음', name: '수라바사', mode: 'flashpoint' },
+      { group: '플래시포인트 · 공수 없음', name: '아틀리스', mode: 'flashpoint' },
+      { group: '쟁탈 · 공수 없음', name: '남극 반도', mode: 'control' },
+      { group: '쟁탈 · 공수 없음', name: '네팔', mode: 'control' },
+      { group: '쟁탈 · 공수 없음', name: '리장 타워', mode: 'control' },
+      { group: '쟁탈 · 공수 없음', name: '부산', mode: 'control' },
+      { group: '쟁탈 · 공수 없음', name: '사모아', mode: 'control' },
+      { group: '쟁탈 · 공수 없음', name: '오아시스', mode: 'control' },
+      { group: '쟁탈 · 공수 없음', name: '일리오스', mode: 'control' },
+      { group: '호위 · 공수 있음', name: '66번 국도', mode: 'escort' },
+      { group: '호위 · 공수 있음', name: '감시 기지: 지브롤터', mode: 'escort' },
+      { group: '호위 · 공수 있음', name: '도라도', mode: 'escort' },
+      { group: '호위 · 공수 있음', name: '리알토', mode: 'escort' },
+      { group: '호위 · 공수 있음', name: '샴발리 수도원', mode: 'escort' },
+      { group: '호위 · 공수 있음', name: '서킷 로얄', mode: 'escort' }
+    ];
+    const sideModes = new Set(['escort', 'hybrid']);
+    const modeName = { escort: '호위', hybrid: '혼합', push: '밀기', flashpoint: '플래시포인트', control: '쟁탈' };
+    const quicks = {
+      all: [['COUNTER', '파라 카운터 영웅 알려줘'], ['MAP', '왕의 길 수비 운영 알려줘'], ['COMP', '팀 조합 추천해줘'], ['STAT', '내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?']],
+      tank: [['TANK', '라인하르트 방어막 관리 팁 알려줘'], ['TANK', 'D.Va 매트릭스 언제 써야 해?'], ['TANK', '둠피스트 진입 타이밍 알려줘']],
+      dps: [['DPS', '겐지 질풍참 타이밍 알려줘'], ['DPS', '솜브라 EMP 타이밍 알려줘'], ['COUNTER', '트레이서 카운터 알려줘']],
+      support: [['SUPPORT', '아나 수면총 타이밍 알려줘'], ['SUPPORT', '키리코 정화 언제 써야 해?'], ['SUPPORT', '루시우 밀기 맵 운영 알려줘']]
+    };
+    let state = { map: null, side: '', q: 0, start: Date.now(), busy: false };
+
+    const $ = (id) => document.getElementById(id);
+    const messages = $('messages');
+    const input = $('userInput');
+    const sendBtn = $('sendBtn');
+
+    function getCsrf() {
+      return document.cookie.split(';').map(v => v.trim()).find(v => v.startsWith('csrftoken='))?.split('=')[1] || '';
+    }
+    function timeText() { return new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }); }
+    function escapeHtml(text) {
+      return String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+    }
+    function simpleMarkdown(text) {
+      let s = escapeHtml(text || '');
+      s = s.replace(/^### (.*)$/gm, '<h3>$1</h3>').replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/^# (.*)$/gm, '<h1>$1</h1>');
+      s = s.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      s = s.replace(/^- (.*)$/gm, '<li>$1</li>');
+      s = s.replace(/(<li>.*?<\/li>\n?)+/gs, m => '<ul>' + m + '</ul>');
+      s = s.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
+      if (!/^<h|^<ul|^<p/.test(s)) s = '<p>' + s + '</p>';
+      return s;
+    }
+    function hasStats(text) { return /\d/.test(text) && /(킬|데스|딜|힐|도움|어시|피해|치유|사망)/.test(text); }
+    function contextLabel() {
+      if (!state.map || state.map.mode === 'none') return '';
+      let txt = `${state.map.name} · ${modeName[state.map.mode] || ''}`;
+      if (state.side) txt += ` · ${state.side === 'attack' ? '공격' : '수비'}`;
+      return txt;
+    }
+    function updateContext() {
+      const hasMap = state.map && state.map.mode !== 'none';
+      $('mapTrigger').textContent = hasMap ? `${state.map.name} (${modeName[state.map.mode]})` : '맵 선택 없이 질문하기';
+      $('sideToggle').classList.toggle('show', hasMap && sideModes.has(state.map.mode));
+      document.querySelectorAll('.side-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.side === state.side));
+      const label = contextLabel();
+      $('contextPill').classList.toggle('show', !!label);
+      $('contextText').textContent = label;
+    }
+    function clearContext() {
+      state.map = null; state.side = '';
+      $('mapSearch').value = '';
+      renderMapList(); updateContext(); closeSelect();
+    }
+
+    function renderMapList() {
+      const q = $('mapSearch').value.trim().toLowerCase();
+      const list = $('mapList');
+      const filtered = maps.filter(m => !q || m.name.toLowerCase().includes(q) || m.group.toLowerCase().includes(q));
+      if (!filtered.length) { list.innerHTML = '<div class="select-empty">검색 결과가 없습니다.</div>'; return; }
+      let html = ''; let last = '';
+      filtered.forEach(m => {
+        if (m.group !== last) { last = m.group; html += `<div class="select-group">${escapeHtml(last)}</div>`; }
+        const active = state.map && state.map.name === m.name && state.map.mode === m.mode ? ' active' : '';
+        html += `<button type="button" class="select-option${active}" data-name="${escapeHtml(m.name)}" data-mode="${escapeHtml(m.mode)}">${escapeHtml(m.name)}</button>`;
+      });
+      list.innerHTML = html;
+    }
+    function openSelect() { $('mapSelect').classList.add('open'); $('mapSearch').focus(); renderMapList(); }
+    function closeSelect() { $('mapSelect').classList.remove('open'); }
+    $('mapTrigger').addEventListener('click', () => $('mapSelect').classList.contains('open') ? closeSelect() : openSelect());
+    $('mapSearch').addEventListener('input', renderMapList);
+    $('mapList').addEventListener('click', (e) => {
+      const btn = e.target.closest('.select-option'); if (!btn) return;
+      state.map = { name: btn.dataset.name, mode: btn.dataset.mode };
+      if (!sideModes.has(state.map.mode)) state.side = '';
+      updateContext(); closeSelect();
     });
-    box.appendChild(btn); has = true;
-  });
-  (options.suggested || []).slice(0,3).forEach(q=>{
-    const btn = document.createElement('button'); btn.className='suggest-btn'; btn.textContent=q;
-    btn.addEventListener('click',()=>{input.value=q; autoResize(); input.focus();});
-    box.appendChild(btn); has = true;
-  });
-  return has ? box : null;
-}
-function addTyping(){
-  const row = document.createElement('div'); row.className='msg ai'; row.id='typing';
-  row.innerHTML = '<div class="avatar">AI</div><div class="bubble-wrap"><div class="meta">코치 AI</div><div class="bubble"><div class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>답변을 준비하고 있습니다.</span></div></div></div>';
-  messages.appendChild(row); messages.scrollTop = messages.scrollHeight;
-}
-function removeTyping(){ $('typing')?.remove(); }
-function showError(msg){
-  const div = document.createElement('div'); div.className='error'; div.textContent = msg;
-  messages.appendChild(div); messages.scrollTop = messages.scrollHeight;
-}
-function buildRequestBody(message, roleFilter){
-  const body = {message:message || ''};
-  if(roleFilter) body.role_filter = roleFilter;
-  const extra = {};
-  if(state.map && state.map.mode !== 'none') extra.map_name = state.map.name;
-  if(state.side) extra.side = state.side;
-  if(Object.keys(extra).length) body.extra_context = extra;
-  return body;
-}
-async function requestChat(body){
-  const res = await fetch('/chat/api/',{
-    method:'POST',
-    headers:{'Content-Type':'application/json','X-CSRFToken':getCsrf()},
-    body:JSON.stringify(body)
-  });
-  const ct = res.headers.get('content-type') || '';
-  if(!ct.includes('application/json')) throw new Error('서버 응답을 확인할 수 없습니다.');
-  const data = await res.json();
-  if(!res.ok || data.error) throw new Error(data.error || '응답 중 오류가 발생했습니다.');
-  return data;
-}
-async function sendMessage(){
-  const text = input.value.trim(); if(!text || state.busy) return;
-  const ctx = contextLabel();
-  addMessage('user', text, {stats:hasStats(text), context:ctx});
-  input.value=''; autoResize();
-  state.q++; $('questionCount').textContent = state.q;
-  state.busy = true; sendBtn.disabled = true; addTyping();
-  try{
-    const data = await requestChat(buildRequestBody(text));
-    removeTyping();
-    addMessage('ai', data.answer || '답변이 비어 있습니다.', {suggested:data.suggested_questions || [], choiceButtons:data.choice_buttons || []});
-  }catch(err){
-    removeTyping(); showError(err.message || '연결에 실패했습니다.');
-  }finally{
-    state.busy = false; sendBtn.disabled = false; input.focus();
-  }
-}
-async function sendRoleFilter(value){
-  if(state.busy) return;
-  state.busy = true; sendBtn.disabled = true; addTyping();
-  try{
-    const data = await requestChat(buildRequestBody('', value));
-    removeTyping();
-    addMessage('ai', data.answer || '답변이 비어 있습니다.', {suggested:data.suggested_questions || [], choiceButtons:data.choice_buttons || []});
-  }catch(err){removeTyping(); showError(err.message || '연결에 실패했습니다.');}
-  finally{state.busy=false; sendBtn.disabled=false;}
-}
-sendBtn.addEventListener('click',sendMessage);
+    document.addEventListener('click', (e) => { if (!$('mapSelect').contains(e.target)) closeSelect(); });
+    $('clearContextBtn').addEventListener('click', clearContext);
+    document.querySelectorAll('.side-btn').forEach(btn => btn.addEventListener('click', () => {
+      state.side = state.side === btn.dataset.side ? '' : btn.dataset.side;
+      updateContext();
+    }));
 
-function resetScreen(){
-  state.q = 0; state.start = Date.now(); $('questionCount').textContent = '0';
-  clearContext();
-  messages.innerHTML = `<div class="welcome" id="welcome"><div class="hero-mark">🎮</div><h2>게임 상황을 편하게 적어주세요</h2><p>예를 들어 “상대 파라가 계속 압박해”, “왕의 길 수비 조합 추천해줘”, “내 솔저 스탯이 킬 4 데스 8 딜 6000이야”처럼 입력하면 됩니다.</p><div class="sample-chips"><button class="chip" data-fill="파라 카운터 영웅 알려줘">파라 카운터</button><button class="chip" data-fill="팀 조합 추천해줘">조합 추천</button><button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button><button class="chip" data-fill="내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?">스탯 피드백</button></div></div>`;
-}
-async function resetServer(){
-  try{
-    await fetch('/chat/api/',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':getCsrf()},body:JSON.stringify({reset:true})});
-  }catch(e){}
-}
-$('resetBtn').addEventListener('click',()=>{ resetScreen(); resetServer(); });
-$('themeBtn').addEventListener('click',()=>{
-  const html = document.documentElement;
-  const dark = html.dataset.theme === 'dark';
-  html.dataset.theme = dark ? 'light' : 'dark';
-  $('themeBtn').textContent = dark ? '🌙' : '☀️';
-});
-setInterval(()=>{
-  const sec = Math.floor((Date.now()-state.start)/1000);
-  $('sessionTime').textContent = `${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;
-},1000);
-renderMapList(); updateContext();
-</script>
+    function renderQuick(role = 'all') {
+      const items = quicks[role] || quicks.all;
+      const html = items.map(([tag, q]) => `<button class="quick-btn" data-fill="${escapeHtml(q)}"><span class="quick-tag">${escapeHtml(tag)}</span>${escapeHtml(q)}</button>`).join('');
+      $('quickList').innerHTML = html;
+      $('mobileQuick').innerHTML = items.map(([tag, q]) => `<button class="chip" data-fill="${escapeHtml(q)}">${escapeHtml(tag)}</button>`).join('');
+    }
+    renderQuick();
+    document.querySelectorAll('.role-btn').forEach(btn => btn.addEventListener('click', () => {
+      document.querySelectorAll('.role-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active'); renderQuick(btn.dataset.role);
+    }));
+    document.addEventListener('click', (e) => {
+      const fill = e.target.closest('[data-fill]');
+      if (fill) { input.value = fill.dataset.fill; autoResize(); input.focus(); }
+    });
+
+    function autoResize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 130) + 'px'; }
+    input.addEventListener('input', autoResize);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+
+    function addMessage(role, text, options = {}) {
+      $('welcome')?.remove();
+      const row = document.createElement('div');
+      row.className = `msg ${role}`;
+      const avatar = document.createElement('div'); avatar.className = 'avatar'; avatar.textContent = role === 'user' ? '나' : 'AI';
+      const wrap = document.createElement('div'); wrap.className = 'bubble-wrap';
+      const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `${role === 'user' ? '나' : '코치 AI'} · ${timeText()}`;
+      const bubble = document.createElement('div'); bubble.className = 'bubble';
+      bubble.innerHTML = role === 'ai' ? simpleMarkdown(text) : `<p>${escapeHtml(text)}</p>`;
+      if (role === 'user') {
+        const badges = [];
+        if (options.stats) badges.push('스탯 입력 감지');
+        if (options.context) badges.push(options.context);
+        if (badges.length) bubble.innerHTML += `<div class="badges">${badges.map(b => `<span class="badge">${escapeHtml(b)}</span>`).join('')}</div>`;
+      }
+      if (role === 'ai') {
+        const buttons = buildResponseButtons(options);
+        if (buttons) bubble.appendChild(buttons);
+      }
+      wrap.appendChild(meta); wrap.appendChild(bubble);
+      row.appendChild(avatar); row.appendChild(wrap);
+      messages.appendChild(row); messages.scrollTop = messages.scrollHeight;
+    }
+    function buildResponseButtons(options) {
+      const box = document.createElement('div'); box.className = 'suggestions';
+      let has = false;
+      (options.choiceButtons || []).forEach(item => {
+        if (!item || !item.label) return;
+        const btn = document.createElement('button'); btn.className = 'suggest-btn'; btn.textContent = item.label;
+        btn.addEventListener('click', () => {
+          if (item.type === 'role_filter') sendRoleFilter(item.value);
+          else { input.value = item.label; autoResize(); input.focus(); }
+        });
+        box.appendChild(btn); has = true;
+      });
+      (options.suggested || []).slice(0, 3).forEach(q => {
+        const btn = document.createElement('button'); btn.className = 'suggest-btn'; btn.textContent = q;
+        btn.addEventListener('click', () => { input.value = q; autoResize(); input.focus(); });
+        box.appendChild(btn); has = true;
+      });
+      return has ? box : null;
+    }
+    function addTyping() {
+      const row = document.createElement('div'); row.className = 'msg ai'; row.id = 'typing';
+      row.innerHTML = '<div class="avatar">AI</div><div class="bubble-wrap"><div class="meta">코치 AI</div><div class="bubble"><div class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>답변을 준비하고 있습니다.</span></div></div></div>';
+      messages.appendChild(row); messages.scrollTop = messages.scrollHeight;
+    }
+    function removeTyping() { $('typing')?.remove(); }
+    function showError(msg) {
+      const div = document.createElement('div'); div.className = 'error'; div.textContent = msg;
+      messages.appendChild(div); messages.scrollTop = messages.scrollHeight;
+    }
+    function buildRequestBody(message, roleFilter) {
+      const body = { message: message || '' };
+      if (roleFilter) body.role_filter = roleFilter;
+      const extra = {};
+      if (state.map && state.map.mode !== 'none') extra.map_name = state.map.name;
+      if (state.side) extra.side = state.side;
+      if (Object.keys(extra).length) body.extra_context = extra;
+      return body;
+    }
+    async function requestChat(body) {
+      const res = await fetch('/chat/api/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
+        body: JSON.stringify(body)
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) throw new Error('서버 응답을 확인할 수 없습니다.');
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || '응답 중 오류가 발생했습니다.');
+      return data;
+    }
+    async function sendMessage() {
+      const text = input.value.trim(); if (!text || state.busy) return;
+      const ctx = contextLabel();
+      addMessage('user', text, { stats: hasStats(text), context: ctx });
+      input.value = ''; autoResize();
+      state.q++; $('questionCount').textContent = state.q;
+      state.busy = true; sendBtn.disabled = true; addTyping();
+      try {
+        const data = await requestChat(buildRequestBody(text));
+        removeTyping();
+        addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [] });
+      } catch (err) {
+        removeTyping(); showError(err.message || '연결에 실패했습니다.');
+      } finally {
+        state.busy = false; sendBtn.disabled = false; input.focus();
+      }
+    }
+    async function sendRoleFilter(value) {
+      if (state.busy) return;
+      state.busy = true; sendBtn.disabled = true; addTyping();
+      try {
+        const data = await requestChat(buildRequestBody('', value));
+        removeTyping();
+        addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [] });
+      } catch (err) { removeTyping(); showError(err.message || '연결에 실패했습니다.'); }
+      finally { state.busy = false; sendBtn.disabled = false; }
+    }
+    sendBtn.addEventListener('click', sendMessage);
+
+    function resetScreen() {
+      state.q = 0; state.start = Date.now(); $('questionCount').textContent = '0';
+      clearContext();
+      messages.innerHTML = `<div class="welcome" id="welcome"><div class="hero-mark">🎮</div><h2>게임 상황을 편하게 적어주세요</h2><p>예를 들어 “상대 파라가 계속 압박해”, “왕의 길 수비 조합 추천해줘”, “내 솔저 스탯이 킬 4 데스 8 딜 6000이야”처럼 입력하면 됩니다.</p><div class="sample-chips"><button class="chip" data-fill="파라 카운터 영웅 알려줘">파라 카운터</button><button class="chip" data-fill="팀 조합 추천해줘">조합 추천</button><button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button><button class="chip" data-fill="내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?">스탯 피드백</button></div></div>`;
+    }
+    async function resetServer() {
+      try {
+        await fetch('/chat/api/', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() }, body: JSON.stringify({ reset: true }) });
+      } catch (e) { }
+    }
+    $('resetBtn').addEventListener('click', () => { resetScreen(); resetServer(); });
+    $('themeBtn').addEventListener('click', () => {
+      const html = document.documentElement;
+      const dark = html.dataset.theme === 'dark';
+      html.dataset.theme = dark ? 'light' : 'dark';
+      $('themeBtn').textContent = dark ? '🌙' : '☀️';
+    });
+    setInterval(() => {
+      const sec = Math.floor((Date.now() - state.start) / 1000);
+      $('sessionTime').textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+    }, 1000);
+    renderMapList(); updateContext();
+  </script>
 </body>
+
 </html>

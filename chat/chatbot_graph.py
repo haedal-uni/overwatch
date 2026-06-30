@@ -273,18 +273,61 @@ def detect_stat_input(message: str) -> bool:
     has_number = bool(re.search(r"\d{2,}", message))
     return has_keyword and has_number
 
+def detect_wants_to_keep_hero(text: str) -> bool:
+    """
+    사용자가 특정 영웅을 바꾸기보다 계속 하거나,
+    그 영웅으로 이기고 싶어하는 표현인지 판단한다.
+    """
+
+    # 영웅 이름이 아예 없으면 이 함수에서는 판단하지 않음
+    hero = find_first_hero(text)
+    if not hero:
+        return False
+
+    # 붙여 쓰기 대응: "파라쓸건데", "파라할건데", "파라하고싶어"
+    compact = re.sub(r"\s+", "", text)
+
+    keep_patterns = [
+        r"(하고싶|하고싶어|해보고싶|쓰고싶|쓸거|쓸건데|할거|할건데)",
+        r"(계속|유지|고정|원챔|포기안|안바꾸|바꾸지않)",
+        r"(이기고싶|이기면서|즐기고싶|즐기면서)",
+        r"(해도돼|해도될까|가능할까|괜찮을까)",
+    ]
+
+    return any(re.search(pattern, compact) for pattern in keep_patterns)
+
 
 def infer_intent_by_rule(message: str, context: Dict[str, Any]) -> str:
     text = message.strip()
 
-    if any(word in text for word in ["카운터", "견제", "잡는", "막는"]):
-        return "counter"
-    if any(word in text for word in ["말고", "다른 영웅", "바꾸", "변경", "픽 추천"]):
-        return "swap"
-    if any(word in text for word in ["계속 쓰고", "유지", "그 영웅", "현재 영웅", "내가 계속"]):
+    # 1. 사용자가 특정 영웅을 유지하고 싶어하는 경우
+    # 예: "파라 하고싶어", "파라쓸건데", "파라 원챔인데", "파라로 이기고 싶어"
+    if detect_wants_to_keep_hero(text):
         return "stay"
-    if any(word in text for word in ["딜량", "데스", "킬", "스탯", "어떻게 플레이", "어떻게 해야"]):
+
+    # 2. 영웅을 바꾸겠다는 표현이 명확하면 swap
+    # 단, "안 바꾸고", "바꾸지 않고"는 stay로 처리
+    if any(word in text for word in ["말고", "다른 영웅", "바꾸", "변경", "픽 추천"]):
+        compact = re.sub(r"\s+", "", text)
+
+        if any(word in compact for word in ["안바꾸", "바꾸지않", "그대로", "유지", "고정"]):
+            return "stay"
+
+        return "swap"
+
+    # 3. 카운터/견제 의도
+    if any(word in text for word in ["카운터", "견제", "잡는", "막는", "상대법", "어떻게 상대"]):
+        return "counter"
+
+    # 4. 유지 의도
+    if any(word in text for word in ["계속 쓰고", "계속 하고", "유지", "그 영웅", "현재 영웅", "내가 계속"]):
+        return "stay"
+
+    # 5. 플레이 개선 의도
+    if any(word in text for word in ["딜량", "데스", "킬", "스탯", "어떻게 플레이", "어떻게 해야", "운영", "잘하는 법"]):
         return "performance_improve"
+
+    # 6. 맵 전략 의도
     if any(word in text for word in ["맵", "공격", "수비", "거점"] + MAPS):
         return "map_strategy"
 
@@ -363,7 +406,20 @@ def infer_current_hero(message: str, context: Dict[str, Any], intent: str) -> Op
         if hero and hero not in enemy_heroes:
             return hero
 
-    if any(word in text for word in ["계속 쓰고", "계속 하고", "현재", "플레이", "하고 있"]):
+    if detect_wants_to_keep_hero(text) or any(word in text for word in [
+        "계속 쓰고",
+        "계속 하고",
+        "현재",
+        "플레이",
+        "하고 있",
+        "하고 싶어",
+        "하고싶어",
+        "쓰고 싶어",
+        "쓸건데",
+        "쓸 거",
+        "고정",
+        "원챔",
+    ]):
         hero = find_first_hero(text)
         if hero and hero not in enemy_heroes:
             return hero
@@ -658,6 +714,11 @@ def llm_parse_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
 8. 이 규칙들은 일반적인 패턴이다. 특정 영웅 이름이나 정확히 같은 문장 형태와
    일치할 때만 적용되는 것이 아니라, 같은 의미 구조를 가진 모든 메시지에 동일하게
    적용해야 한다.
+9. 사용자가 "X를 하고 싶어", "X 쓸건데", "X 할건데", "X 고정", "X 원챔",
+"X로 이기고 싶어", "X로 즐기고 싶어", "X 해도 돼?"처럼 말하면
+current_hero는 X이고 intent는 "stay"로 판단해라.
+이 경우 사용자는 영웅 교체 추천을 원하는 것이 아니라,
+X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 것이다.
 """
 
         raw = call_llm_text(llm, prompt)
@@ -1563,6 +1624,11 @@ answer 안에서는 마크다운 문법(**볼드**, *   리스트, # 제목 등)
    역할 변경 대신 "현재 영웅으로 생존력을 높이는 법" 또는 "힐팩 활용" 등 대안을 제시해라.
 4. 스킬명에 단축키를 같이 써라. 예: 다이너마이트(shift), 코치건(e).
 5. 마지막에 "바로 적용할 것 3가지"를 적어라.{enemy_naming_instruction}{swap_decision_instruction}
+6. 사용자가 특정 영웅을 하고 싶다, 쓸 것이다, 고정으로 한다, 원챔이다, 해도 되냐고 말한 경우
+   다른 영웅 추천을 먼저 하지 마라.
+   첫 문장은 반드시 "그 영웅을 유지해도 된다" 또는 "불리하지만 운영으로 풀 수 있다"처럼
+   사용자의 선택을 존중하는 방향으로 답해라.
+   이후 그 영웅으로 상대 조합을 상대하는 구체적인 운영법을 제시해라.
 
 절대 금지:
 - 허용 목록 밖 역할의 영웅 추천 (역할 고정으로 게임 내 선택 불가)
