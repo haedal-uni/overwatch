@@ -68,6 +68,14 @@ HEROES = [
     "메르시", "일리아리", "라이프위버", "주노", "제트팩 캣", "우양", "미즈키"
 ]
 
+HERO_ALIASES = {
+    "둠피": "둠피스트",
+    "솔저": "솔저76",
+    "솔저: 76": "솔저76",
+    "D.Va": "디바",
+    "디바": "디바",
+}
+
 MAPS = [
     "남극 반도", "네팔", "리장 타워", "부산", "사모아", "오아시스", "일리오스",
     "66번 국도", "감시 기지: 지브롤터", "도라도", "리알토", "샴발리 수도원",
@@ -203,28 +211,75 @@ def get_skill_shortcut_text() -> str:
 def normalize_hero_name(hero: Optional[str]) -> Optional[str]:
     if not hero:
         return None
+
     hero = hero.strip()
+
+    if hero in HERO_ALIASES:
+        return HERO_ALIASES[hero]
+
     if hero == "솔저: 76":
-        return "솔저"
+        return "솔저76"
+
     if hero == "D.Va":
         return "디바"
+
     return hero
 
 
 def find_first_hero(text: str) -> Optional[str]:
+    # 정식 영웅명 우선
     for hero in HEROES:
         if hero in text:
             return normalize_hero_name(hero)
+
+    # 별칭 처리
+    for alias, canonical in HERO_ALIASES.items():
+        if alias in text:
+            return canonical
+
     return None
+
+
+def hero_mentioned_in_text(hero: Optional[str], text: str) -> bool:
+    """
+    정규화된 영웅명이 원문에 직접 또는 별칭으로 언급되었는지 확인한다.
+    예: hero='둠피스트', text='둠피가 나만 노려' -> True
+    """
+    if not hero or not text:
+        return False
+
+    normalized = normalize_hero_name(hero)
+
+    # 정식 이름 그대로 등장
+    if normalized and normalized in text:
+        return True
+
+    # HEROES 원본 표기 확인
+    for h in HEROES:
+        if normalize_hero_name(h) == normalized and h in text:
+            return True
+
+    # 별칭 확인
+    for alias, canonical in HERO_ALIASES.items():
+        if canonical == normalized and alias in text:
+            return True
+
+    return False
 
 
 def find_all_heroes(text: str) -> List[str]:
     found = []
+
     for hero in HEROES:
         if hero in text:
             normalized = normalize_hero_name(hero)
             if normalized and normalized not in found:
                 found.append(normalized)
+
+    for alias, canonical in HERO_ALIASES.items():
+        if alias in text and canonical not in found:
+            found.append(canonical)
+
     return found
 
 
@@ -788,10 +843,17 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
         target_enemy = parsed.get("target_enemy")
         if target_enemy and isinstance(target_enemy, str):
             normalized_enemy = normalize_hero_name(target_enemy.strip())
+
             if (
                 normalized_enemy in [normalize_hero_name(h) for h in HEROES]
-                and normalized_enemy in message
+                and hero_mentioned_in_text(normalized_enemy, message)
             ):
+                result["llm_target_enemy"] = normalized_enemy
+
+            # if (
+            #     normalized_enemy in [normalize_hero_name(h) for h in HEROES]
+            #     and normalized_enemy in message
+            # ):
                 result["llm_target_enemy"] = normalized_enemy
             elif normalized_enemy:
                 logger.info(
@@ -804,7 +866,7 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
             verified_team = []
             for h in enemy_team:
                 n = normalize_hero_name(h)
-                if n in [normalize_hero_name(x) for x in HEROES] and n in message:
+                if n in [normalize_hero_name(x) for x in HEROES] and hero_mentioned_in_text(n, message):
                     verified_team.append(n)
             if verified_team:
                 result["llm_enemy_team"] = verified_team
@@ -1023,12 +1085,22 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         current_hero = context.get("current_hero")
     if intent == "swap" and not current_hero:
         current_hero = context.get("current_hero")
-    if intent == "counter" and not target_enemy:
-        target_enemy = context.get("target_enemy")
-        if target_enemy:
-            # 사용자가 명시적으로 "카운터" 의도를 다시 표현한 경우는
-            # 이전 대화의 적을 이어받는 것이 자연스러우므로 언급된 것으로 처리
-            enemy_named_this_turn = True
+
+
+    if intent in ["counter", "stay", "performance_improve"] and not target_enemy:
+        previous_target_enemy = context.get("target_enemy")
+
+        # 사용자가 "난 애쉬로 할꺼야"처럼 직전 상황에 대한 유지 의사를 말한 경우
+        # 직전 상대를 이어받는다.
+        if previous_target_enemy:
+            target_enemy = previous_target_enemy
+
+            if intent == "counter":
+                enemy_named_this_turn = True
+            elif intent == "stay":
+                # 이번 턴에 이름을 다시 말하지 않았지만,
+                # 직전 질문의 상대를 이어받아 운영법을 설명해야 하는 흐름이다.
+                enemy_named_this_turn = True
 
     game_state = {
         "raw_user_message": message,
@@ -1677,11 +1749,34 @@ answer 안에서는 마크다운 문법(**볼드**, *   리스트, # 제목 등)
             # 인용/응답한 것일 뿐이므로, 다른 역할이라는 이유로 치환해버리면
             # "윈스턴이랑 같이 가는데"가 "다른 영웅이랑 같이 가는데"로 바뀌는
             # 식의 엉뚱한 결과가 나온다(실제 발생 사례).
+
+
             user_mentioned_heroes = set(find_all_heroes(state.get("message", "")))
+
+            enemy_context_heroes = set()
+
+            target_enemy = state.get("target_enemy")
+            if target_enemy:
+                enemy_context_heroes.add(normalize_hero_name(target_enemy))
+
+            high_threat_enemy = state.get("high_threat_enemy")
+            if high_threat_enemy:
+                enemy_context_heroes.add(normalize_hero_name(high_threat_enemy))
+
+            for h in state.get("enemy_team", []) or []:
+                normalized = normalize_hero_name(h)
+                if normalized:
+                    enemy_context_heroes.add(normalized)
+
             forbidden_in_answer = [
                 h for h in find_all_heroes(answer)
-                if h not in answer_allowed_hero_set and h not in user_mentioned_heroes
+                if (
+                    h not in answer_allowed_hero_set
+                    and h not in user_mentioned_heroes
+                    and h not in enemy_context_heroes
+                )
             ]
+
             if forbidden_in_answer:
                 logger.warning(
                     "[ROLE VIOLATION] 답변에 허용 범위 밖 영웅 등장: %s (current_hero=%s role=%s, "
@@ -1778,12 +1873,15 @@ JSON 형식으로만 답해라.
 }}
 
 규칙:
-- 반드시 사용자 1인칭 시점의 짧은 질문/요청문으로 작성. 예: "더 자세히 알려줘", "영웅 바꿔야 해?", "이 상황에서 딜 더 올리는 법은?"
-- AI가 사용자에게 묻는 형태 절대 금지. 예: "어떤 영웅을 사용했나요?" (X)
-- AI가 추가 설명하는 형태 절대 금지. 예: "궁극기 활용법을 알아보세요" (X)
+- 반드시 사용자 1인칭 시점의 짧은 질문/요청문으로 작성.
+- AI가 사용자에게 묻는 형태 절대 금지.
+- AI가 추가 설명하는 형태 절대 금지.
 - 이번 답변 내용과 자연스럽게 이어지는 흐름으로 작성.
 - 버튼 라벨이므로 15자 이내의 짧은 문장.
 - 문서, 출처, 내부 시스템 용어 금지.
+- 카운터 대상이 있으면, 추천 질문 3개 중 최소 1개는 반드시 그 카운터 대상과 관련된 질문으로 작성해라.
+- 사용자가 언급하지 않은 상대 영웅 이름을 새로 만들지 마라.
+- 예를 들어 카운터 대상이 둠피스트라면 겐지, 트레이서, 윈스턴 같은 다른 영웅을 임의로 넣지 마라.
 """
 
         text = call_llm_text_creative(llm, prompt)
@@ -1809,34 +1907,38 @@ def build_fallback_suggested_questions(state: ChatbotGraphState) -> List[str]:
     current_hero = state.get("current_hero")
     map_name = state.get("map_name")
 
+    if target_enemy and current_hero:
+        return [
+            f"{target_enemy} 진입 막는 법은?",
+            f"{current_hero} 위치 잡는 법은?",
+            f"{target_enemy} 상대로 궁 타이밍은?",
+        ]
+
     if state.get("has_stats"):
         return [
             f"{current_hero or '현재 영웅'} 데스 줄이는 법 알려줘",
             "딜량 더 올리는 방법은?",
             "이 스탯이면 영웅 바꿔야 해?",
         ]
+
     if state.get("intent") == "performance_improve" and current_hero:
         return [
             f"{current_hero} 덜 죽는 운영법 알려줘",
             f"{current_hero} 딜각 잡는 위치는?",
             f"{current_hero} 스킬 순서 알려줘",
         ]
+
     if state.get("intent") == "swap":
         return [
             "이 조합에서 가장 좋은 픽은?",
             "상대 조합 대응 픽 나눠줘",
             f"{map_name or '이 맵'}에서 딜러 추천해줘",
         ]
-    if target_enemy:
-        return [
-            f"{target_enemy} 상대할 때 피해야 할 행동은?",
-            f"{target_enemy} 카운터 영웅 알려줘",
-            f"{target_enemy} 잡는 스킬 순서는?",
-        ]
+
     return [
-        "지금 상황에서 먼저 할 일 알려줘",
-        "스킬 순서 어떻게 써야 해?",
-        "영웅 바꿔야 하는 타이밍은?",
+        "지금 먼저 할 일은?",
+        "스킬 순서 알려줘",
+        "포지션 잡는 법은?",
     ]
 
 
