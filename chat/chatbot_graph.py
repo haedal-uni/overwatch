@@ -16,6 +16,7 @@ class ChatbotGraphState(TypedDict, total=False):
     conversation_context: Dict[str, Any]
     context_patch: Dict[str, Any]
     role_filter: Optional[str]
+    role_filter_explicit: bool
     intent: Optional[str]
     target_enemy: Optional[str]
     current_hero: Optional[str]
@@ -74,6 +75,7 @@ HERO_ALIASES = {
     "솔저: 76": "솔저76",
     "D.Va": "디바",
     "디바": "디바",
+    "시메": "시메트라",
 }
 
 MAPS = [
@@ -267,6 +269,40 @@ def hero_mentioned_in_text(hero: Optional[str], text: str) -> bool:
     return False
 
 
+def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
+    """
+    영웅 이름이 문장에 등장했더라도 "상대 겐지"처럼 적으로 언급된 경우와
+    "겐지로 할게"처럼 사용자가 직접 플레이한다고 말한 경우를 구분한다.
+    """
+    normalized = normalize_hero_name(hero)
+    if not normalized or not text:
+        return False
+
+    names = set()
+    for h in HEROES:
+        if normalize_hero_name(h) == normalized:
+            names.add(h)
+    for alias, canonical in HERO_ALIASES.items():
+        if canonical == normalized:
+            names.add(alias)
+    names.add(normalized)
+
+    for name in names:
+        escaped = re.escape(name)
+        if re.search(rf"(?:난|나는|나|저는|제가|내가)\s*{escaped}", text):
+            return True
+        if re.search(rf"{escaped}\s*(?:로|으로)\s*(?:플레이|하고|하는|할|가|갈|쓰|쓸|이기|즐기)", text):
+            return True
+        if re.search(
+            rf"{escaped}\s*(?:하고\s*있|하는\s*중|하고\s*싶|하고싶|할\s*거|할건데|"
+            rf"쓰고\s*싶|쓰고싶|쓸건데|계속|유지|고정|원챔)",
+            text,
+        ):
+            return True
+
+    return False
+
+
 def find_all_heroes(text: str) -> List[str]:
     found = []
 
@@ -306,6 +342,7 @@ def get_hero_role(hero: Optional[str]) -> Optional[str]:
 
 def extract_enemy_team(text: str) -> List[str]:
     patterns = [
+        r"상대가\s*([가-힣A-Za-z0-9\.,\s]+)",
         r"상대는\s*([가-힣A-Za-z0-9\.,\s]+)",
         r"상대\s*조합은\s*([가-힣A-Za-z0-9\.,\s]+)",
         r"적은\s*([가-힣A-Za-z0-9\.,\s]+)",
@@ -337,6 +374,8 @@ def detect_wants_to_keep_hero(text: str) -> bool:
     # 영웅 이름이 아예 없으면 이 함수에서는 판단하지 않음
     hero = find_first_hero(text)
     if not hero:
+        return False
+    if hero == find_enemy_mentioned_hero(text):
         return False
 
     # 붙여 쓰기 대응: "파라쓸건데", "파라할건데", "파라하고싶어"
@@ -396,27 +435,59 @@ def infer_intent_by_rule(message: str, context: Dict[str, Any]) -> str:
     return "general"
 
 
+# "OO 때문에", "상대 OO", "OO를 카운터" 처럼 문장에서 '상대(적) 영웅'을 가리키는
+# 패턴. infer_target_enemy와 infer_current_hero가 공유한다 — current_hero
+# 추론이 이 패턴에 걸리는 영웅(즉, 명백히 "상대"로 언급된 영웅)을 실수로
+# "지금 플레이 중인 영웅"으로 잘못 집어가지 않도록 막기 위해서다.
+ENEMY_MENTION_PATTERNS = [
+    r"([가-힣A-Za-z0-9\.]+)[이가]\s*(?:우리\s*팀|아군|힐러|팀원)",
+    r"([가-힣A-Za-z0-9\.]+)\s*때문에",
+    r"([가-힣A-Za-z0-9\.]+)[을를]?\s*카운터",
+    r"([가-힣A-Za-z0-9\.]+)[을를]?\s*견제",
+    r"([가-힣A-Za-z0-9\.]+)[을를]?\s*잡",
+    r"([가-힣A-Za-z0-9\.]+)[을를]?\s*막",
+    r"상대[가은는]?\s*([가-힣A-Za-z0-9\.]+)",
+    r"상대\s*([가-힣A-Za-z0-9\.]+)",
+]
+
+
+def normalize_hero_candidate(candidate: Optional[str]) -> Optional[str]:
+    if not candidate:
+        return None
+
+    valid_heroes = {normalize_hero_name(h) for h in HEROES}
+    cleaned = candidate.strip()
+    normalized = normalize_hero_name(cleaned)
+    if normalized in valid_heroes:
+        return normalized
+
+    # "상대 겐지가"처럼 자유 캡처 패턴이 이름 뒤 조사까지 먹는 경우 보정.
+    for suffix in ["이", "가", "은", "는", "을", "를", "도", "만"]:
+        if cleaned.endswith(suffix):
+            normalized = normalize_hero_name(cleaned[:-len(suffix)].strip())
+            if normalized in valid_heroes:
+                return normalized
+
+    return None
+
+
+def find_enemy_mentioned_hero(text: str) -> Optional[str]:
+    for pattern in ENEMY_MENTION_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            candidate = normalize_hero_candidate(match.group(1))
+            if candidate:
+                return candidate
+    return None
+
+
 def infer_target_enemy(message: str, context: Dict[str, Any], intent: str) -> Optional[str]:
     text = message.strip()
     current_hero = normalize_hero_name(context.get("current_hero"))
 
-    counter_patterns = [
-        r"([가-힣A-Za-z0-9\.]+)[이가]\s*(?:우리\s*팀|아군|힐러|팀원)",
-        r"([가-힣A-Za-z0-9\.]+)\s*때문에",
-        r"([가-힣A-Za-z0-9\.]+)[을를]?\s*카운터",
-        r"([가-힣A-Za-z0-9\.]+)[을를]?\s*견제",
-        r"([가-힣A-Za-z0-9\.]+)[을를]?\s*잡",
-        r"([가-힣A-Za-z0-9\.]+)[을를]?\s*막",
-        r"상대\s*([가-힣A-Za-z0-9\.]+)",
-    ]
-
-    for pattern in counter_patterns:
-        match = re.search(pattern, text)
-        if match:
-            candidate = normalize_hero_name(match.group(1))
-            if candidate in [normalize_hero_name(h) for h in HEROES]:
-                if candidate != current_hero:
-                    return candidate
+    enemy_mentioned = find_enemy_mentioned_hero(text)
+    if enemy_mentioned and enemy_mentioned != current_hero:
+        return enemy_mentioned
 
     if intent == "swap":
         new_situation = bool(find_map(text) or find_side(text) or extract_enemy_team(text))
@@ -454,6 +525,15 @@ def infer_current_hero(message: str, context: Dict[str, Any], intent: str) -> Op
     te = normalize_hero_name(context.get("target_enemy"))
     if te:
         enemy_heroes.add(te)
+
+    # 이번 메시지 안에서 "상대 OO", "OO 때문에" 처럼 적으로 언급된 영웅도
+    # 제외 대상에 추가한다. 그렇지 않으면 "상대 리퍼 때문에 우리팀 힐러가
+    # 계속 잘려"처럼, 적 영웅 이름과 "계속" 같은 트리거 단어가 같은 문장에
+    # 우연히 있을 때 적 영웅을 사용자 본인이 플레이 중인 영웅으로 잘못
+    # 인식하는 사고가 난다(실제 발생 사례).
+    enemy_mentioned = find_enemy_mentioned_hero(text)
+    if enemy_mentioned:
+        enemy_heroes.add(enemy_mentioned)
 
     if "말고" in text:
         before = text.split("말고")[0]
@@ -499,15 +579,31 @@ def role_filter_from_text(message: str) -> Optional[str]:
     return None
 
 
-def should_ask_role_filter(state: ChatbotGraphState) -> bool:
-    intent = state.get("intent")
-    target_enemy = state.get("target_enemy")
-    role_filter = state.get("role_filter")
+# current_hero가 전혀 파악되지 않은 채로 들어오면 역할을 반드시 되물어야 하는
+# intent. "map_strategy"는 특정 영웅과 무관한 맵 운영 질문일 수 있어 제외한다.
+ROLE_CLARIFICATION_INTENTS = {"performance_improve", "stay", "swap", "general", "counter"}
 
-    if intent != "counter":
-        return False
-    if not target_enemy:
-        return False
+
+def should_ask_role_filter(state: ChatbotGraphState) -> bool:
+    """
+    사용자가 지금 어떤 역할(탱커/딜러/힐러)로 플레이 중인지 전혀 알 수 없을 때
+    역할을 먼저 물어봐야 하는지 판단한다. 두 가지 경우를 모두 포함한다.
+
+    1) 상대 영웅을 카운터하려는 상황(intent=="counter")인데 상대는 지목했지만
+       내 역할을 알 수 없는 경우 — 예전부터 있던 흐름.
+    2) 상대 영웅을 지목했는지 여부와 무관하게, 지금 무슨 영웅으로 플레이
+       중인지조차 전혀 모르는 상태에서 개인화된 답이 필요한 질문이 들어온 경우
+       (실제 발생 사례: "상대 라인 돌진 때문에 우리팀이 자꾸 죽어 가까이 가지
+       말라고 해도 계속 가까이 가, 어떻게 해야해?"처럼 상대 영웅 이름조차 없는
+       일반적인 대처법 질문). 이때도 역할을 모르는 채로 바로 답하면 엉뚱한
+       역할 기준으로 추천하는 사고가 나므로, 2)번도 반드시 역할부터 물어야 한다.
+
+    role_filter(effective_role_filter)는 merge_context_node에서 이미
+    explicit_role_filter → current_hero_role → 세션 잔존값 순으로 채워지므로,
+    여기서 role_filter가 비어 있다는 것은 곧 "현재 역할을 어떤 방법으로도
+    알아낼 수 없었다"는 뜻이다.
+    """
+    role_filter = state.get("role_filter")
     if role_filter:
         return False
 
@@ -515,14 +611,16 @@ def should_ask_role_filter(state: ChatbotGraphState) -> bool:
     if role_filter_from_text(message):
         return False
 
-    broad_counter_words = [
-        "카운터 하는 영웅",
-        "카운터치는 영웅",
-        "카운터 영웅",
-        "상대하기 좋은 영웅",
-        "막는 영웅",
-    ]
-    return any(word in message for word in broad_counter_words)
+    intent = state.get("intent")
+    target_enemy = state.get("target_enemy")
+
+    if intent == "counter" and target_enemy:
+        return True
+
+    if not state.get("current_hero") and intent in ROLE_CLARIFICATION_INTENTS:
+        return True
+
+    return False
 
 
 def sanitize_answer_for_user(answer: str) -> str:
@@ -708,10 +806,21 @@ def llm_parse_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     if state.get("error"):
         return {}
 
+    message = state.get("message", "")
+
+    # message가 비어 있는 턴은 실제 사용자 발화가 아니라 role_filter 버튼 클릭
+    # 같은 순수 선택 신호다(chat.html의 sendRoleFilter가 message: ''로 보냄).
+    # 이런 턴을 LLM에 그대로 넘기면 "오버워치와 무관해 보이는 빈 메시지"를
+    # intent="off_topic"으로 잘못 분류해버려, merge_context_node가 원래
+    # 질문(pending_question)을 이어받기도 전에 고정 오프토픽 답변으로
+    # 새버리는 사고가 난다(실제 발생 사례: 역할 버튼 클릭 시 오프토픽 응답).
+    # 뽑아낼 정보 자체가 없으므로 LLM 호출 없이 그대로 규칙 기반 폴백에 맡긴다.
+    if not message.strip():
+        return {}
+
     try:
         _chatbot, _retriever, llm = get_chatbot_components()
 
-        message = state.get("message", "")
         context = state.get("conversation_context", {}) or {}
 
         hero_list = ", ".join(HEROES)
@@ -742,7 +851,7 @@ def llm_parse_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
 아래 JSON 형식으로만 답해라. 다른 텍스트는 출력하지 마라.
 
 {{
-  "intent": "counter | swap | stay | performance_improve | map_strategy | general 중 하나",
+  "intent": "counter | swap | stay | performance_improve | map_strategy | general | off_topic 중 하나",
   "current_hero": "사용자가 지금 플레이 중인 영웅 이름 또는 null",
   "current_hero_role": "tank | damage | support 또는 null",
   "target_enemy": "카운터하거나 상대해야 할 적 영웅 이름 또는 null",
@@ -750,6 +859,12 @@ def llm_parse_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
 }}
 
 추론 규칙:
+0. 메시지가 오버워치2 게임(영웅, 전략, 상대 대처, 팀 조합, 맵, 스탯 등)과 전혀
+   무관하면(예: 단순 인사말, 잡담, 다른 게임/주제 질문) intent를 "off_topic"으로
+   해라. 이 경우 current_hero/current_hero_role/target_enemy는 null,
+   enemy_team은 빈 배열로 둬라. 메시지가 오버워치와 조금이라도 관련이 있다면
+   (영웅 이름, 게임 상황, 전략 관련 표현이 하나라도 있다면) off_topic으로
+   분류하지 마라 — 애매하면 off_topic이 아니라 "general"로 분류해라.
 1. current_hero는 사용자가 직접 플레이하는 영웅만. 상대 영웅은 target_enemy나 enemy_team에.
 2. 힐/지원을 받지 못한다는 불만 표현(예: "힐을 못 받는다", "지원이 끊긴다", "케어가 안 된다" 등
    어떤 표현이든)은 사용자가 지원 부족 문제를 겪고 있다는 뜻이지, 사용자 본인이 힐러를
@@ -790,25 +905,37 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
         result: Dict[str, Any] = {}
 
         intent = parsed.get("intent")
-        if intent in ["counter", "swap", "stay", "performance_improve", "map_strategy", "general"]:
+        if intent in ["counter", "swap", "stay", "performance_improve", "map_strategy", "general", "off_topic"]:
             result["llm_intent"] = intent
 
+        enemy_mentioned_in_message = find_enemy_mentioned_hero(message)
         current_hero = parsed.get("current_hero")
         current_hero_confirmed_in_message = False
         if current_hero and isinstance(current_hero, str):
             normalized = normalize_hero_name(current_hero.strip())
             if normalized in [normalize_hero_name(h) for h in HEROES]:
-                result["llm_current_hero"] = normalized
-                role = HERO_TO_ROLE.get(normalized)
-                if role:
-                    result["llm_current_hero_role"] = role
-                # current_hero는 "이전 영웅을 이어받는 것" 자체는 정당한 경우가 많아
-                # (예: "딜 더 올리는 법은?" 같은 후속 질문) target_enemy처럼 무조건
-                # 버리지는 않는다. 다만 메시지 원문에 실제로 등장했는지는 별도로
-                # 표시해, swap처럼 "교체"를 다루는 민감한 intent와 결합됐을 때
-                # 안전장치가 작동할 수 있게 한다.
-                if normalized in message:
-                    current_hero_confirmed_in_message = True
+                if (
+                    enemy_mentioned_in_message == normalized
+                    and not hero_mentioned_as_current_hero(normalized, message)
+                ):
+                    logger.info(
+                        "[LLM CURRENT HERO GUARD] '%s'는 이번 메시지에서 상대 영웅으로 "
+                        "언급되어 current_hero 후보에서 제외함: %s",
+                        normalized,
+                        message,
+                    )
+                else:
+                    result["llm_current_hero"] = normalized
+                    role = HERO_TO_ROLE.get(normalized)
+                    if role:
+                        result["llm_current_hero_role"] = role
+                    # current_hero는 "이전 영웅을 이어받는 것" 자체는 정당한 경우가 많아
+                    # (예: "딜 더 올리는 법은?" 같은 후속 질문) target_enemy처럼 무조건
+                    # 버리지는 않는다. 다만 메시지 원문에 실제로 등장했는지는 별도로
+                    # 표시해, swap처럼 "교체"를 다루는 민감한 intent와 결합됐을 때
+                    # 안전장치가 작동할 수 있게 한다.
+                    if hero_mentioned_as_current_hero(normalized, message):
+                        current_hero_confirmed_in_message = True
         result["llm_current_hero_confirmed"] = current_hero_confirmed_in_message
 
         # 안전장치: intent가 "swap"(영웅 교체 여부 판단)인데 정작 메시지 원문에
@@ -850,11 +977,6 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
             ):
                 result["llm_target_enemy"] = normalized_enemy
 
-            # if (
-            #     normalized_enemy in [normalize_hero_name(h) for h in HEROES]
-            #     and normalized_enemy in message
-            # ):
-                result["llm_target_enemy"] = normalized_enemy
             elif normalized_enemy:
                 logger.info(
                     "[LLM_PARSE_CONTEXT] target_enemy='%s'가 메시지 원문에 없어 무시함: %s",
@@ -903,16 +1025,16 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         context = {}
 
     explicit_role_filter = state.get("role_filter") or role_filter_from_text(message)
-    # 세션에 남아있는 role_filter는 "카운터 역할 필터 질문(예: 탱커로 볼까요?)"에
-    # 대한 응답 흐름(pending_question)에서만 의미가 있다. 그 흐름이 아니면(=일반
-    # 대화로 넘어가면) 세션 잔존값을 그대로 이어받지 않는다. 그렇지 않으면 한 번
-    # "탱커로 추천해줘"라고 물었던 필터가 평생 세션에 박혀, 전혀 다른 영웅으로
-    # 갈아탄 뒤에도 답변 허용 목록을 계속 탱커로 고정시키는 사고가 난다.
-    stale_role_filter = context.get("role_filter") if context.get("pending_question") else None
-    role_filter = explicit_role_filter or stale_role_filter
+    awaiting_role_filter_reply = bool(context.get("pending_question"))
+    role_filter_reply_consumed = bool(explicit_role_filter and awaiting_role_filter_reply)
+    # 세션에 남아있는 role_filter를 새 질문에 자동 재사용하지 않는다. 역할 필터는
+    # 사용자가 이번 턴에 버튼/텍스트로 명시했을 때만 적용한다. 그렇지 않으면
+    # 이전 역할 버튼 답변이 다음 새 질문까지 새어 들어가, 현재 역할을 모르는
+    # 상황에서도 되묻지 않고 바로 답하는 문제가 생긴다.
+    role_filter = explicit_role_filter
 
     effective_message = message
-    if explicit_role_filter and context.get("pending_question"):
+    if role_filter_reply_consumed:
         effective_message = context.get("pending_question")
 
     llm_intent       = state.get("llm_intent")
@@ -925,6 +1047,22 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
     intent       = llm_intent or infer_intent_by_rule(effective_message, context)
     current_hero = llm_current_hero or infer_current_hero(effective_message, context, intent)
+
+    enemy_mentioned_as_enemy = find_enemy_mentioned_hero(effective_message)
+    if (
+        current_hero
+        and enemy_mentioned_as_enemy == current_hero
+        and not hero_mentioned_as_current_hero(current_hero, effective_message)
+    ):
+        logger.info(
+            "[CURRENT HERO ENEMY GUARD] '%s'는 이번 메시지에서 상대 영웅으로 "
+            "언급되어 current_hero에서 제거함: %s",
+            current_hero,
+            effective_message,
+        )
+        current_hero = None
+        llm_hero_role = None
+        llm_current_hero_confirmed = False
 
     # current_hero가 이번 메시지에 직접 등장하지 않았는데, llm_parse_context_node의
     # SWAP INTENT GUARD가 실제로 발동했다면(swap_guard_triggered=True) — 즉 LLM이
@@ -1064,6 +1202,41 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         if intent == "general":
             intent = "counter"
 
+    previous_target_enemy_for_role = normalize_hero_name(context.get("target_enemy"))
+    current_hero_explicit_this_turn = bool(
+        current_hero and hero_mentioned_as_current_hero(current_hero, effective_message)
+    )
+    if explicit_role_filter and current_hero and not current_hero_explicit_this_turn:
+        logger.info(
+            "[EXPLICIT ROLE FILTER CLEARS STALE HERO] 사용자가 이번 턴에 역할 필터 '%s'를 "
+            "명시했지만 현재 영웅 '%s'는 직접 언급하지 않아 이전 영웅 컨텍스트를 버림",
+            explicit_role_filter,
+            current_hero,
+        )
+        current_hero = None
+        llm_hero_role = None
+        current_hero_uncertain = False
+        current_hero_explicit_this_turn = False
+
+    new_enemy_without_current_role = bool(
+        target_enemy
+        and enemy_named_this_turn
+        and target_enemy != previous_target_enemy_for_role
+        and current_hero
+        and not current_hero_explicit_this_turn
+        and not explicit_role_filter
+    )
+    if new_enemy_without_current_role:
+        logger.info(
+            "[CURRENT HERO STALE ON NEW ENEMY] 이번 턴에 새 상대 '%s'가 언급됐지만 "
+            "사용자 영웅/역할은 직접 언급되지 않아 이전 current_hero='%s'를 버림",
+            target_enemy,
+            current_hero,
+        )
+        current_hero = None
+        llm_hero_role = None
+        current_hero_uncertain = False
+
     current_hero_role = llm_hero_role or get_hero_role(current_hero)
 
     # effective_role_filter 결정 우선순위:
@@ -1081,9 +1254,9 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     else:
         effective_role_filter = role_filter
 
-    if intent == "performance_improve" and not current_hero:
+    if intent == "performance_improve" and not current_hero and not explicit_role_filter:
         current_hero = context.get("current_hero")
-    if intent == "swap" and not current_hero:
+    if intent == "swap" and not current_hero and not explicit_role_filter:
         current_hero = context.get("current_hero")
 
 
@@ -1113,6 +1286,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "side": side,
         "enemy_team": enemy_team,
         "role_filter": effective_role_filter,
+        "role_filter_explicit": bool(explicit_role_filter),
         "enemy_stats": state.get("enemy_stats") or context.get("enemy_stats"),
         "my_stats": state.get("my_stats") or context.get("my_stats"),
         "my_team_stats": state.get("my_team_stats") or context.get("my_team_stats"),
@@ -1130,6 +1304,9 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "no_enemy_turn_count": no_enemy_turn_count,
         "last_message_ts": now_ts,
     }
+    if awaiting_role_filter_reply:
+        context_patch["pending_question"] = None
+        context_patch["pending_intent"] = None
 
     if target_enemy:
         context_patch["target_enemy"] = target_enemy
@@ -1175,6 +1352,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "side": side,
         "enemy_team": enemy_team,
         "role_filter": effective_role_filter,
+        "role_filter_explicit": bool(explicit_role_filter),
         "game_state": game_state,
         "context_patch": context_patch,
         "enemy_named_this_turn": enemy_named_this_turn,
@@ -1187,13 +1365,21 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
 
 def clarify_role_filter_node(state: ChatbotGraphState) -> ChatbotGraphState:
-    target_enemy = state.get("target_enemy") or "상대 영웅"
+    target_enemy = state.get("target_enemy")
     message = state.get("message", "")
 
-    answer = (
-        f"{target_enemy}를 카운터하는 영웅을 어떤 역할 기준으로 볼까요?\n\n"
-        "원하는 역할을 선택하면 그 역할의 영웅만 골라서 추천해드릴게요."
-    )
+    if target_enemy:
+        answer = (
+            f"{target_enemy}를 카운터하는 영웅을 어떤 역할 기준으로 볼까요?\n\n"
+            "원하는 역할을 선택하면 그 역할의 영웅만 골라서 추천해드릴게요."
+        )
+    else:
+        # 상대 영웅을 특정하지 않은 일반적인 대처법 질문(예: "돌진 때문에 계속
+        # 죽어, 어떻게 해야해?")도 current_hero를 모르면 역할부터 물어야 한다.
+        answer = (
+            "지금 어떤 역할(탱커/딜러/힐러)로 플레이 중이신가요?\n\n"
+            "역할을 알려주시면 그 역할 기준으로 상황에 맞게 답변드릴게요."
+        )
 
     choice_buttons = [
         {"label": "전체", "value": "all", "type": "role_filter"},
@@ -1206,8 +1392,9 @@ def clarify_role_filter_node(state: ChatbotGraphState) -> ChatbotGraphState:
         **state.get("context_patch", {}),
         "pending_question": message,
         "pending_intent": "counter",
-        "target_enemy": target_enemy,
     }
+    if target_enemy:
+        context_patch["target_enemy"] = target_enemy
 
     return {
         "answer": answer,
@@ -1219,6 +1406,45 @@ def clarify_role_filter_node(state: ChatbotGraphState) -> ChatbotGraphState:
             "choice_buttons": choice_buttons,
             "suggested_questions": [],
             "context_patch": context_patch,
+        },
+    }
+
+
+OFF_TOPIC_ANSWER = (
+    "저는 오버워치2 게임 코칭만 도와드릴 수 있어요. "
+    "상대 영웅 대처법, 팀 조합, 맵 운영, 개인 플레이 개선처럼 "
+    "오버워치2 게임 상황과 관련된 질문을 해주세요."
+)
+
+
+def off_topic_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
+    """
+    오버워치2와 무관한 메시지(인사, 잡담, 전혀 다른 주제 등)에는 LLM이 매번
+    다른 문구를 즉석에서 지어내지 않고, 항상 같은 고정 문구로만 응답한다.
+    이 노드는 LLM을 호출하지 않는다 — intent 분류(llm_parse_context_node)만
+    LLM이 하고, 실제로 사용자에게 보여줄 답변은 고정값이라 관련 없는 주제에
+    대해 그럴듯하게 대답해버리는 것을 원천 차단한다.
+    """
+    context_patch = {
+        **state.get("context_patch", {}),
+    }
+
+    return {
+        "answer": OFF_TOPIC_ANSWER,
+        "recommendation_type": "off_topic",
+        "recommended_heroes": [],
+        "choice_buttons": [],
+        "suggested_questions": [],
+        "context_patch": context_patch,
+        "result": {
+            "answer": OFF_TOPIC_ANSWER,
+            "intent": "off_topic",
+            "recommendation_type": "off_topic",
+            "recommended_heroes": [],
+            "suggested_questions": [],
+            "choice_buttons": [],
+            "context_patch": context_patch,
+            "has_stats": False,
         },
     }
 
@@ -1340,6 +1566,7 @@ def judge_strategy_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
         intent = state.get("intent") or "general"
         role_filter = state.get("role_filter") or "all"
+        role_filter_explicit = state.get("role_filter_explicit", False)
         current_hero = state.get("current_hero")
         current_hero_role = state.get("current_hero_role")
         target_enemy = state.get("target_enemy")
@@ -1356,9 +1583,15 @@ def judge_strategy_node(state: ChatbotGraphState) -> ChatbotGraphState:
         # 옛 영웅 기준으로 답이 좁혀지는 사고가 난다.
         current_hero_uncertain = state.get("current_hero_uncertain", False)
 
-        # current_hero_role(실제 플레이 중인 영웅의 역할)을 role_filter보다 우선한다.
-        # role_filter는 세션에 걸쳐 누적되므로 이전 턴의 잔존값일 수 있다.
-        if current_hero_role and current_hero_role in ROLE_HEROES and role_filter != current_hero_role:
+        # 버튼/텍스트로 이번 턴에 명시된 역할 필터가 있으면 그것이 최우선이다.
+        # current_hero_role은 이전 대화에서 이어진 값일 수 있어, 명시 선택 역할을
+        # 덮어쓰면 "힐러" 버튼을 눌렀는데 딜러 추천이 나오는 사고가 난다.
+        if (
+            not role_filter_explicit
+            and current_hero_role
+            and current_hero_role in ROLE_HEROES
+            and role_filter != current_hero_role
+        ):
             if role_filter in ROLE_HEROES:
                 logger.info(
                     "[ROLE FILTER OVERRIDE] role_filter='%s'가 current_hero_role='%s'와 달라 "
@@ -1397,6 +1630,13 @@ def judge_strategy_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 f"추천 영웅은 반드시 같은 {ROLE_LABELS.get(current_hero_role)} 역할만:\n"
                 f"{', '.join(ROLE_HEROES[current_hero_role])}\n"
                 f"팀 문제·힐 부족·어떤 이유가 있어도 이 목록 밖의 영웅은 절대 추천 불가."
+            )
+        elif role_filter == "all":
+            role_constraint = (
+                "사용자가 '전체' 역할을 선택했다. 특정 역할로 제한하지 말고, "
+                "탱커/딜러/힐러 각 역할에서 이 상황에 대응할 수 있는 영웅을 "
+                "최소 1명씩 골고루 골라 역할별로 균형 있게 추천해라. "
+                "한 역할에만 치우친 추천은 하지 마라."
             )
         else:
             role_constraint = "역할 제한 없음. 상황에 맞는 영웅을 자유롭게 고려해라."
@@ -1514,6 +1754,7 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
         skill_shortcut_text = get_skill_shortcut_text()
         role_filter = state.get("role_filter") or "all"
+        role_filter_explicit = state.get("role_filter_explicit", False)
         current_hero = state.get("current_hero")
         current_hero_role = state.get("current_hero_role")
         has_stats = state.get("has_stats", False)
@@ -1524,13 +1765,15 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         # 질문(예: 팀 조합 질문)인데도 옛 영웅 기준으로 답이 좁혀지는 사고가 난다.
         current_hero_uncertain = state.get("current_hero_uncertain", False)
 
-        # current_hero_role(실제로 지금 플레이 중인 영웅의 역할)이 가장 신뢰도 높은
-        # 정보다. role_filter는 세션에 걸쳐 누적되는 값이라 이전 턴의 잔존값이 남아있을
-        # 수 있다(예: 예전에 "탱커 추천해줘"라고 물어봤던 role_filter='tank'가 그대로
-        # 남아, 정작 지금은 에코를 플레이 중인데 탱커 목록으로 답변이 제한되는 사고).
-        # 따라서 current_hero_role을 항상 최우선으로 하고, role_filter는 current_hero_role이
-        # 아예 없을 때(역할이 불명확한 일반 질문)만 보조적으로 사용한다.
-        if current_hero_role and current_hero_role in ROLE_HEROES and role_filter != current_hero_role:
+        # 버튼/텍스트로 이번 턴에 명시된 역할 필터가 있으면 그것이 최우선이다.
+        # current_hero_role은 이전 대화에서 이어진 값일 수 있어, 명시 선택 역할을
+        # 덮어쓰면 "힐러" 버튼을 눌렀는데 딜러 추천이 나오는 사고가 난다.
+        if (
+            not role_filter_explicit
+            and current_hero_role
+            and current_hero_role in ROLE_HEROES
+            and role_filter != current_hero_role
+        ):
             if role_filter in ROLE_HEROES:
                 logger.info(
                     "[ROLE FILTER OVERRIDE] role_filter='%s'가 current_hero_role='%s'와 달라 "
@@ -1562,6 +1805,14 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 f"힐러 교체, 탱커 교체 등 다른 역할 영웅 추천은 절대 하지 마라."
             )
             answer_allowed_hero_set = set(ROLE_HEROES[current_hero_role])
+        elif role_filter == "all":
+            allowed_heroes_text = (
+                "사용자가 '전체' 역할을 선택했다. 특정 역할로 제한하지 말고, "
+                "탱커/딜러/힐러 각 역할에서 이 상황에 대응할 수 있는 영웅을 "
+                "최소 1명씩 골고루 골라 역할별로 균형 있게 제안해라. "
+                "한 역할에만 치우친 추천은 하지 마라."
+            )
+            answer_allowed_hero_set = None
         else:
             allowed_heroes_text = "역할 제한 없음. 상황에 맞는 영웅을 자유롭게 추천해도 된다."
             answer_allowed_hero_set = None
@@ -1612,6 +1863,18 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 f"{current_hero}를 유지할 때의 장점을 비교해서 판단 근거를 명확히 제시해라."
             )
 
+        if current_hero:
+            current_hero_context_line = (
+                f"현재 사용자 영웅: {current_hero} "
+                f"(역할: {ROLE_LABELS.get(current_hero_role, '알 수 없음') if current_hero_role else '알 수 없음'})"
+            )
+        else:
+            current_hero_context_line = "현재 사용자 영웅: 명확히 확인되지 않음"
+
+        selected_role_context_line = ""
+        if role_filter_explicit and role_filter in ROLE_LABELS:
+            selected_role_context_line = f"\n사용자가 선택한 기준 역할: {ROLE_LABELS.get(role_filter)}"
+
         if current_hero_uncertain:
             role_lock_block = f"""=== 영웅 정보 불확실 (주의) ===
 사용자가 지금 어떤 영웅을 플레이 중인지 이번 메시지만으로는 확실하지 않다.
@@ -1630,7 +1893,7 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
 딜러로 입장하면 그 판에서는 딜러 영웅만 선택 가능하다. 탱커·힐러로 변경 불가.
 탱커·힐러도 동일하다. 역할을 넘나드는 교체는 게임 시스템상 불가능하다.
 
-현재 사용자 영웅: {current_hero} (역할: {ROLE_LABELS.get(current_hero_role, "알 수 없음") if current_hero_role else "알 수 없음"})
+{current_hero_context_line}{selected_role_context_line}
 {allowed_heroes_text}
 
 따라서:
@@ -1730,10 +1993,23 @@ answer 안에서는 마크다운 문법(**볼드**, *   리스트, # 제목 등)
                 raw_answer = answer_match.group(1).replace("\\n", "\n").replace('\\"', '"')
                 logger.info("[FALLBACK] answer 필드 정규식 추출 성공")
             else:
-                cleaned = re.sub(r'```(?:json)?\s*[\s\S]*?```', '', raw_text, flags=re.IGNORECASE)
-                cleaned = re.sub(r'\{[\s\S]*"answer"[\s\S]*\}', '', cleaned)
-                raw_answer = cleaned.strip() or raw_text
-                logger.warning("[FALLBACK] answer 필드 추출 실패, raw_text 정제본 사용")
+                # 응답이 max_output_tokens에 걸려 JSON이 닫히기 전에 잘린 경우,
+                # 위 정규식은 종료 큰따옴표가 없어 매칭되지 않는다. 이때 "answer"
+                # 필드 시작부터 끝까지(닫는 따옴표 없이)라도 추출해 JSON 껍데기
+                # ({, "answer": " 등)가 그대로 사용자에게 노출되는 것을 막는다.
+                truncated_match = re.search(
+                    r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)\\?$',
+                    raw_text, re.DOTALL
+                )
+                if truncated_match:
+                    raw_answer = truncated_match.group(1).replace("\\n", "\n").replace('\\"', '"')
+                    raw_answer = re.sub(r'\\+$', '', raw_answer).rstrip()
+                    logger.warning("[FALLBACK] answer 필드가 중간에 잘림(max_output_tokens 의심), 잘린 내용으로 대체")
+                else:
+                    cleaned = re.sub(r'```(?:json)?\s*[\s\S]*?```', '', raw_text, flags=re.IGNORECASE)
+                    cleaned = re.sub(r'\{[\s\S]*"answer"[\s\S]*\}', '', cleaned)
+                    raw_answer = cleaned.strip() or raw_text
+                    logger.warning("[FALLBACK] answer 필드 추출 실패, raw_text 정제본 사용")
             used_doc_ids = []
 
         if not isinstance(used_doc_ids, list):
@@ -1783,7 +2059,10 @@ answer 안에서는 마크다운 문법(**볼드**, *   리스트, # 제목 등)
                     "user_mentioned=%s) — 단어만 치환",
                     forbidden_in_answer, current_hero, current_hero_role, user_mentioned_heroes,
                 )
-                role_label_kor = ROLE_LABELS.get(current_hero_role, "현재 역할")
+                role_label_kor = ROLE_LABELS.get(
+                    role_filter if role_filter in ROLE_LABELS else current_hero_role,
+                    "현재 역할",
+                )
 
                 # 줄 전체를 삭제하면 "교체할지 유지할지"같은 핵심 판단 문장까지
                 # 통째로 날아갈 수 있다 (실제 사례: "애쉬로 바꾸는 게 낫습니다"가
@@ -1989,7 +2268,11 @@ def route_after_parse_stats(state: ChatbotGraphState) -> str:
     return "format_response" if state.get("error") else "llm_parse_context"
 
 def route_after_context_merge(state: ChatbotGraphState) -> str:
-    return "clarify_role_filter" if should_ask_role_filter(state) else "build_retrieval_queries"
+    if state.get("intent") == "off_topic":
+        return "off_topic_response"
+    if should_ask_role_filter(state):
+        return "clarify_role_filter"
+    return "build_retrieval_queries"
 
 def route_after_retrieve(state: ChatbotGraphState) -> str:
     return "format_response" if state.get("error") else "judge_strategy"
@@ -2009,6 +2292,7 @@ def build_chatbot_graph():
     graph.add_node("llm_parse_context", llm_parse_context_node)
     graph.add_node("merge_context", merge_context_node)
     graph.add_node("clarify_role_filter", clarify_role_filter_node)
+    graph.add_node("off_topic_response", off_topic_response_node)
     graph.add_node("build_retrieval_queries", build_retrieval_queries_node)
     graph.add_node("retrieve_docs", retrieve_docs_node)
     graph.add_node("judge_strategy", judge_strategy_node)
@@ -2023,8 +2307,13 @@ def build_chatbot_graph():
         {"llm_parse_context": "llm_parse_context", "format_response": "format_response"})
     graph.add_edge("llm_parse_context", "merge_context")
     graph.add_conditional_edges("merge_context", route_after_context_merge,
-        {"clarify_role_filter": "clarify_role_filter", "build_retrieval_queries": "build_retrieval_queries"})
+        {
+            "clarify_role_filter": "clarify_role_filter",
+            "off_topic_response": "off_topic_response",
+            "build_retrieval_queries": "build_retrieval_queries",
+        })
     graph.add_edge("clarify_role_filter", "format_response")
+    graph.add_edge("off_topic_response", "format_response")
     graph.add_edge("build_retrieval_queries", "retrieve_docs")
     graph.add_conditional_edges("retrieve_docs", route_after_retrieve,
         {"judge_strategy": "judge_strategy", "format_response": "format_response"})
