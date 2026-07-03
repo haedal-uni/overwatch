@@ -77,8 +77,15 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.sqlite3'),
+        'NAME': os.environ.get('DB_NAME', BASE_DIR / 'db.sqlite3'),
+        'USER': os.environ.get('DB_USER', ''),
+        'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+        'HOST': os.environ.get('DB_HOST', ''),
+        'PORT': os.environ.get('DB_PORT', ''),
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+        } if os.environ.get('DB_ENGINE', '').endswith('mysql') else {},
     }
 }
 
@@ -111,7 +118,12 @@ TIME_ZONE = 'Asia/Seoul'
 
 USE_I18N = True
 
-USE_TZ = True
+# MariaDB(Windows)에는 IANA 타임존 테이블(mysql.time_zone_name 등)이 기본으로
+# 채워져 있지 않다. USE_TZ=True 상태에서 관리자 페이지의 date_hierarchy처럼
+# CONVERT_TZ()가 필요한 조회를 하면 "Database returned an invalid datetime value"
+# 오류가 난다. 이 프로젝트는 한국 단일 지역만 다루므로, 타임존 인식 datetime 대신
+# TIME_ZONE 기준 naive datetime을 그대로 저장/조회하도록 비활성화한다.
+USE_TZ = False
 
 
 # Static files (CSS, JavaScript, Images)
