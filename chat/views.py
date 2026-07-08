@@ -9,7 +9,7 @@ from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from langchain_core.messages import HumanMessage
 
-from .chatbot_graph import run_chatbot_graph, call_llm_text
+from .chatbot_graph import ROLE_LABELS, run_chatbot_graph, call_llm_text, try_canned_shortcut
 from .chatbot_service import get_chatbot_components
 from .models import ChatLog
 
@@ -65,6 +65,13 @@ def chat_api(request):
         role_filter = data.get("role_filter")
         reset = bool(data.get("reset", False))
 
+        # 간단히/자세히 답변 스타일. 프론트가 보내지 않거나 알 수 없는 값이면 None으로
+        # 넘겨 run_chatbot_graph가 세션에 남아있는 이전 선택(없으면 기본값 detailed)을
+        # 쓰도록 한다.
+        answer_style = data.get("answer_style")
+        if answer_style not in ("simple", "detailed"):
+            answer_style = None
+
         if reset:
             request.session.pop("coach_context", None)
             request.session.modified = True
@@ -89,11 +96,28 @@ def chat_api(request):
         conversation_context = request.session.get("coach_context", {})
         context_before = dict(conversation_context)
 
-        result = run_chatbot_graph(
-            message=message,
-            conversation_context=conversation_context,
-            role_filter=role_filter,
-        )
+        # 카운터/조합 추천/맵 운영/스탯 피드백/영웅 유지 — 웰컴 화면 5개 버튼(과
+        # 비슷한 표현)은 그래프 전체를 실행하지 않고 미리 써둔 답을 즉시 돌려준다.
+        # 매칭되지 않으면(대상이 다르거나 캐시가 없는 역할을 고른 경우)
+        # is_canned가 False로 남고 평소처럼 run_chatbot_graph를 호출한다.
+        canned = try_canned_shortcut(message, role_filter, conversation_context, answer_style)
+        if canned["context_updates"]:
+            conversation_context.update(canned["context_updates"])
+
+        graph_message = message
+        if canned["resume_message"] is not None:
+            graph_message = canned["resume_message"]
+
+        is_canned = canned["result"] is not None
+        if is_canned:
+            result = canned["result"]
+        else:
+            result = run_chatbot_graph(
+                message=graph_message,
+                conversation_context=conversation_context,
+                role_filter=role_filter,
+                answer_style=answer_style,
+            )
 
         context_patch = result.get("context_patch", {})
         conversation_context.update(context_patch)
@@ -109,20 +133,37 @@ def chat_api(request):
         intent = result.get("intent")
 
         # USER 질문 저장
+        # 역할(전체/탱커/딜러/힐러) 버튼 클릭은 message가 빈 문자열이고
+        # role_filter만 채워져 온다. 기존에는 "if message:"로 이 경우를 걸러
+        # 아예 저장하지 않아서, 관리자 페이지에서 사용자가 어떤 버튼을 눌렀는지
+        # 전혀 보이지 않고 뒤이은 AI 답변만 덩그러니 남는 문제가 있었다.
+        # role_filter만 온 경우에도 로그를 남기되, 메시지는 이번 답변이 실제로
+        # 응답하고 있는 원래 질문(merge_context_node가 pending_question에서
+        # 복원한 result["message"])과 함께 표시해 맥락을 알 수 있게 한다.
         if message:
-            save_chat_log(
-                log_session_id=log_session_id,
-                turn_id=turn_id,
-                role="USER",
-                message=message,
-                intent=intent,
-                current_hero=current_hero,
-                target_enemy=target_enemy,
-                metadata={
-                    "role_filter": role_filter,
-                    "context_before": context_before,
-                },
+            user_log_message = message
+        else:
+            role_label = ROLE_LABELS.get(role_filter, role_filter)
+            original_question = result.get("message") or ""
+            user_log_message = (
+                f"[역할 선택: {role_label}] {original_question}".strip()
+                if original_question
+                else f"[역할 선택: {role_label}]"
             )
+
+        save_chat_log(
+            log_session_id=log_session_id,
+            turn_id=turn_id,
+            role="USER",
+            message=user_log_message,
+            intent=intent,
+            current_hero=current_hero,
+            target_enemy=target_enemy,
+            metadata={
+                "role_filter": role_filter,
+                "context_before": context_before,
+            },
+        )
 
         if graph_error:
             # run_chatbot_graph 내부 노드(judge_strategy/generate_answer 등)에서 예외가 나면
@@ -163,6 +204,10 @@ def chat_api(request):
                     "suggested_questions": result.get("suggested_questions", []),
                     "choice_buttons": result.get("choice_buttons", []),
                     "has_stats": result.get("has_stats", False),
+                    "answer_style": result.get("answer_style"),
+                    "matchup_card": result.get("matchup_card"),
+                    "recommend_card": result.get("recommend_card"),
+                    **({"source": "canned_response"} if is_canned else {}),
                 },
             )
 

@@ -279,7 +279,286 @@
     .actions {
       display: flex;
       gap: 8px;
-      align-items: center
+      align-items: center;
+      position: relative;
+    }
+
+    .help-hint {
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      z-index: 60;
+      max-width: 240px;
+      background: var(--card-solid);
+      color: var(--text);
+      border: 1px solid var(--line-strong);
+      border-radius: 16px;
+      padding: 12px 14px;
+      font-size: 12.5px;
+      line-height: 1.55;
+      font-weight: 700;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(-4px);
+      pointer-events: none;
+      transition: opacity .25s ease, transform .25s ease;
+    }
+
+    .help-hint.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .help-hint::before {
+      content: '';
+      position: absolute;
+      top: -6px;
+      right: 14px;
+      width: 12px;
+      height: 12px;
+      background: var(--card-solid);
+      border-left: 1px solid var(--line-strong);
+      border-top: 1px solid var(--line-strong);
+      transform: rotate(45deg);
+    }
+
+    /* ── 사용법 투어 ── */
+    .tour-dim {
+      position: fixed;
+      background: rgba(4, 10, 22, .62);
+      z-index: 200;
+      transition: all .2s ease;
+    }
+
+    .tour-highlight {
+      position: fixed;
+      z-index: 201;
+      border-radius: 16px;
+      box-shadow: 0 0 0 3px var(--primary), 0 0 32px rgba(37, 99, 235, .55);
+      pointer-events: none;
+      transition: all .2s ease;
+    }
+
+    .tour-tooltip {
+      position: fixed;
+      z-index: 202;
+      max-width: 300px;
+      background: var(--card-solid);
+      color: var(--text);
+      border: 1px solid var(--line-strong);
+      border-radius: 20px;
+      padding: 18px 18px 14px;
+      box-shadow: var(--shadow);
+      transition: top .2s ease, left .2s ease;
+    }
+
+    .tour-tooltip-step {
+      font-size: 12px;
+      font-weight: 900;
+      color: var(--primary);
+      letter-spacing: .04em;
+      margin-bottom: 6px;
+    }
+
+    .tour-tooltip-title {
+      font-size: 16px;
+      font-weight: 800;
+      margin-bottom: 8px;
+      letter-spacing: -.02em;
+    }
+
+    .tour-tooltip-desc {
+      font-size: 13.5px;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-bottom: 16px;
+      white-space: pre-line;
+    }
+
+    .tour-tooltip-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .tour-btn {
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 800;
+      transition: .15s;
+    }
+
+    .tour-btn:hover:not(:disabled):not(.primary) {
+      border-color: var(--primary);
+      color: var(--primary);
+      background: var(--primary-soft);
+    }
+
+    .tour-btn:disabled {
+      opacity: .4;
+      cursor: not-allowed;
+    }
+
+    .tour-btn.primary {
+      border-color: transparent;
+      background: linear-gradient(135deg, var(--primary), var(--primary2));
+      color: #fff;
+    }
+
+    .tour-btn.primary:hover {
+      color: #fff;
+      opacity: .92;
+    }
+
+    /* ── 대화 저장 모달 ── */
+    .save-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(4, 10, 22, .55);
+      z-index: 300;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }
+
+    .save-modal {
+      width: 100%;
+      max-width: 460px;
+      max-height: 85vh;
+      overflow: auto;
+      background: var(--card-solid);
+      color: var(--text);
+      border: 1px solid var(--line-strong);
+      border-radius: 20px;
+      padding: 22px;
+      box-shadow: var(--shadow);
+    }
+
+    .save-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+
+    .save-modal-header h3 {
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .save-modal-close {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 20px;
+      line-height: 1;
+      padding: 4px;
+      cursor: pointer;
+    }
+
+    .save-modal-close:hover {
+      color: var(--text);
+    }
+
+    .save-modal-sub {
+      font-size: 12.5px;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    .save-modal-save-btn {
+      width: 100%;
+      border: none;
+      background: linear-gradient(135deg, var(--primary), var(--primary2));
+      color: #fff;
+      border-radius: 14px;
+      padding: 12px;
+      font-weight: 800;
+      font-size: 14px;
+      margin-bottom: 18px;
+      transition: .15s;
+    }
+
+    .save-modal-save-btn:hover:not(:disabled) {
+      opacity: .92;
+    }
+
+    .save-modal-save-btn:disabled {
+      opacity: .45;
+      cursor: not-allowed;
+    }
+
+    .save-modal-limit-note {
+      font-size: 12.5px;
+      color: var(--accent);
+      margin: -10px 0 16px;
+    }
+
+    .save-chat-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .save-chat-empty {
+      font-size: 13px;
+      color: var(--muted);
+      padding: 18px 0;
+      text-align: center;
+    }
+
+    .save-chat-card {
+      border: 1px solid var(--line);
+      background: var(--soft);
+      border-radius: 14px;
+      padding: 12px 14px;
+    }
+
+    .save-chat-card-title {
+      font-weight: 700;
+      font-size: 14px;
+      margin-bottom: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .save-chat-card-meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .save-chat-card-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .save-chat-card-actions button {
+      flex: 1;
+      border: 1px solid var(--line);
+      background: var(--card-solid);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 7px 0;
+      font-size: 12.5px;
+      font-weight: 700;
+      transition: .15s;
+    }
+
+    .save-chat-card-actions .save-chat-load:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+      background: var(--primary-soft);
+    }
+
+    .save-chat-card-actions .save-chat-delete:hover {
+      border-color: var(--danger);
+      color: var(--danger);
     }
 
     .icon-btn,
@@ -410,7 +689,11 @@
 
     .select-list {
       max-height: 260px;
-      overflow: auto;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
+      transform: translateZ(0);
       padding: 10px;
       scrollbar-width: thin;
     }
@@ -806,6 +1089,85 @@
       color: var(--muted);
     }
 
+    .matchup-card {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      background: var(--card-solid);
+      border-radius: 18px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .matchup-card-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--primary);
+    }
+
+    .matchup-col {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .matchup-col-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--muted);
+    }
+
+    .matchup-col-hard .matchup-col-title {
+      color: var(--danger)
+    }
+
+    .matchup-col-easy .matchup-col-title {
+      color: var(--success)
+    }
+
+    .matchup-col-recommend .matchup-col-title {
+      color: var(--primary)
+    }
+
+    .matchup-item {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 13.5px;
+      padding: 7px 11px;
+      border-radius: 12px;
+      background: var(--soft);
+      border: 1px solid var(--line);
+    }
+
+    .matchup-col-hard .matchup-item {
+      border-color: rgba(239, 68, 68, .28)
+    }
+
+    .matchup-col-easy .matchup-item {
+      border-color: rgba(22, 163, 74, .28)
+    }
+
+    .matchup-col-recommend .matchup-item {
+      border-color: rgba(37, 99, 235, .28)
+    }
+
+    .matchup-hero {
+      font-weight: 800;
+      color: var(--text);
+    }
+
+    .matchup-note {
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+
+    .matchup-note::before {
+      content: "· ";
+    }
+
     .typing {
       display: flex;
       gap: 6px;
@@ -848,6 +1210,42 @@
       padding: 16px 22px 20px;
       border-top: 1px solid var(--line);
       background: rgba(255, 255, 255, .25);
+    }
+
+    .style-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .style-toggle-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 700;
+      margin-right: 2px;
+    }
+
+    .style-btn {
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 12.5px;
+      font-weight: 800;
+      transition: .16s;
+    }
+
+    .style-btn:hover {
+      border-color: var(--primary);
+      color: var(--primary)
+    }
+
+    .style-btn.active {
+      border-color: var(--primary);
+      background: var(--primary-soft);
+      color: var(--primary)
     }
 
     html[data-theme="dark"] .composer {
@@ -1194,6 +1592,19 @@
         padding: 11px 12px 12px
       }
 
+      .style-toggle {
+        margin-bottom: 8px
+      }
+
+      .style-toggle-label {
+        display: none
+      }
+
+      .style-btn {
+        padding: 5px 11px;
+        font-size: 11.5px
+      }
+
       .composer-hint {
         display: none
       }
@@ -1332,7 +1743,14 @@
         </div>
         <div class="actions">
           <button class="icon-btn" id="themeBtn" title="테마 변경">🌙</button>
+          <button class="icon-btn" id="saveChatBtn" title="대화 저장">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v6h8V4"/><path d="M8 14h8v6H8z"/></svg>
+          </button>
+          <button class="icon-btn" id="helpBtn" title="사용법 보기">?</button>
           <button class="plain-btn" id="resetBtn">초기화</button>
+          <div class="help-hint" id="helpHint">
+            <span>처음 오셨나요?<br>? 버튼을 누르면 사용 방법을 볼 수 있어요.</span>
+          </div>
         </div>
       </header>
 
@@ -1362,17 +1780,23 @@
         <div class="welcome" id="welcome">
           <div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div>
           <h2>게임 상황을 알려주세요</h2>
-          <p>예를 들어 “상대 파라가 계속 압박해”, “왕의 길 수비 조합 추천해줘”, “내 솔저 스탯이 킬 4 데스 8 딜 6000이야”처럼 입력하면 됩니다.</p>
+          <p>예를 들어 “상대 파라가 계속 압박해”, “왕의 길 수비 조합 추천해줘”, “내 솔저 스탯이 킬 4 데스 8 딜 6000이야”처럼 입력하면 됩니다. 탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지 붙여서 써주시면 더 정확하게 이해할 수 있어요.</p>
           <div class="sample-chips">
-            <button class="chip" data-fill="파라 카운터 영웅 알려줘">파라 카운터</button>
-            <button class="chip" data-fill="팀 조합 추천해줘">조합 추천</button>
+            <button class="chip" data-fill="겐지 카운터 알려줘">카운터</button>
+            <button class="chip" data-fill="상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?">조합 추천</button>
             <button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button>
             <button class="chip" data-fill="나는 솔저76인데 킬 4 데스 8 딜 6000이야 어떻게 운영해야해?">스탯 피드백</button>
+            <button class="chip" data-fill="리퍼를 하고 싶은데 상대 아나를 어떻게 처리해야할까?">영웅 유지</button>
           </div>
         </div>
       </section>
 
       <footer class="composer">
+        <div class="style-toggle" id="styleToggle">
+          <span class="style-toggle-label">답변 스타일</span>
+          <button type="button" class="style-btn" data-style="simple" title="인게임 중 빠르게 볼 핵심 요약">간단히</button>
+          <button type="button" class="style-btn active" data-style="detailed" title="복기·학습용 자세한 설명">자세히</button>
+        </div>
         <div class="input-box">
           <textarea id="userInput" rows="1" placeholder="질문을 입력하세요. Enter 전송, Shift+Enter 줄바꿈"></textarea>
           <button type="button" class="mic-btn" id="micBtn" title="음성으로 입력"></button>
@@ -1422,12 +1846,12 @@
     const sideModes = new Set(['escort', 'hybrid']);
     const modeName = { escort: '호위', hybrid: '혼합', push: '밀기', flashpoint: '플래시포인트', control: '쟁탈' };
     const quicks = {
-      all: [['COUNTER', '파라 카운터 영웅 알려줘'], ['MAP', '왕의 길 수비 운영 알려줘'], ['COMP', '팀 조합 추천해줘'], ['STAT', '내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?']],
+      all: [['COUNTER', '파라 카운터 영웅 알려줘'], ['MAP', '왕의 길 수비 운영 알려줘'], ['COMP', '상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?'], ['STAT', '내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?']],
       tank: [['TANK', '라인하르트 방어막 관리 팁 알려줘'], ['TANK', 'D.Va 매트릭스 언제 써야 해?'], ['TANK', '둠피스트 진입 타이밍 알려줘']],
       dps: [['DPS', '겐지 질풍참 타이밍 알려줘'], ['DPS', '솜브라 EMP 타이밍 알려줘'], ['COUNTER', '트레이서 카운터 알려줘']],
       support: [['SUPPORT', '아나 수면총 타이밍 알려줘'], ['SUPPORT', '키리코 정화 언제 써야 해?'], ['SUPPORT', '루시우 밀기 맵 운영 알려줘']]
     };
-    let state = { map: null, side: '', q: 0, start: Date.now(), busy: false };
+    let state = { map: null, side: '', q: 0, start: Date.now(), busy: false, answerStyle: 'detailed', history: [] };
 
     const $ = (id) => document.getElementById(id);
     const messages = $('messages');
@@ -1439,6 +1863,16 @@
       const meta = document.querySelector('meta[name="csrf-token"]');
       if (meta && meta.content) return meta.content;
       return document.cookie.split(';').map(v => v.trim()).find(v => v.startsWith('csrftoken='))?.split('=')[1] || '';
+    }
+    // 세션 만료/CSRF 토큰 불일치 등으로 서버가 JSON 대신 HTML 오류 페이지(403/404/500)를
+    // 돌려줄 때, res.json()이 그대로 "Unexpected token '<' ... is not valid JSON" 같은
+    // 원시 파싱 에러를 던지는 것을 막고 사용자가 이해할 수 있는 메시지로 바꿔준다.
+    async function parseJsonOrThrow(res) {
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        throw new Error('서버 응답을 확인할 수 없습니다. 페이지를 새로고침한 뒤 다시 시도해주세요.');
+      }
+      return res.json();
     }
     function timeText() { return new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }); }
     function escapeHtml(text) {
@@ -1516,6 +1950,14 @@
     document.querySelectorAll('.role-btn').forEach(btn => btn.addEventListener('click', () => {
       document.querySelectorAll('.role-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active'); renderQuick(btn.dataset.role);
+    }));
+
+    // 간단히/자세히 답변 스타일 토글. 여기서 고른 값은 다음 질문(sendMessage/sendRoleFilter)
+    // 전송 시 answer_style로 서버에 함께 보낸다.
+    document.querySelectorAll('.style-btn').forEach(btn => btn.addEventListener('click', () => {
+      document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.answerStyle = btn.dataset.style;
     }));
     document.addEventListener('click', (e) => {
       const fill = e.target.closest('[data-fill]');
@@ -1609,7 +2051,7 @@
           headers: { 'X-CSRFToken': getCsrf() },
           body: formData,
         });
-        const data = await res.json();
+        const data = await parseJsonOrThrow(res);
         if (!res.ok || data.error) throw new Error(data.error || '음성 인식에 실패했습니다.');
         const text = (data.text || '').trim();
         if (text) {
@@ -1631,6 +2073,11 @@
 
     function addMessage(role, text, options = {}) {
       $('welcome')?.remove();
+      // 저장된 대화를 불러와 다시 재생(replay)할 때(loadSavedChat)는 이미
+      // 저장돼 있던 기록을 또 history에 쌓으면 안 되므로 skipHistory로 막는다.
+      if (!options.skipHistory) {
+        state.history.push({ role, text, options });
+      }
       const row = document.createElement('div');
       row.className = `msg ${role}`;
       const avatar = document.createElement('div'); avatar.className = 'avatar';
@@ -1646,6 +2093,14 @@
         if (badges.length) bubble.innerHTML += `<div class="badges">${badges.map(b => `<span class="badge">${escapeHtml(b)}</span>`).join('')}</div>`;
       }
       if (role === 'ai') {
+        if (options.matchupCard) {
+          const card = buildMatchupCard(options.matchupCard);
+          if (card) bubble.appendChild(card);
+        }
+        if (options.recommendCard) {
+          const card = buildRecommendCard(options.recommendCard);
+          if (card) bubble.appendChild(card);
+        }
         const buttons = buildResponseButtons(options);
         if (buttons) bubble.appendChild(buttons);
         if (options.turnId) bubble.appendChild(buildFeedbackUI(options.turnId));
@@ -1653,6 +2108,61 @@
       wrap.appendChild(meta); wrap.appendChild(bubble);
       row.appendChild(avatar); row.appendChild(wrap);
       messages.appendChild(row); messages.scrollTop = messages.scrollHeight;
+    }
+    function buildMatchupCard(card) {
+      const hardHeroes = card?.hard_heroes || [];
+      const easyHeroes = card?.easy_heroes || [];
+      if (!hardHeroes.length && !easyHeroes.length) return null;
+
+      const wrap = document.createElement('div'); wrap.className = 'matchup-card';
+      const title = document.createElement('div'); title.className = 'matchup-card-title';
+      title.textContent = `${card.subject || ''} 상성 카드`;
+      wrap.appendChild(title);
+
+      const buildCol = (labelText, items, kind) => {
+        if (!items.length) return null;
+        const col = document.createElement('div'); col.className = `matchup-col matchup-col-${kind}`;
+        const colTitle = document.createElement('div'); colTitle.className = 'matchup-col-title';
+        colTitle.textContent = labelText;
+        col.appendChild(colTitle);
+        items.forEach(item => {
+          const row = document.createElement('div'); row.className = 'matchup-item';
+          const hero = document.createElement('span'); hero.className = 'matchup-hero'; hero.textContent = item.hero || '';
+          const note = document.createElement('span'); note.className = 'matchup-note'; note.textContent = item.note || '';
+          row.appendChild(hero); row.appendChild(note);
+          col.appendChild(row);
+        });
+        return col;
+      };
+
+      const hardCol = buildCol('상대하기 어려운 영웅', hardHeroes, 'hard');
+      const easyCol = buildCol('상대하기 쉬운 영웅', easyHeroes, 'easy');
+      if (hardCol) wrap.appendChild(hardCol);
+      if (easyCol) wrap.appendChild(easyCol);
+      return wrap;
+    }
+    function buildRecommendCard(card) {
+      const heroes = card?.heroes || [];
+      if (!heroes.length) return null;
+
+      const wrap = document.createElement('div'); wrap.className = 'matchup-card';
+      const title = document.createElement('div'); title.className = 'matchup-card-title';
+      title.textContent = card.mode === 'composition' ? '조합 추천 영웅 카드' : '교체 추천 영웅 카드';
+      wrap.appendChild(title);
+
+      const col = document.createElement('div'); col.className = 'matchup-col matchup-col-recommend';
+      const colTitle = document.createElement('div'); colTitle.className = 'matchup-col-title';
+      colTitle.textContent = '추천 영웅';
+      col.appendChild(colTitle);
+      heroes.forEach(item => {
+        const row = document.createElement('div'); row.className = 'matchup-item';
+        const hero = document.createElement('span'); hero.className = 'matchup-hero'; hero.textContent = item.hero || '';
+        const note = document.createElement('span'); note.className = 'matchup-note'; note.textContent = item.note || '';
+        row.appendChild(hero); row.appendChild(note);
+        col.appendChild(row);
+      });
+      wrap.appendChild(col);
+      return wrap;
     }
     function buildResponseButtons(options) {
       const box = document.createElement('div'); box.className = 'suggestions';
@@ -1704,7 +2214,7 @@
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
             body: JSON.stringify({ turn_id: turnId, reason })
           });
-          const data = await res.json();
+          const data = await parseJsonOrThrow(res);
           if (!res.ok || data.error) throw new Error(data.error || '피드백 전송에 실패했습니다.');
           const done = document.createElement('div'); done.className = 'feedback-done';
           done.textContent = '피드백을 보내주셔서 감사합니다.';
@@ -1731,7 +2241,7 @@
       messages.appendChild(div); messages.scrollTop = messages.scrollHeight;
     }
     function buildRequestBody(message, roleFilter) {
-      const body = { message: message || '' };
+      const body = { message: message || '', answer_style: state.answerStyle };
       if (roleFilter) body.role_filter = roleFilter;
       const extra = {};
       if (state.map && state.map.mode !== 'none') extra.map_name = state.map.name;
@@ -1745,9 +2255,7 @@
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
         body: JSON.stringify(body)
       });
-      const ct = res.headers.get('content-type') || '';
-      if (!ct.includes('application/json')) throw new Error('서버 응답을 확인할 수 없습니다.');
-      const data = await res.json();
+      const data = await parseJsonOrThrow(res);
       if (!res.ok || data.error) throw new Error(data.error || '응답 중 오류가 발생했습니다.');
       return data;
     }
@@ -1761,7 +2269,7 @@
       try {
         const data = await requestChat(buildRequestBody(text));
         removeTyping();
-        addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id });
+        addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card });
       } catch (err) {
         removeTyping(); showError(err.message || '연결에 실패했습니다.');
       } finally {
@@ -1777,7 +2285,7 @@
       try {
         const data = await requestChat(buildRequestBody('', value));
         removeTyping();
-        addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id });
+        addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card });
       } catch (err) { removeTyping(); showError(err.message || '연결에 실패했습니다.'); }
       finally { state.busy = false; sendBtn.disabled = false; }
     }
@@ -1785,8 +2293,11 @@
 
     function resetScreen() {
       state.q = 0; state.start = Date.now(); $('questionCount').textContent = '0';
+      state.answerStyle = 'detailed';
+      state.history = [];
+      document.querySelectorAll('.style-btn').forEach(b => b.classList.toggle('active', b.dataset.style === 'detailed'));
       clearContext();
-      messages.innerHTML = `<div class="welcome" id="welcome"><div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div><h2>게임 상황을 편하게 적어주세요</h2><p>예를 들어 “상대 파라가 계속 압박해”, “왕의 길 수비 조합 추천해줘”, “내 솔저 스탯이 킬 4 데스 8 딜 6000이야”처럼 입력하면 됩니다.</p><div class="sample-chips"><button class="chip" data-fill="파라 카운터 영웅 알려줘">파라 카운터</button><button class="chip" data-fill="팀 조합 추천해줘">조합 추천</button><button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button><button class="chip" data-fill="내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?">스탯 피드백</button></div></div>`;
+      messages.innerHTML = `<div class="welcome" id="welcome"><div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div><h2>게임 상황을 편하게 적어주세요</h2><p>예를 들어 “상대 파라가 계속 압박해”, “왕의 길 수비 조합 추천해줘”, “내 솔저 스탯이 킬 4 데스 8 딜 6000이야”처럼 입력하면 됩니다. 탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지 붙여서 써주시면 더 정확하게 이해할 수 있어요.</p><div class="sample-chips"><button class="chip" data-fill="겐지 카운터 알려줘">카운터</button><button class="chip" data-fill="상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?">조합 추천</button><button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button><button class="chip" data-fill="내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?">스탯 피드백</button><button class="chip" data-fill="리퍼를 하고 싶은데 상대 아나를 어떻게 처리해야할까?">영웅 유지</button></div></div>`;
     }
     async function resetServer() {
       try {
@@ -1804,6 +2315,314 @@
       const sec = Math.floor((Date.now() - state.start) / 1000);
       $('sessionTime').textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
     }, 1000);
+
+    // ── 사용법 투어 ──
+    // 처음 접속한 사용자에게만 help 버튼 옆에 말풍선을 5초간 보여준다.
+    const HELP_HINT_SEEN_KEY = 'owcoach_help_hint_seen';
+    const helpBtn = $('helpBtn');
+    const helpHint = $('helpHint');
+
+    function showHelpHintOnce() {
+      if (localStorage.getItem(HELP_HINT_SEEN_KEY)) return;
+      localStorage.setItem(HELP_HINT_SEEN_KEY, '1');
+      helpHint.classList.add('show');
+      setTimeout(() => helpHint.classList.remove('show'), 5000);
+    }
+    showHelpHintOnce();
+
+    // 화면 폭에 따라 추천 질문이 보이는 위치가 달라진다 — 데스크톱은
+    // #quickList(사이드바), 태블릿 폭(720~1050px)은 #mobileQuick, 그보다 좁은
+    // 진짜 모바일 폭(<720px)에서는 이 둘이 전부 display:none이라(".mobile-quick
+    // { display: none !important }") 웰컴 화면의 ".sample-chips"(카운터/조합
+    // 추천/맵 운영/스탯 피드백/영웅 유지)만 실제로 보인다. 실제로 화면에
+    // 렌더링된 쪽을 우선순위대로 찾아 대상으로 삼는다.
+    function getVisibleEl(...selectors) {
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null) return el;
+      }
+      return null;
+    }
+
+    const tourSteps = [
+      {
+        target: () => $('mapSelect'),
+        title: '맵 선택',
+        desc: '맵을 선택하면 해당 맵 기준으로 답변합니다.\n모르면 선택하지 않아도 괜찮아요.',
+      },
+      {
+        target: () => getVisibleEl('#quickList', '#mobileQuick', '.sample-chips'),
+        title: '추천 질문 버튼',
+        desc: '처음 질문이 어렵다면 이 버튼을 눌러 질문 예시를 바로 넣을 수 있어요.',
+      },
+      {
+        target: () => $('styleToggle'),
+        title: '답변 스타일',
+        desc: '간단히 / 자세히 중 원하는 답변 길이를 선택할 수 있어요.',
+      },
+      {
+        target: () => document.querySelector('.input-box'),
+        title: '입력창',
+        desc: '게임 상황을 자유롭게 적어주세요.\n예: 겐지로 윈스턴 상대법 알려줘',
+      },
+      {
+        target: () => $('saveChatBtn'),
+        title: '대화 저장',
+        desc: '대화 내용을 저장해서 나중에 다시 볼 수 있어요.\n최대 2개까지 저장할 수 있습니다.',
+      },
+    ];
+
+    let tourStep = 0;
+    let tourEls = null;
+
+    function buildTourEls() {
+      const top = document.createElement('div'); top.className = 'tour-dim';
+      const bottom = document.createElement('div'); bottom.className = 'tour-dim';
+      const left = document.createElement('div'); left.className = 'tour-dim';
+      const right = document.createElement('div'); right.className = 'tour-dim';
+      const highlight = document.createElement('div'); highlight.className = 'tour-highlight';
+      const tooltip = document.createElement('div'); tooltip.className = 'tour-tooltip';
+      tooltip.innerHTML = `
+        <div class="tour-tooltip-step" id="tourStepLabel"></div>
+        <div class="tour-tooltip-desc" id="tourDesc"></div>
+        <div class="tour-tooltip-actions">
+          <button type="button" class="tour-btn" id="tourEndBtn">종료</button>
+          <button type="button" class="tour-btn" id="tourPrevBtn">이전</button>
+          <button type="button" class="tour-btn primary" id="tourNextBtn">다음</button>
+        </div>`;
+      document.body.append(top, bottom, left, right, highlight, tooltip);
+      const els = { top, bottom, left, right, highlight, tooltip };
+      tooltip.querySelector('#tourEndBtn').addEventListener('click', closeTour);
+      tooltip.querySelector('#tourPrevBtn').addEventListener('click', prevTourStep);
+      tooltip.querySelector('#tourNextBtn').addEventListener('click', nextTourStep);
+      return els;
+    }
+
+    function positionTour() {
+      if (!tourEls) return;
+      const step = tourSteps[tourStep];
+      const target = step.target();
+      if (!target) {
+        // 이 단계의 대상이 지금 화면에 전혀 없으면(예: 채팅을 이미 시작해 웰컴
+        // 화면의 추천 질문 칩이 사라진 좁은 모바일 화면) 이전 단계의 하이라이트가
+        // 그대로 남아 헷갈리지 않도록 다음 단계로 건너뛴다.
+        if (tourStep < tourSteps.length - 1) { tourStep++; positionTour(); }
+        else closeTour();
+        return;
+      }
+      const rect = target.getBoundingClientRect();
+      const pad = 8;
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const r = {
+        top: Math.max(rect.top - pad, 0),
+        left: Math.max(rect.left - pad, 0),
+        right: Math.min(rect.right + pad, vw),
+        bottom: Math.min(rect.bottom + pad, vh),
+      };
+
+      Object.assign(tourEls.top.style, { top: '0px', left: '0px', width: vw + 'px', height: r.top + 'px' });
+      Object.assign(tourEls.bottom.style, { top: r.bottom + 'px', left: '0px', width: vw + 'px', height: Math.max(vh - r.bottom, 0) + 'px' });
+      Object.assign(tourEls.left.style, { top: r.top + 'px', left: '0px', width: r.left + 'px', height: Math.max(r.bottom - r.top, 0) + 'px' });
+      Object.assign(tourEls.right.style, { top: r.top + 'px', left: r.right + 'px', width: Math.max(vw - r.right, 0) + 'px', height: Math.max(r.bottom - r.top, 0) + 'px' });
+      Object.assign(tourEls.highlight.style, { top: r.top + 'px', left: r.left + 'px', width: Math.max(r.right - r.left, 0) + 'px', height: Math.max(r.bottom - r.top, 0) + 'px' });
+
+      // 툴팁은 대상 아래쪽에 공간이 있으면 아래, 없으면 위쪽에 배치하고 좌우는 화면 안으로 보정한다.
+      const tooltip = tourEls.tooltip;
+      tooltip.style.visibility = 'hidden';
+      const tw = tooltip.offsetWidth || 300;
+      const th = tooltip.offsetHeight || 150;
+      let top;
+      if (r.bottom + th + 16 <= vh) top = r.bottom + 12;
+      else if (r.top - th - 16 >= 0) top = r.top - th - 12;
+      else top = Math.max(vh - th - 16, 16);
+      const left = Math.min(Math.max(r.left, 16), Math.max(vw - tw - 16, 16));
+      tooltip.style.top = top + 'px';
+      tooltip.style.left = left + 'px';
+      tooltip.style.visibility = 'visible';
+
+      tourEls.tooltip.querySelector('#tourStepLabel').textContent = `[${tourStep + 1}/${tourSteps.length}] ${step.title}`;
+      tourEls.tooltip.querySelector('#tourDesc').textContent = step.desc;
+      const prevBtn = tourEls.tooltip.querySelector('#tourPrevBtn');
+      const nextBtn = tourEls.tooltip.querySelector('#tourNextBtn');
+      prevBtn.disabled = tourStep === 0;
+      nextBtn.textContent = tourStep === tourSteps.length - 1 ? '완료' : '다음';
+    }
+
+    function openTour() {
+      helpHint.classList.remove('show');
+      closeTour();
+      tourStep = 0;
+      tourEls = buildTourEls();
+      positionTour();
+      window.addEventListener('resize', positionTour);
+      window.addEventListener('scroll', positionTour, true);
+    }
+
+    function closeTour() {
+      if (!tourEls) return;
+      Object.values(tourEls).forEach(el => el.remove());
+      tourEls = null;
+      window.removeEventListener('resize', positionTour);
+      window.removeEventListener('scroll', positionTour, true);
+    }
+
+    function nextTourStep() {
+      if (tourStep >= tourSteps.length - 1) { closeTour(); return; }
+      tourStep++;
+      positionTour();
+    }
+
+    function prevTourStep() {
+      if (tourStep <= 0) return;
+      tourStep--;
+      positionTour();
+    }
+
+    helpBtn.addEventListener('click', openTour);
+
+    // ── 대화 저장/불러오기 ──
+    // ChatGPT/Claude/Gemini처럼 대화가 자동으로 계속 쌓이는 방식이 아니라,
+    // 사용자가 저장 버튼을 직접 눌렀을 때만 남기고, 최대 2개까지만 보관한다.
+    // 로그인/서버 저장 없이 브라우저 localStorage에만 저장해 다른 사용자와
+    // 섞이지 않고, 새 대화 시작(초기화)과도 독립적으로 유지된다.
+    const SAVED_CHATS_KEY = 'owcoach_saved_chats';
+    const MAX_SAVED_CHATS = 2;
+
+    function getSavedChats() {
+      try {
+        const list = JSON.parse(localStorage.getItem(SAVED_CHATS_KEY) || '[]');
+        return Array.isArray(list) ? list : [];
+      } catch (e) { return []; }
+    }
+    function setSavedChats(list) {
+      try { localStorage.setItem(SAVED_CHATS_KEY, JSON.stringify(list)); } catch (e) { }
+    }
+    function formatSavedAt(ts) {
+      const d = new Date(ts);
+      return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')} `
+        + `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+    function buildSaveTitle() {
+      const firstUser = state.history.find(m => m.role === 'user');
+      const raw = (firstUser && firstUser.text) ? firstUser.text : '대화';
+      return raw.length > 24 ? raw.slice(0, 24) + '…' : raw;
+    }
+
+    let saveModalEls = null;
+
+    function closeSaveModal() {
+      if (!saveModalEls) return;
+      saveModalEls.overlay.remove();
+      saveModalEls = null;
+    }
+
+    function renderSaveModal() {
+      if (!saveModalEls) return;
+      const saved = getSavedChats();
+      const atLimit = saved.length >= MAX_SAVED_CHATS;
+      const hasCurrent = state.history.length > 0;
+
+      const saveBtn = saveModalEls.saveBtn;
+      saveBtn.disabled = !hasCurrent || atLimit;
+      saveBtn.textContent = !hasCurrent
+        ? '저장할 대화가 없어요'
+        : atLimit
+          ? '최대 2개까지 저장할 수 있어요'
+          : '지금 보고 있는 대화 저장';
+
+      const list = saveModalEls.list;
+      list.innerHTML = '';
+      if (!saved.length) {
+        const empty = document.createElement('div');
+        empty.className = 'save-chat-empty';
+        empty.textContent = '아직 저장된 대화가 없습니다. 최대 2개까지 저장할 수 있어요.';
+        list.appendChild(empty);
+        return;
+      }
+      saved.forEach(entry => {
+        const card = document.createElement('div'); card.className = 'save-chat-card';
+        const title = document.createElement('div'); title.className = 'save-chat-card-title';
+        title.textContent = entry.title || '대화';
+        const meta = document.createElement('div'); meta.className = 'save-chat-card-meta';
+        meta.textContent = `${formatSavedAt(entry.savedAt)} · 메시지 ${(entry.messages || []).length}개`;
+        const actions = document.createElement('div'); actions.className = 'save-chat-card-actions';
+        const loadBtn = document.createElement('button'); loadBtn.type = 'button';
+        loadBtn.className = 'save-chat-load'; loadBtn.textContent = '불러오기';
+        loadBtn.addEventListener('click', () => loadSavedChat(entry.id));
+        const delBtn = document.createElement('button'); delBtn.type = 'button';
+        delBtn.className = 'save-chat-delete'; delBtn.textContent = '삭제';
+        delBtn.addEventListener('click', () => deleteSavedChat(entry.id));
+        actions.appendChild(loadBtn); actions.appendChild(delBtn);
+        card.appendChild(title); card.appendChild(meta); card.appendChild(actions);
+        list.appendChild(card);
+      });
+    }
+
+    function openSaveModal() {
+      closeSaveModal();
+      const overlay = document.createElement('div'); overlay.className = 'save-modal-overlay';
+      const modal = document.createElement('div'); modal.className = 'save-modal';
+      modal.innerHTML = `
+        <div class="save-modal-header">
+          <h3>대화 저장</h3>
+          <button type="button" class="save-modal-close" id="saveModalCloseBtn">×</button>
+        </div>
+        <div class="save-modal-sub">최대 2개까지 대화 기록을 저장하고 나중에 다시 불러볼 수 있어요.</div>
+        <button type="button" class="save-modal-save-btn" id="saveModalSaveBtn"></button>
+        <div class="save-chat-list" id="saveChatList"></div>`;
+      overlay.appendChild(modal);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) closeSaveModal(); });
+      document.body.appendChild(overlay);
+
+      saveModalEls = {
+        overlay,
+        saveBtn: modal.querySelector('#saveModalSaveBtn'),
+        list: modal.querySelector('#saveChatList'),
+      };
+      modal.querySelector('#saveModalCloseBtn').addEventListener('click', closeSaveModal);
+      saveModalEls.saveBtn.addEventListener('click', saveCurrentChat);
+      renderSaveModal();
+    }
+
+    function saveCurrentChat() {
+      if (!state.history.length) return;
+      const saved = getSavedChats();
+      if (saved.length >= MAX_SAVED_CHATS) return;
+      saved.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        savedAt: Date.now(),
+        title: buildSaveTitle(),
+        answerStyle: state.answerStyle,
+        messages: JSON.parse(JSON.stringify(state.history)),
+      });
+      setSavedChats(saved);
+      renderSaveModal();
+    }
+
+    function deleteSavedChat(id) {
+      setSavedChats(getSavedChats().filter(entry => entry.id !== id));
+      renderSaveModal();
+    }
+
+    function loadSavedChat(id) {
+      const entry = getSavedChats().find(item => item.id === id);
+      if (!entry) return;
+      if (!confirm('지금 보고 있는 대화 내용은 사라집니다. 저장된 대화를 불러올까요?')) return;
+
+      $('welcome')?.remove();
+      messages.innerHTML = '';
+      state.answerStyle = entry.answerStyle === 'simple' ? 'simple' : 'detailed';
+      document.querySelectorAll('.style-btn').forEach(b => b.classList.toggle('active', b.dataset.style === state.answerStyle));
+      // addMessage가 다시 history에 쌓지 않도록 skipHistory를 넘긴 뒤, 재생이
+      // 끝나면 불러온 내용 자체를 이번 대화의 history로 다시 채워 넣는다 —
+      // 그래야 불러온 뒤 이어서 질문하거나 다시 저장할 때 반영된다.
+      (entry.messages || []).forEach(m => addMessage(m.role, m.text, { ...(m.options || {}), skipHistory: true }));
+      state.history = (entry.messages || []).map(m => ({ role: m.role, text: m.text, options: m.options }));
+      closeSaveModal();
+    }
+
+    $('saveChatBtn').addEventListener('click', openSaveModal);
+
     renderMapList(); updateContext();
   </script>
 </body>
