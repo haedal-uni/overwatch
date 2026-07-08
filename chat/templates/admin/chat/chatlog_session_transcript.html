@@ -1,0 +1,73 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
+  &rsaquo; <a href="{% url 'admin:chat_chatlog_changelist' %}">채팅 로그</a>
+  &rsaquo; 대화 전체 보기
+</div>
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 900px; margin: 0 auto;">
+  <h1 style="margin-bottom:4px;">대화 전체 보기</h1>
+  <p style="color:#6b7280; margin-top:0;">
+    세션: <code>{{ log_session_id }}</code> · 총 {{ messages|length }}개 메시지
+  </p>
+
+  {% if not messages %}
+    <p>이 세션에는 로그가 없습니다.</p>
+  {% endif %}
+
+  <div style="display:flex; flex-direction:column; gap:16px; margin-top:20px;">
+    {% for m in messages %}
+      {% with obj=m.obj %}
+      <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px;
+                  {% if obj.role == 'ERROR' %}border-color:#fdba74;{% endif %}">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+          <div>{{ m.role_badge }}</div>
+          <div style="color:#9ca3af; font-size:12px;">
+            {{ obj.created_at|date:"Y-m-d H:i:s" }}
+            {% if obj.turn_id %}· <a href="{% url 'admin:chat_chatlog_changelist' %}?turn_id={{ obj.turn_id }}" style="color:#9ca3af;">turn {{ obj.turn_id|slice:":8" }}</a>{% endif %}
+          </div>
+        </div>
+
+        {% if obj.intent or obj.current_hero or obj.target_enemy %}
+        <div style="font-size:12px; color:#6b7280; margin-bottom:8px;">
+          {% if obj.intent %}intent: <strong>{{ obj.intent }}</strong>{% endif %}
+          {% if obj.current_hero %} · 현재 영웅: <strong>{{ obj.current_hero }}</strong>{% endif %}
+          {% if obj.target_enemy %} · 카운터 대상: <strong>{{ obj.target_enemy }}</strong>{% endif %}
+        </div>
+        {% endif %}
+
+        <div>{{ m.message_box }}</div>
+
+        {% if m.matchup_card != "-" %}
+          <div style="margin-top:10px;">{{ m.matchup_card }}</div>
+        {% endif %}
+        {% if m.recommend_card != "-" %}
+          <div style="margin-top:10px;">{{ m.recommend_card }}</div>
+        {% endif %}
+        {% if m.suggested_questions != "-" %}
+          <div style="margin-top:10px; font-size:13px; color:#6b7280;">
+            <strong>예측 질문</strong>{{ m.suggested_questions }}
+          </div>
+        {% endif %}
+
+        {% if obj.is_unsatisfied %}
+          <div style="margin-top:10px; background:#fef2f2; border:1px solid #fecaca; border-radius:8px;
+                      padding:10px; font-size:13px; color:#991b1b;">
+            🙁 불만족 피드백: {{ obj.feedback_reason|default:"(사유 없음)" }}
+          </div>
+        {% endif %}
+
+        <div style="margin-top:10px;">
+          <a href="{% url 'admin:chat_chatlog_change' obj.pk %}" style="font-size:12px;">상세 보기 →</a>
+        </div>
+      </div>
+      {% endwith %}
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
