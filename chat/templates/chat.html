@@ -322,12 +322,16 @@
       transform: rotate(45deg);
     }
 
-    /* ── 사용법 투어 ── */
+    /* ── 사용법 투어 ──
+       top/left/width/height는 transition을 적용하지 않는다(즉시 이동) —
+       설명 텍스트가 먼저 바뀌고 강조 박스가 뒤늦게 미끄러져 도착하는 것을
+       막기 위해, 단계 전환은 opacity로만 사라짐/나타남을 표현하고 위치는
+       투명한 상태에서 순간 이동시킨다(JS의 goToTourStep 참고). */
     .tour-dim {
       position: fixed;
       background: rgba(4, 10, 22, .62);
       z-index: 200;
-      transition: all .2s ease;
+      transition: opacity var(--tour-fade-ms, 150ms) ease;
     }
 
     .tour-highlight {
@@ -336,7 +340,7 @@
       border-radius: 16px;
       box-shadow: 0 0 0 3px var(--primary), 0 0 32px rgba(37, 99, 235, .55);
       pointer-events: none;
-      transition: all .2s ease;
+      transition: opacity var(--tour-fade-ms, 150ms) ease;
     }
 
     .tour-tooltip {
@@ -349,7 +353,7 @@
       border-radius: 20px;
       padding: 18px 18px 14px;
       box-shadow: var(--shadow);
-      transition: top .2s ease, left .2s ease;
+      transition: opacity var(--tour-fade-ms, 150ms) ease;
     }
 
     .tour-tooltip-step {
@@ -961,6 +965,30 @@
       color: var(--primary)
     }
 
+    .bubble .md-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 8px 0;
+      font-size: 13px;
+      display: block;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+
+    .bubble .md-table th,
+    .bubble .md-table td {
+      border: 1px solid var(--line);
+      padding: 5px 8px;
+      text-align: left;
+    }
+
+    .bubble .md-table th {
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
     .msg.user .bubble strong {
       color: white
     }
@@ -1296,7 +1324,7 @@
       cursor: not-allowed
     }
 
-    .mic-btn {
+    .upload-btn {
       height: 42px;
       width: 42px;
       flex: 0 0 auto;
@@ -1310,41 +1338,22 @@
       transition: .16s;
     }
 
-    .mic-btn:hover {
+    .upload-btn:hover {
       border-color: var(--primary);
       color: var(--primary);
       background: var(--primary-soft)
     }
 
-    .mic-btn.recording {
-      border-color: var(--danger);
-      background: var(--danger);
-      color: white;
-      animation: mic-pulse 1.1s infinite ease-in-out
-    }
-
-    .mic-btn:disabled {
+    .upload-btn:disabled {
       opacity: .55;
       cursor: not-allowed
     }
 
-    @keyframes mic-pulse {
-
-      0%,
-      100% {
-        box-shadow: 0 0 0 0 rgba(239, 68, 68, .45)
-      }
-
-      50% {
-        box-shadow: 0 0 0 8px rgba(239, 68, 68, 0)
-      }
+    .upload-spin {
+      animation: upload-spin .8s linear infinite
     }
 
-    .mic-spin {
-      animation: mic-spin .8s linear infinite
-    }
-
-    @keyframes mic-spin {
+    @keyframes upload-spin {
       to {
         transform: rotate(360deg)
       }
@@ -1566,14 +1575,18 @@
         max-width: 100%
       }
 
-      /* 빠른 버튼은 줄바꿈하지 않고 한 줄로 유지 */
+      /* 빠른 버튼은 줄바꿈하지 않고 한 줄로 유지. 좌우로 음수 margin +
+         동일한 padding을 줘서 .welcome의 좌우 여백보다 살짝 더 넓게
+         스크롤 가능 영역을 확보한다(첫 버튼 "카운터"가 더 왼쪽에서
+         시작). 마지막 버튼("영웅 유지") 뒤에도 padding을 둬서 컨테이너
+         경계에 딱 붙어 잘려 보이지 않게 한다. */
       .sample-chips {
         flex-wrap: nowrap;
         justify-content: flex-start;
-        gap: 7px;
-        margin-top: 17px;
+        gap: 6px;
+        margin: 17px -8px 0;
+        padding: 0 8px 4px;
         overflow-x: auto;
-        padding-bottom: 4px;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: none;
       }
@@ -1584,8 +1597,8 @@
 
       .chip {
         flex: 0 0 auto;
-        padding: 8px 12px;
-        font-size: 11.5px
+        padding: 7px 10px;
+        font-size: 11px
       }
 
       .composer {
@@ -1628,7 +1641,7 @@
         font-size: 13px
       }
 
-      .mic-btn {
+      .upload-btn {
         height: 38px;
         width: 38px;
         border-radius: 14px;
@@ -1780,7 +1793,7 @@
         <div class="welcome" id="welcome">
           <div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div>
           <h2>게임 상황을 알려주세요</h2>
-          <p>예를 들어 “상대 파라가 계속 압박해”, “왕의 길 수비 조합 추천해줘”, “내 솔저 스탯이 킬 4 데스 8 딜 6000이야”처럼 입력하면 됩니다. 탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지 붙여서 써주시면 더 정확하게 이해할 수 있어요.</p>
+          <p>탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지<br>붙여서 써주시면 더 정확하게 이해할 수 있어요.</p>
           <div class="sample-chips">
             <button class="chip" data-fill="겐지 카운터 알려줘">카운터</button>
             <button class="chip" data-fill="상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?">조합 추천</button>
@@ -1799,7 +1812,8 @@
         </div>
         <div class="input-box">
           <textarea id="userInput" rows="1" placeholder="질문을 입력하세요. Enter 전송, Shift+Enter 줄바꿈"></textarea>
-          <button type="button" class="mic-btn" id="micBtn" title="음성으로 입력"></button>
+          <input type="file" id="screenshotInput" accept="image/png,image/jpeg,image/webp" hidden>
+          <button type="button" class="upload-btn" id="uploadBtn" title="점수판(TAB) 스크린샷 업로드"></button>
           <button class="send-btn" id="sendBtn">전송</button>
         </div>
         <div class="composer-hint">
@@ -1878,14 +1892,46 @@
     function escapeHtml(text) {
       return String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
     }
+    function convertMarkdownTables(text) {
+      // "| a | b |" 헤더 + "|---|---|" 구분선으로 시작하는 파이프 표 블록을
+      // <table>로 변환한다. 표로 인식된 줄들은 내부 개행이 없는 한 줄짜리
+      // HTML로 합쳐져서, simpleMarkdown의 나머지 줄 단위 치환(문단/줄바꿈)에
+      // 영향을 받지 않는다.
+      const lines = text.split('\n');
+      const out = [];
+      const splitRow = (line) => line.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      let i = 0;
+      while (i < lines.length) {
+        const isRow = /^\|.*\|\s*$/.test(lines[i]);
+        const nextIsSep = i + 1 < lines.length && /^\|[\s:\-|]+\|\s*$/.test(lines[i + 1]);
+        if (isRow && nextIsSep) {
+          const headerCells = splitRow(lines[i]);
+          i += 2;
+          const bodyRows = [];
+          while (i < lines.length && /^\|.*\|\s*$/.test(lines[i])) {
+            bodyRows.push(splitRow(lines[i]));
+            i++;
+          }
+          let html = '<table class="md-table"><thead><tr>' + headerCells.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+          bodyRows.forEach(r => { html += '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>'; });
+          html += '</tbody></table>';
+          out.push(html);
+        } else {
+          out.push(lines[i]);
+          i++;
+        }
+      }
+      return out.join('\n');
+    }
     function simpleMarkdown(text) {
       let s = escapeHtml(text || '');
+      s = convertMarkdownTables(s);
       s = s.replace(/^### (.*)$/gm, '<h3>$1</h3>').replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/^# (.*)$/gm, '<h1>$1</h1>');
       s = s.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
       s = s.replace(/^- (.*)$/gm, '<li>$1</li>');
       s = s.replace(/(<li>.*?<\/li>\n?)+/gs, m => '<ul>' + m + '</ul>');
       s = s.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
-      if (!/^<h|^<ul|^<p/.test(s)) s = '<p>' + s + '</p>';
+      if (!/^<h|^<ul|^<p|^<table/.test(s)) s = '<p>' + s + '</p>';
       return s;
     }
     function hasStats(text) { return /\d/.test(text) && /(킬|데스|딜|힐|도움|어시|피해|치유|사망)/.test(text); }
@@ -1968,108 +2014,59 @@
     input.addEventListener('input', autoResize);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 
-    // ── 음성 입력 (STT) ──
-    // 마이크 버튼을 누르면 녹음을 시작하고, 사용자가 계속 말하는 동안 녹음을
-    // 이어가다가 같은 버튼(정지 버튼 역할)을 다시 누르면 녹음을 멈추고 그때
-    // 비로소 오디오 전체를 서버로 보내 Gemini로 한 번에 텍스트 변환한다.
-    const micBtn = $('micBtn');
+    // ── 점수판(TAB) 이미지 업로드 ──
+    // 업로드 버튼을 누르면 파일 선택창이 열리고, 이미지를 고르면 곧바로 서버로
+    // 보내 TAB 점수판을 분석한 뒤 결과를 AI 메시지로 채팅창에 보여준다.
+    const uploadBtn = $('uploadBtn');
+    const screenshotInput = $('screenshotInput');
     const composerHintText = $('composerHintText');
     const composerHintDefault = composerHintText ? composerHintText.textContent : '';
-    let mediaRecorder = null;
-    let audioChunks = [];
-    let micStream = null;
-    let isRecording = false;
 
-    const MIC_ICON = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>';
-    const STOP_ICON = '<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
-    const SPINNER_ICON = '<svg viewBox="0 0 24 24" width="19" height="19" class="mic-spin"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="40 100"/></svg>';
-    if (micBtn) micBtn.innerHTML = MIC_ICON;
+    const UPLOAD_ICON = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>';
+    const UPLOAD_SPINNER_ICON = '<svg viewBox="0 0 24 24" width="19" height="19" class="upload-spin"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="40 100"/></svg>';
+    if (uploadBtn) uploadBtn.innerHTML = UPLOAD_ICON;
 
-    function pickRecorderMimeType() {
-      const candidates = [
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/ogg;codecs=opus',
-        'audio/mp4',
-      ];
-      return candidates.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+    function formatScoreboardResult(data) {
+      // 인식 요약/표/불확실 항목/코치 피드백까지 전부 서버(vision_stats.py의
+      // build_scoreboard_report)에서 마크다운으로 완성해서 내려준다 — 본인
+      // 판별 우선순위나 표 형식이 바뀌어도 프론트를 따로 손볼 필요가 없다.
+      if (data.report) return `📋 점수판 분석 결과\n\n${data.report}`;
+      return '📋 점수판을 분석했지만 표시할 내용이 없습니다.';
     }
 
-    async function startRecording() {
-      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-        showError('이 브라우저에서는 음성 입력을 지원하지 않습니다.');
-        return;
-      }
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (err) {
-        showError('마이크 권한이 필요합니다.');
-        return;
-      }
-      const mimeType = pickRecorderMimeType();
-      audioChunks = [];
-      mediaRecorder = mimeType ? new MediaRecorder(micStream, { mimeType }) : new MediaRecorder(micStream);
-      mediaRecorder.addEventListener('dataavailable', (e) => { if (e.data && e.data.size > 0) audioChunks.push(e.data); });
-      mediaRecorder.addEventListener('stop', onRecordingStopped);
-      mediaRecorder.start();
-      isRecording = true;
-      micBtn.classList.add('recording');
-      micBtn.innerHTML = STOP_ICON;
-      micBtn.title = '녹음 종료 (눌러서 텍스트 변환)';
-      if (composerHintText) composerHintText.textContent = '🎙 녹음 중입니다. 다시 누르면 종료하고 텍스트로 변환합니다.';
-    }
-
-    function stopRecording() {
-      if (!isRecording || !mediaRecorder) return;
-      isRecording = false;
-      mediaRecorder.stop();
-      micStream?.getTracks().forEach(track => track.stop());
-      micBtn.classList.remove('recording');
-    }
-
-    async function onRecordingStopped() {
-      const mimeType = mediaRecorder.mimeType || 'audio/webm';
-      const blob = new Blob(audioChunks, { type: mimeType });
-      audioChunks = [];
-
-      if (!blob.size) {
-        if (composerHintText) composerHintText.textContent = composerHintDefault;
-        return;
-      }
-
-      micBtn.disabled = true;
-      micBtn.innerHTML = SPINNER_ICON;
-      micBtn.title = '텍스트로 변환 중...';
-      if (composerHintText) composerHintText.textContent = '음성을 텍스트로 변환하는 중입니다...';
+    async function uploadScoreboard(file) {
+      uploadBtn.disabled = true;
+      uploadBtn.innerHTML = UPLOAD_SPINNER_ICON;
+      uploadBtn.title = '이미지 분석 중...';
+      if (composerHintText) composerHintText.textContent = '🖼 점수판 이미지를 분석하는 중입니다...';
 
       try {
-        const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'm4a' : 'webm';
         const formData = new FormData();
-        formData.append('audio', blob, `recording.${ext}`);
-        const res = await fetch('/chat/api/stt/', {
+        formData.append('image', file, file.name || 'scoreboard.png');
+        const res = await fetch('/chat/api/scoreboard/', {
           method: 'POST',
           headers: { 'X-CSRFToken': getCsrf() },
           body: formData,
         });
         const data = await parseJsonOrThrow(res);
-        if (!res.ok || data.error) throw new Error(data.error || '음성 인식에 실패했습니다.');
-        const text = (data.text || '').trim();
-        if (text) {
-          input.value = input.value ? `${input.value} ${text}` : text;
-          autoResize();
-        }
+        if (!res.ok || data.error) throw new Error(data.error || '이미지 분석에 실패했습니다.');
+        addMessage('ai', formatScoreboardResult(data));
       } catch (err) {
-        showError(err.message || '음성 인식에 실패했습니다.');
+        showError(err.message || '이미지 분석에 실패했습니다.');
       } finally {
-        micBtn.disabled = false;
-        micBtn.innerHTML = MIC_ICON;
-        micBtn.title = '음성으로 입력';
+        uploadBtn.disabled = false;
+        uploadBtn.innerHTML = UPLOAD_ICON;
+        uploadBtn.title = '점수판(TAB) 스크린샷 업로드';
         if (composerHintText) composerHintText.textContent = composerHintDefault;
-        input.focus();
+        screenshotInput.value = '';
       }
     }
 
-    micBtn?.addEventListener('click', () => { isRecording ? stopRecording() : startRecording(); });
+    uploadBtn?.addEventListener('click', () => screenshotInput?.click());
+    screenshotInput?.addEventListener('change', () => {
+      const file = screenshotInput.files?.[0];
+      if (file) uploadScoreboard(file);
+    });
 
     function addMessage(role, text, options = {}) {
       $('welcome')?.remove();
@@ -2172,6 +2169,7 @@
         const btn = document.createElement('button'); btn.className = 'suggest-btn'; btn.textContent = item.label;
         btn.addEventListener('click', () => {
           if (item.type === 'role_filter') sendRoleFilter(item.value, item.label);
+          else if (item.type === 'focus_hero') sendFocusHero(item.value, item.label);
           else { input.value = item.label; autoResize(); input.focus(); }
         });
         box.appendChild(btn); has = true;
@@ -2240,9 +2238,10 @@
       const div = document.createElement('div'); div.className = 'error'; div.textContent = msg;
       messages.appendChild(div); messages.scrollTop = messages.scrollHeight;
     }
-    function buildRequestBody(message, roleFilter) {
+    function buildRequestBody(message, roleFilter, focusHero) {
       const body = { message: message || '', answer_style: state.answerStyle };
       if (roleFilter) body.role_filter = roleFilter;
+      if (focusHero) body.focus_hero = focusHero;
       const extra = {};
       if (state.map && state.map.mode !== 'none') extra.map_name = state.map.name;
       if (state.side) extra.side = state.side;
@@ -2289,6 +2288,18 @@
       } catch (err) { removeTyping(); showError(err.message || '연결에 실패했습니다.'); }
       finally { state.busy = false; sendBtn.disabled = false; }
     }
+    async function sendFocusHero(value, label) {
+      if (state.busy) return;
+      addMessage('user', label || value, { context: '영웅 선택' });
+      state.q++; $('questionCount').textContent = state.q;
+      state.busy = true; sendBtn.disabled = true; addTyping();
+      try {
+        const data = await requestChat(buildRequestBody('', null, value));
+        removeTyping();
+        addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card });
+      } catch (err) { removeTyping(); showError(err.message || '연결에 실패했습니다.'); }
+      finally { state.busy = false; sendBtn.disabled = false; }
+    }
     sendBtn.addEventListener('click', sendMessage);
 
     function resetScreen() {
@@ -2297,7 +2308,7 @@
       state.history = [];
       document.querySelectorAll('.style-btn').forEach(b => b.classList.toggle('active', b.dataset.style === 'detailed'));
       clearContext();
-      messages.innerHTML = `<div class="welcome" id="welcome"><div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div><h2>게임 상황을 편하게 적어주세요</h2><p>예를 들어 “상대 파라가 계속 압박해”, “왕의 길 수비 조합 추천해줘”, “내 솔저 스탯이 킬 4 데스 8 딜 6000이야”처럼 입력하면 됩니다. 탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지 붙여서 써주시면 더 정확하게 이해할 수 있어요.</p><div class="sample-chips"><button class="chip" data-fill="겐지 카운터 알려줘">카운터</button><button class="chip" data-fill="상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?">조합 추천</button><button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button><button class="chip" data-fill="내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?">스탯 피드백</button><button class="chip" data-fill="리퍼를 하고 싶은데 상대 아나를 어떻게 처리해야할까?">영웅 유지</button></div></div>`;
+      messages.innerHTML = `<div class="welcome" id="welcome"><div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div><h2>게임 상황을 편하게 적어주세요</h2><p>탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지<br>붙여서 써주시면 더 정확하게 이해할 수 있어요.</p><div class="sample-chips"><button class="chip" data-fill="겐지 카운터 알려줘">카운터</button><button class="chip" data-fill="상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?">조합 추천</button><button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button><button class="chip" data-fill="내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?">스탯 피드백</button><button class="chip" data-fill="리퍼를 하고 싶은데 상대 아나를 어떻게 처리해야할까?">영웅 유지</button></div></div>`;
     }
     async function resetServer() {
       try {
@@ -2374,6 +2385,8 @@
 
     let tourStep = 0;
     let tourEls = null;
+    let tourTransitioning = false; // 전환 애니메이션 도중 다음/이전 버튼 중복 클릭 방지
+    const TOUR_FADE_MS = 150; // CSS의 --tour-fade-ms와 반드시 같은 값이어야 한다.
 
     function buildTourEls() {
       const top = document.createElement('div'); top.className = 'tour-dim';
@@ -2448,12 +2461,19 @@
       nextBtn.textContent = tourStep === tourSteps.length - 1 ? '완료' : '다음';
     }
 
+    function setTourOpacity(value) {
+      if (!tourEls) return;
+      Object.values(tourEls).forEach(el => { el.style.opacity = value; });
+    }
+
     function openTour() {
       helpHint.classList.remove('show');
       closeTour();
       tourStep = 0;
+      tourTransitioning = false;
       tourEls = buildTourEls();
       positionTour();
+      setTourOpacity(1);
       window.addEventListener('resize', positionTour);
       window.addEventListener('scroll', positionTour, true);
     }
@@ -2462,20 +2482,39 @@
       if (!tourEls) return;
       Object.values(tourEls).forEach(el => el.remove());
       tourEls = null;
+      tourTransitioning = false;
       window.removeEventListener('resize', positionTour);
       window.removeEventListener('scroll', positionTour, true);
     }
 
+    // 단계 전환을 "이어지는 이동 애니메이션"이 아니라 끊어진 순서로 처리한다:
+    // 1) 현재 강조 박스/설명을 opacity만으로 숨김 → 2) (투명한 상태에서) 다음
+    // 단계의 위치·텍스트를 한 번에 갱신(위치 이동 자체에는 transition이 없어
+    // 순간 이동한다) → 3) 새 강조 박스/설명을 opacity로 동시에 표시. 전환
+    // 도중에는 tourTransitioning으로 다음/이전 버튼 중복 클릭을 막는다.
+    function goToTourStep(newStep) {
+      if (!tourEls || tourTransitioning) return;
+      tourTransitioning = true;
+      setTourOpacity(0);
+      setTimeout(() => {
+        if (!tourEls) { tourTransitioning = false; return; } // 숨는 도중 종료된 경우
+        tourStep = newStep;
+        positionTour(); // 위치+텍스트를 투명한 상태에서 한 번에 갱신(순간 이동)
+        setTourOpacity(1);
+        setTimeout(() => { tourTransitioning = false; }, TOUR_FADE_MS);
+      }, TOUR_FADE_MS);
+    }
+
     function nextTourStep() {
+      if (tourTransitioning) return;
       if (tourStep >= tourSteps.length - 1) { closeTour(); return; }
-      tourStep++;
-      positionTour();
+      goToTourStep(tourStep + 1);
     }
 
     function prevTourStep() {
+      if (tourTransitioning) return;
       if (tourStep <= 0) return;
-      tourStep--;
-      positionTour();
+      goToTourStep(tourStep - 1);
     }
 
     helpBtn.addEventListener('click', openTour);

@@ -10,18 +10,27 @@
 {% endblock %}
 
 {% block content %}
-<div style="max-width: 900px; margin: 0 auto;">
-  <h1 style="margin-bottom:4px;">대화 전체 보기</h1>
-  <p style="color:#6b7280; margin-top:0;">
-    세션: <code>{{ log_session_id }}</code> · 총 {{ messages|length }}개 메시지
-  </p>
+<div style="max-width: 1600px; margin: 0 auto;">
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+    <div>
+      <h1 style="margin-bottom:4px;">대화 전체 보기</h1>
+      <p style="color:#6b7280; margin-top:0;">
+        세션: <code>{{ log_session_id }}</code> · 총 {{ transcript_messages|length }}개 메시지
+      </p>
+    </div>
+    <form method="post" action="{% url 'admin:chat_chatlog_session_delete' log_session_id %}"
+          onsubmit="return confirm('이 세션의 로그 {{ transcript_messages|length }}건을 전부 삭제합니다. 되돌릴 수 없습니다. 계속할까요?');">
+      {% csrf_token %}
+      <button type="submit" class="deletelink" style="white-space:nowrap;">이 세션 전체 삭제</button>
+    </form>
+  </div>
 
-  {% if not messages %}
+  {% if not transcript_messages %}
     <p>이 세션에는 로그가 없습니다.</p>
   {% endif %}
 
   <div style="display:flex; flex-direction:column; gap:16px; margin-top:20px;">
-    {% for m in messages %}
+    {% for m in transcript_messages %}
       {% with obj=m.obj %}
       <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px;
                   {% if obj.role == 'ERROR' %}border-color:#fdba74;{% endif %}">
@@ -53,6 +62,9 @@
           <div style="margin-top:10px; font-size:13px; color:#6b7280;">
             <strong>예측 질문</strong>{{ m.suggested_questions }}
           </div>
+        {% endif %}
+        {% if m.scoreboard_admin_log != "-" %}
+          <div style="margin-top:10px; overflow-x:auto;">{{ m.scoreboard_admin_log }}</div>
         {% endif %}
 
         {% if obj.is_unsatisfied %}

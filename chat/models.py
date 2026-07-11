@@ -26,6 +26,10 @@ class ChatLog(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
+    class Meta:
+        verbose_name = "채팅 로그"
+        verbose_name_plural = "채팅 로그"
+
     def __str__(self):
         return f"[{self.role}] {self.message[:30]}"
 
@@ -36,11 +40,7 @@ class ErrorLogManager(models.Manager):
 
 
 class ErrorChatLog(ChatLog):
-    """
-    ChatLog 중 role="ERROR"인 것만 모아 보여주는 프록시 모델.
-    실제 테이블은 chat_chatlog를 그대로 쓰고, 관리자 페이지 사이드바에
-    "오류 로그"로 별도 진입점을 만들기 위한 용도다.
-    """
+    """ChatLog 중 role="ERROR"인 것만 보여주는 프록시 모델(관리자 페이지 "오류 로그" 메뉴)."""
 
     objects = ErrorLogManager()
 

@@ -1,16 +1,25 @@
-# admin.py
-
 import json
+import os
+import re
 from urllib.parse import urlencode
 
+from django.conf import settings
 from django.contrib import admin
-from django.http import HttpResponseRedirect
+from django.http import FileResponse, Http404, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils.html import format_html, format_html_join
 
 from .chatbot_graph import ROLE_LABELS
 from .models import ChatLog, ErrorChatLog, UnsatisfiedChatLog
+
+# 점수판 디버그 이미지 파일명 화이트리스트. vision_stats._save_debug_images가
+# 만드는 파일명 규칙과 일치해야 하며, 여기 안 맞는 이름은 경로 조작 방지를
+# 위해 scoreboard_debug_image_view가 전부 거부한다.
+SCOREBOARD_DEBUG_FILENAME_RE = re.compile(
+    r"(?:ally|enemy)_row_[1-5]_(?:row|hero)_crop\.png|original\.png|coarse_crop\.png"
+)
+SCOREBOARD_DEBUG_TURN_ID_RE = re.compile(r"[A-Za-z0-9\-]+")
 
 
 ROLE_BADGE_STYLES = {
@@ -37,22 +46,32 @@ class ChatLogDisplayMixin:
         return True
 
     def history_view(self, request, object_id, extra_context=None):
-        """
-        Django 관리자 기본 제공 "히스토리" 버튼(상세 화면 오른쪽 위)은 이
-        관리자 화면을 통해 직접 값을 수정한 기록(django.contrib.admin의
-        LogEntry)만 보여준다. ChatLog는 사람이 admin에서 수정하는 게 아니라
-        챗봇 파이프라인이 자동으로만 생성/기록하므로 이 LogEntry가 항상
-        비어 있어 "이 개체는 변경 기록이 없습니다"만 뜬다 — 즉 이 버튼은
-        원래부터 대화 기록을 보여주는 용도가 아니었다. 실제로 "한 세션의
-        대화 전체를 보고 싶다"는 요청에 맞는 화면은 세션별 대화 전체보기
-        (session_transcript_view, 목록의 "세션" 컬럼 링크)이므로, 헷갈리지
-        않도록 히스토리 버튼 자체를 그 화면으로 리다이렉트한다.
+        """기본 "히스토리" 버튼을 세션 대화 전체보기로 리다이렉트한다.
+
+        Django 기본 히스토리 화면은 admin에서 직접 값을 수정한 기록(LogEntry)만
+        보여주는데, ChatLog는 챗봇 파이프라인이 자동 생성만 하므로 항상 비어
+        있다. 대화 내용을 보려면 session_transcript_view로 가야 한다.
         """
         obj = self.get_object(request, object_id)
         if obj is not None and obj.log_session_id:
             url = reverse("admin:chat_chatlog_session_transcript", args=[obj.log_session_id])
             return HttpResponseRedirect(url)
         return super().history_view(request, object_id, extra_context)
+
+    @admin.action(description="선택한 로그가 속한 세션 전체 삭제(같은 log_session_id의 모든 USER/AI/ERROR 로그)")
+    def delete_entire_session(self, request, queryset):
+        """선택한 로그가 속한 세션(log_session_id) 전체를, 선택하지 않은 행과
+        다른 role(USER/AI/ERROR)까지 포함해 통째로 지운다. 프록시 모델
+        (ErrorChatLog 등)에서 실행해도 항상 원본 ChatLog 기준으로 삭제된다."""
+        session_ids = list(queryset.values_list("log_session_id", flat=True).distinct())
+        if not session_ids:
+            self.message_user(request, "선택한 로그에 세션 정보가 없습니다.", level="warning")
+            return
+        deleted_count, _ = ChatLog.objects.filter(log_session_id__in=session_ids).delete()
+        self.message_user(
+            request,
+            f"세션 {len(session_ids)}개, 로그 {deleted_count}건을 삭제했습니다.",
+        )
 
     @admin.display(description="구분", ordering="role")
     def role_badge(self, obj):
@@ -69,13 +88,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="세션", ordering="log_session_id")
     def log_session_link(self, obj):
-        """
-        기존에는 이 링크가 log_session_id로 필터링된 목록 테이블(changelist)로
-        갔는데, 한 세션의 질문/답변을 한 턴씩 표로 훑어봐야 해서 대화 흐름을
-        파악하기 힘들다는 지적을 받았다. 대신 같은 세션의 모든 로그를 실제
-        대화하듯 순서대로 쭉 보여주는 전용 화면(session_transcript_view)으로
-        연결한다.
-        """
+        """같은 세션의 모든 로그를 대화하듯 순서대로 보여주는 전용 화면으로 연결한다."""
         if not obj.log_session_id:
             return "-"
         url = reverse("admin:chat_chatlog_session_transcript", args=[obj.log_session_id])
@@ -93,9 +106,8 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="메시지 미리보기")
     def message_preview(self, obj):
-        # 컬럼 자체 너비 없이 텍스트만 잘라내면, 좁은 화면(특히 모바일)에서
-        # 컬럼이 좁게 잡힐 때 이 텍스트가 여러 줄로 줄바꿈되어 행 전체 높이가
-        # 비정상적으로 늘어난다. CSS로 한 줄 말줄임을 강제해 행 높이를 고정한다.
+        # 컬럼 폭이 좁아지면 텍스트가 여러 줄로 줄바꿈돼 행 높이가 늘어나므로
+        # CSS로 한 줄 말줄임을 강제한다.
         text = (obj.message or "").replace("\n", " ").strip()
         truncated = text[:80] + ("…" if len(text) > 80 else "")
         color = "color:#b91c1c; font-weight:600;" if obj.role == "ERROR" else ""
@@ -133,14 +145,8 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="상대 조합")
     def enemy_team_display(self, obj):
-        """
-        target_enemy는 "카운터 대상 1명"만 담는 필드라, 여러 상대를 동시에
-        언급한 질문에서는 그 중 하나만 보인다(그래프가 실제 답변을 생성할 때는
-        target_enemy와 별개로 enemy_team 전체를 참고하므로 답변 자체는 정상이다).
-        enemy_team은 ChatLog의 별도 컬럼이 아니라 metadata(JSON) 안에만 있어
-        목록/상세에서 바로 안 보였는데, 여기서 꺼내 target_enemy 옆에 나란히
-        보여준다.
-        """
+        """target_enemy는 카운터 대상 1명만 담으므로, metadata의 enemy_team
+        전체를 옆에 함께 보여준다(답변 생성은 이미 enemy_team 전체를 참고한다)."""
         metadata = obj.metadata or {}
         enemy_team = (
             metadata.get("context_patch", {}).get("enemy_team")
@@ -153,13 +159,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="상성 카드")
     def matchup_card_display(self, obj):
-        """
-        카운터(counter) 질문의 실제 답변은 말풍선의 짧은 intro 문장
-        (message_box)뿐 아니라 상성 카드(상대하기 어려운/쉬운 영웅 목록)가
-        핵심 내용인데, 카드 데이터는 metadata.matchup_card 안에만 있어 접힌
-        메타데이터 JSON을 펼치기 전에는 답변 내용을 온전히 확인할 수 없었다.
-        message_box와 같은 화면에서 바로 보이도록 풀어서 렌더링한다.
-        """
+        """카운터 질문 답변의 핵심인 상성 카드(metadata.matchup_card)를 message_box 옆에 풀어서 보여준다."""
         metadata = obj.metadata or {}
         card = metadata.get("matchup_card")
         if not card:
@@ -189,14 +189,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="추천 영웅 카드")
     def recommend_card_display(self, obj):
-        """
-        교체(swap)/조합(composition) 질문의 실제 답변은 말풍선의 짧은 intro
-        문장(message_box)뿐 아니라 "추천 영웅 카드"(단일 목록 + 이유)가 핵심
-        내용인데, matchup_card_display와 달리 이 카드는 여태 관리자 페이지
-        어디에도 노출되지 않고 metadata.recommend_card 안에만 있어 접힌
-        메타데이터 JSON을 펼치기 전에는 확인할 수 없었다. message_box와 같은
-        화면에서 바로 보이도록 풀어서 렌더링한다.
-        """
+        """교체(swap)/조합(composition) 질문 답변의 추천 영웅 카드(metadata.recommend_card)를 풀어서 보여준다."""
         metadata = obj.metadata or {}
         card = metadata.get("recommend_card")
         if not card:
@@ -227,12 +220,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="예측 질문")
     def suggested_questions_display(self, obj):
-        """
-        AI 답변 하단에 버튼으로 노출되는 "다음에 물어볼 만한 질문 3개"
-        (LLM이 예측한 것)도 metadata.suggested_questions 안에만 있어 접힌
-        메타데이터를 펼치기 전에는 확인할 수 없었다. message_box와 같은
-        화면에서 바로 보이도록 목록으로 풀어서 보여준다.
-        """
+        """AI 답변에 딸린 예측 질문 3개(metadata.suggested_questions)를 목록으로 보여준다."""
         metadata = obj.metadata or {}
         questions = metadata.get("suggested_questions")
         if not questions:
@@ -240,12 +228,261 @@ class ChatLogDisplayMixin:
         items = format_html_join("", "<li>{}</li>", ((q,) for q in questions))
         return format_html('<ul style="margin:0 0 0 18px; padding:0;">{}</ul>', items)
 
+    def _scoreboard_debug_image_url(self, turn_id, rel_path):
+        """admin_log에 저장된 "logs/scoreboard_debug/{turn_id}/파일명" 상대
+        경로를, 그 파일을 실제로 서빙하는 관리자 전용 URL(scoreboard_debug_
+        image_view)로 바꾼다. rel_path/turn_id가 없으면 None을 반환한다."""
+        if not rel_path or not turn_id:
+            return None
+        filename = rel_path.rsplit("/", 1)[-1]
+        return reverse("admin:chat_chatlog_scoreboard_debug_image", args=[turn_id, filename])
+
+    def _render_debug_thumb(self, turn_id, rel_path, alt):
+        """crop 경로 하나를 클릭하면 원본 크기로 열리는 56x56 썸네일 <img>로
+        렌더링한다. 경로가 없으면(저장 실패/turn_id 없음) 안내 문구만 낸다."""
+        img_url = self._scoreboard_debug_image_url(turn_id, rel_path)
+        if not img_url:
+            return "(저장 안 됨)"
+        return format_html(
+            '<a href="{0}" target="_blank"><img src="{0}" alt="{1}" '
+            'style="width:56px; height:56px; object-fit:cover; border:1px solid #374151; '
+            'border-radius:4px;"></a>',
+            img_url, alt,
+        )
+
+    @staticmethod
+    def _format_box(box):
+        if not box:
+            return "-"
+        return f"({box['x0']},{box['y0']})-({box['x1']},{box['y1']})"
+
+    # Django admin의 readonly 필드 카드 배경 때문에 <tr>에서 상속한 색상이
+    # 적용되지 않을 수 있어, 셀마다 배경/글자색을 직접 인라인으로 지정한다.
+    SCOREBOARD_TD_STYLE = "padding:6px 8px; border-bottom:1px solid #374151; background:#111827; color:#e5e7eb; vertical-align:top;"
+    SCOREBOARD_TH_STYLE = "padding:6px 8px; text-align:left; background:#1f2937; color:#f9fafb; font-weight:700; white-space:nowrap;"
+
+    def _sb_td(self, content):
+        return format_html('<td style="{}">{}</td>', self.SCOREBOARD_TD_STYLE, content)
+
+    def _sb_th(self, text):
+        return format_html('<th style="{}">{}</th>', self.SCOREBOARD_TH_STYLE, text)
+
+    @admin.display(description="점수판 분석 진단 정보 (관리자 전용)")
+    def scoreboard_admin_log_display(self, obj):
+        """점수판 분석 진단 정보(metadata.admin_log: 팀 패널 좌표, 행별 crop,
+        영웅 유사도 점수/후보)를 관리자 전용으로 렌더링한다. 사용자 응답에는
+        포함되지 않는다."""
+        metadata = obj.metadata or {}
+        log = metadata.get("admin_log")
+        if not log:
+            return "-"
+
+        turn_id = obj.turn_id
+
+        def render_missing(rows):
+            if not rows:
+                return "없음"
+            items = format_html_join(
+                "", "<li>{} {}행({}): {}</li>",
+                (
+                    (
+                        "우리팀" if r["team"] == "ally" else "상대팀", r["row_index"],
+                        ROLE_LABELS.get(r["role"], r["role"]), ", ".join(r["fields"]),
+                    )
+                    for r in rows
+                ),
+            )
+            return format_html('<ul style="margin:4px 0 0 18px; padding:0;">{}</ul>', items)
+
+        def render_team_layout(team_key, team_label):
+            # 후보 목록(mask_candidate_boxes)은 데이터에는 남아있지만 화면에는 표시하지 않는다.
+            data = (log.get("team_layout") or {}).get(team_key) or {}
+            pair_details = data.get("pair_details") or {}
+            return format_html(
+                '<div style="margin-bottom:10px;"><strong>{}</strong> — team_box: {} · '
+                'header_height: {}px · player_area_box: {}<br>'
+                '<span style="color:#9ca3af; font-size:11px;">'
+                'selected_by: {} · selected_candidate: {} (점수 {}) · '
+                'pair_score: {} · x_fallback: {} · y_fallback: {} · '
+                'expected_row_height: {} · row_heights: {}<br>'
+                'layout 검증: {} ({})<br>'
+                'pair 세부 점수: {}'
+                '</span>'
+                '</div>',
+                team_label, self._format_box(data.get("team_box")),
+                data.get("header_height"), self._format_box(data.get("player_area_box")),
+                data.get("selected_by") or "-",
+                self._format_box(data.get("selected_candidate_box")), data.get("selected_candidate_score"),
+                data.get("pair_score"),
+                "예" if data.get("x_fallback_used") else "아니오",
+                "예" if data.get("y_fallback_used") else "아니오",
+                data.get("expected_row_height"), data.get("row_heights") or "-",
+                "통과" if data.get("layout_validation_ok") else "실패",
+                data.get("layout_validation_reason") or "-",
+                pair_details or "-",
+            )
+
+        def fmt_matches(matches):
+            if not matches:
+                return "없음"
+            return ", ".join(f"{m['hero']} {m['score']}" for m in matches)
+
+        def render_hero_row(r):
+            crop_before = r.get("crop_size_before")
+            crop_after = r.get("crop_size_after")
+            crop_before_text = f"{crop_before[0]}×{crop_before[1]}" if crop_before else "-"
+            crop_after_text = f"{crop_after[0]}×{crop_after[1]}" if crop_after else "-"
+            within_text = "예" if r.get("hero_crop_box_within_row_box") else "아니오"
+            native_size = r.get("native_size")
+            native_size_text = f"{native_size[0]}×{native_size[1]}" if native_size else "-"
+            upscale_text = f"예(INTER_CUBIC, native {native_size_text})" if r.get("upscaled") else "아니오"
+
+            cells = [
+                self._sb_td("우리팀" if r["team"] == "ally" else "상대팀"),
+                self._sb_td(r["row_index"]),
+                self._sb_td(ROLE_LABELS.get(r["role"], r["role"])),
+                self._sb_td(format_html(
+                    '{}<br><span style="color:#9ca3af; font-size:11px;">{}</span>',
+                    self._render_debug_thumb(turn_id, r.get("row_crop_path"), "row crop"),
+                    self._format_box(r.get("row_box")),
+                )),
+                self._sb_td(format_html(
+                    '{}<br><span style="color:#9ca3af; font-size:11px;">{} · 포함:{} · relative_x:{} · '
+                    '크기:{}→{} · 업스케일:{}</span>',
+                    self._render_debug_thumb(turn_id, r.get("crop_path"), "hero crop"),
+                    self._format_box(r.get("hero_crop_box")), within_text,
+                    r.get("hero_crop_relative_x"), crop_before_text, crop_after_text, upscale_text,
+                )),
+                self._sb_td(format_html("{} ({})", r["hero"], r["confidence_label"])),
+                self._sb_td(format_html(
+                    "{} → {} (차이 {})", r.get("pre_role_best_score"), r.get("post_role_best_score"), r.get("score_gap"),
+                )),
+                self._sb_td(fmt_matches(r.get("post_role_top_matches"))),
+                self._sb_td(format_html(
+                    "raw {} / blurred {} / clahe {} / edge {} / baseline {} / final {}",
+                    r.get("raw_gray_score"), r.get("blurred_gray_score"), r.get("clahe_gray_score"),
+                    r.get("edge_score"), r.get("baseline_score"), r.get("final_score"),
+                )),
+                self._sb_td(r.get("template_path") or "-"),
+            ]
+            row_html = format_html_join("", "{}", ((c,) for c in cells))
+            return format_html("<tr>{}</tr>", row_html)
+
+        hero_rows = log.get("hero_rows", [])
+        if hero_rows:
+            headers = [
+                "팀", "행", "역할", "row crop (row_box)",
+                "hero crop (hero_crop_box / 포함·relative_x·크기·업스케일)",
+                "인식 결과 (확신도)", "best: 필터 전→후",
+                "top3(필터 후)",
+                "score 상세(raw/blurred/clahe/edge/baseline/final)", "사용 템플릿",
+            ]
+            header_html = format_html_join("", "{}", ((self._sb_th(h),) for h in headers))
+            rows_html = format_html_join("", "{}", ((render_hero_row(r),) for r in hero_rows))
+            table_html = format_html(
+                '<div style="overflow-x:auto;">'
+                '<table style="width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; '
+                'background:#111827;">'
+                '<thead><tr>{}</tr></thead><tbody>{}</tbody></table>'
+                '</div>',
+                header_html, rows_html,
+            )
+        else:
+            table_html = "행별 인식 데이터가 없습니다."
+
+        def render_pair_evaluations(evaluations):
+            if not evaluations:
+                return "평가된 쌍 없음(한쪽 색상에 유효 후보가 없었음)"
+            items = format_html_join(
+                "", "<li>파란 {} / 빨간 {} → {} (pair_score {}) · {}</li>",
+                (
+                    (
+                        self._format_box(ev.get("blue_box")), self._format_box(ev.get("red_box")),
+                        "통과" if ev.get("passes") else "탈락", ev.get("pair_score"),
+                        ", ".join(ev.get("rejection_reasons") or []) or ev.get("details"),
+                    )
+                    for ev in evaluations
+                ),
+            )
+            return format_html('<ul style="margin:4px 0 0 18px; padding:0;">{}</ul>', items)
+
+        original_url = self._scoreboard_debug_image_url(turn_id, log.get("original_image_path"))
+        original_html = (
+            format_html(
+                '<a href="{0}" target="_blank"><img src="{0}" alt="원본" '
+                'style="max-width:360px; border:1px solid #374151; border-radius:6px;"></a>',
+                original_url,
+            )
+            if original_url else "-"
+        )
+
+        coarse_url = self._scoreboard_debug_image_url(turn_id, log.get("coarse_crop_image_path"))
+        coarse_thumb_html = (
+            format_html(
+                '<a href="{0}" target="_blank"><img src="{0}" alt="1단계 coarse crop" '
+                'style="max-width:360px; border:1px solid #374151; border-radius:6px;"></a>',
+                coarse_url,
+            )
+            if coarse_url else "(이미지 없음)"
+        )
+        if log.get("coarse_crop_is_noop"):
+            # 표만 캡처한 경우 완화된 색 영역이 이미지 대부분을 덮어 경계에
+            # clamp되므로, 전체화면 캡처 오인식이 아니라 정상적인 no-op이다.
+            used_text = "예 (원본 이미지 전체 크기와 동일 — 실질적으로 아무것도 안 좁힌 no-op)"
+        elif log.get("coarse_crop_used"):
+            used_text = "예"
+        else:
+            used_text = "아니오(원본 이미지 그대로 사용)"
+        coarse_html = format_html(
+            '<div><strong>사용 여부:</strong> {} · <strong>좌표(원본 기준):</strong> {} · '
+            '<strong>원본 크기:</strong> {} · <strong>폴백 사유:</strong> {}</div>'
+            '<div style="margin-top:4px;">{}</div>',
+            used_text,
+            self._format_box(log.get("coarse_crop_box")),
+            (
+                f"{log['original_image_shape'][1]}×{log['original_image_shape'][0]}"
+                if log.get("original_image_shape") else "-"
+            ),
+            log.get("coarse_crop_fallback_reason") or "-",
+            coarse_thumb_html,
+        )
+
+        return format_html(
+            '<div style="background:#111827; color:#e5e7eb; border:1px solid #374151; '
+            'padding:14px; border-radius:8px; font-size:13px; line-height:1.6;">'
+            '<div><strong>우리팀 인식:</strong> 5명 중 {}명 · <strong>상대팀 인식:</strong> 5명 중 {}명</div>'
+            '<div style="margin-top:6px;"><strong>본인 추정 행:</strong> {} · <strong>이유:</strong> {} · '
+            '<strong>본인 영웅:</strong> {} · <strong>판별 실패:</strong> {}</div>'
+            '<div style="margin-top:6px;"><strong>영웅 인식 방식:</strong> {}</div>'
+            '<div style="margin-top:10px;"><strong>1단계 coarse crop(전체화면 캡처 대응):</strong>'
+            '<div style="margin-top:4px;">{}</div></div>'
+            '<div style="margin-top:10px;"><strong>팀 레이아웃(패널 검출/쌍 선택/검증):</strong>'
+            '<div style="margin-top:4px;">{}</div><div style="margin-top:2px;">{}</div></div>'
+            '<div style="margin-top:10px;"><strong>평가된 파란·빨간 후보 쌍:</strong>{}</div>'
+            '<div style="margin-top:10px;"><strong>원본 이미지:</strong><br>{}</div>'
+            '<div style="margin-top:10px;"><strong>행별 영웅 인식 상세:</strong>{}</div>'
+            '<div style="margin-top:10px;"><strong>수치 누락 항목:</strong>{}</div>'
+            '<div style="margin-top:10px;"><strong>개인 피드백 생성 여부:</strong> {} · '
+            '<strong>상대 조합 분석 허용:</strong> {} · <strong>영웅 인식률 낮음:</strong> {}</div>'
+            '</div>',
+            log.get("ally_detected_count"), log.get("enemy_detected_count"),
+            log.get("self_row_index") or "확인 필요", log.get("self_reason") or "-",
+            log.get("self_hero") or "-", "예" if log.get("self_determination_failed") else "아니오",
+            log.get("hero_icon_method") or "-",
+            coarse_html,
+            render_team_layout("ally", "우리팀"), render_team_layout("enemy", "상대팀"),
+            render_pair_evaluations(log.get("pair_evaluations", [])),
+            original_html,
+            table_html,
+            render_missing(log.get("missing_stats", [])),
+            "예" if log.get("self_feedback_eligible") else "아니오",
+            "예" if log.get("enemy_composition_analysis_allowed") else "아니오",
+            "예" if log.get("low_hero_recognition") else "아니오",
+        )
+
     @admin.display(description="연관 질문")
     def related_question(self, obj):
-        """
-        이 AI 답변(turn_id)과 짝을 이루는 사용자 질문을 찾아 보여준다.
-        USER/AI 로그가 같은 turn_id를 공유하는 구조를 활용한다.
-        """
+        """같은 turn_id를 공유하는 USER 로그를 찾아, 이 AI 답변의 원래 질문을 보여준다."""
         if obj.role != "AI":
             return "-"
         user_log = (
@@ -266,6 +503,10 @@ class ChatLogDisplayMixin:
 
 @admin.register(ChatLog)
 class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
+    # actions를 명시하지 않으면 Django가 delete_selected만 자동으로 넣으므로,
+    # delete_entire_session도 항상 노출되도록 둘 다 명시적으로 등록한다.
+    actions = ["delete_selected", "delete_entire_session"]
+
     list_display = (
         "created_at",
         "role_badge",
@@ -316,6 +557,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         "matchup_card_display",
         "recommend_card_display",
         "suggested_questions_display",
+        "scoreboard_admin_log_display",
         "metadata_pretty",
         "related_question",
         "is_unsatisfied",
@@ -331,6 +573,10 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         }),
         ("메시지", {
             "fields": ("related_question", "message_box", "matchup_card_display", "recommend_card_display", "suggested_questions_display"),
+        }),
+        ("점수판 분석 진단 정보 (관리자 전용)", {
+            "fields": ("scoreboard_admin_log_display",),
+            "classes": ("collapse",),
         }),
         ("사용자 피드백", {
             "fields": ("is_unsatisfied", "feedback_reason"),
@@ -348,22 +594,61 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
                 self.admin_site.admin_view(self.session_transcript_view),
                 name="chat_chatlog_session_transcript",
             ),
+            path(
+                "session/<str:log_session_id>/delete/",
+                self.admin_site.admin_view(self.session_delete_view),
+                name="chat_chatlog_session_delete",
+            ),
+            path(
+                "scoreboard-debug/<str:turn_id>/<str:filename>/",
+                self.admin_site.admin_view(self.scoreboard_debug_image_view),
+                name="chat_chatlog_scoreboard_debug_image",
+            ),
         ]
         return custom_urls + super().get_urls()
 
-    def session_transcript_view(self, request, log_session_id):
+    def session_delete_view(self, request, log_session_id):
+        """대화 전체보기(session_transcript_view) 화면의 "이 세션 전체 삭제"
+        버튼이 POST하는 곳. 이 세션의 모든 로그(USER/AI/ERROR 전부)를 지우고
+        changelist로 돌아간다. GET으로는 실행되지 않게 막는다(실수로 링크를
+        클릭/미리보기하다 삭제되는 것 방지)."""
+        if request.method != "POST":
+            raise Http404
+        if not self.has_delete_permission(request):
+            from django.core.exceptions import PermissionDenied
+            raise PermissionDenied
+        deleted_count, _ = ChatLog.objects.filter(log_session_id=log_session_id).delete()
+        self.message_user(request, f"세션 {log_session_id}의 로그 {deleted_count}건을 삭제했습니다.")
+        return HttpResponseRedirect(reverse("admin:chat_chatlog_changelist"))
+
+    def scoreboard_debug_image_view(self, request, turn_id, filename):
+        """logs/scoreboard_debug/{turn_id}/의 디버그 이미지를 관리자에게만 서빙한다.
+
+        admin_view가 staff 권한을 강제하고, turn_id/filename을 화이트리스트
+        정규식으로 검증한 뒤 최종 경로가 디버그 루트를 벗어나지 않는지도 다시
+        확인해 경로 조작을 이중으로 막는다.
         """
-        같은 log_session_id를 가진 로그를 표(changelist)가 아니라 실제 대화하듯
-        시간순으로 쭉 이어 보여준다. 질문 하나, 답변 하나씩 따로 열어봐야 하는
-        기존 방식이 대화 흐름을 파악하기 힘들다는 지적에 따라 추가했다.
-        기존 표시 로직(role_badge/message_box/matchup_card_display 등, 전부
-        ChatLogDisplayMixin에 이미 있음)을 그대로 재사용해 이중으로 유지보수할
-        코드를 늘리지 않는다.
+        if not SCOREBOARD_DEBUG_TURN_ID_RE.fullmatch(turn_id) or not SCOREBOARD_DEBUG_FILENAME_RE.fullmatch(filename):
+            raise Http404
+
+        base_dir = str(getattr(settings, "BASE_DIR", os.getcwd()))
+        debug_root = os.path.normpath(os.path.join(base_dir, "logs", "scoreboard_debug"))
+        file_path = os.path.normpath(os.path.join(debug_root, turn_id, filename))
+        if os.path.commonpath([debug_root, file_path]) != debug_root or not os.path.isfile(file_path):
+            raise Http404
+
+        return FileResponse(open(file_path, "rb"), content_type="image/png")
+
+    def session_transcript_view(self, request, log_session_id):
+        """같은 log_session_id의 로그를 표가 아니라 시간순 대화 형태로 보여준다.
+
+        ChatLogDisplayMixin의 표시 메서드(role_badge/message_box 등)를 그대로
+        재사용해 렌더링 로직을 중복하지 않는다.
         """
         logs = list(
             ChatLog.objects.filter(log_session_id=log_session_id).order_by("created_at", "id")
         )
-        messages = [
+        transcript_messages = [
             {
                 "obj": log,
                 "role_badge": self.role_badge(log),
@@ -371,6 +656,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
                 "matchup_card": self.matchup_card_display(log),
                 "recommend_card": self.recommend_card_display(log),
                 "suggested_questions": self.suggested_questions_display(log),
+                "scoreboard_admin_log": self.scoreboard_admin_log_display(log),
             }
             for log in logs
         ]
@@ -378,7 +664,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
             **self.admin_site.each_context(request),
             "title": f"대화 전체 보기 — {log_session_id}",
             "log_session_id": log_session_id,
-            "messages": messages,
+            "transcript_messages": transcript_messages,
             "opts": self.model._meta,
         }
         return TemplateResponse(request, "admin/chat/chatlog_session_transcript.html", context)
@@ -386,11 +672,9 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
 
 @admin.register(ErrorChatLog)
 class ErrorChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
-    """
-    role="ERROR" 로그만 모아 보여준다. 챗봇 응답이 실패했을 때
-    (파이썬 예외든, 그래프 내부에서 state["error"]로 반환됐든) 여기서
-    한눈에 확인할 수 있다.
-    """
+    """role="ERROR" 로그(파이썬 예외든 그래프 내부 오류든)만 모아 보여준다."""
+
+    actions = ["delete_selected", "delete_entire_session"]
 
     list_display = (
         "created_at",
@@ -439,10 +723,9 @@ class ErrorChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
 
 @admin.register(UnsatisfiedChatLog)
 class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
-    """
-    사용자가 "이 답변이 만족스럽지 않다"고 표시한 AI 답변만 모아 보여준다.
-    질문 → AI 답변 → 불만족 이유를 한 화면에서 확인할 수 있다.
-    """
+    """사용자가 불만족으로 표시한 AI 답변만 모아, 질문/답변/이유를 한 화면에서 보여준다."""
+
+    actions = ["delete_selected", "delete_entire_session"]
 
     list_display = (
         "created_at",
@@ -473,6 +756,7 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         "matchup_card_display",
         "recommend_card_display",
         "suggested_questions_display",
+        "scoreboard_admin_log_display",
         "feedback_reason",
         "metadata_pretty",
     )
@@ -482,7 +766,7 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
             "fields": ("created_at", "log_session_id", "turn_id", "intent", "current_hero", "target_enemy", "enemy_team_display"),
         }),
         ("질문 / AI 답변", {
-            "fields": ("related_question", "message_box", "matchup_card_display", "recommend_card_display", "suggested_questions_display"),
+            "fields": ("related_question", "message_box", "matchup_card_display", "recommend_card_display", "suggested_questions_display", "scoreboard_admin_log_display"),
         }),
         ("불만족 이유", {
             "fields": ("feedback_reason",),

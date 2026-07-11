@@ -69,6 +69,10 @@ class ChatbotGraphState(TypedDict, total=False):
     ally_team: List[str]
     llm_ally_team: List[str]
     is_team_comp_question: bool
+    focus_heroes: List[str]
+    focus_hero_pick: Optional[str]
+    needs_focus_hero_clarify: bool
+    previous_focus_heroes: List[str]
 
 
 HEROES = [
@@ -83,6 +87,7 @@ HEROES = [
 
 HERO_ALIASES = {
     "둠피": "둠피스트",
+    "둠": "둠피스트",
     "솔저": "솔저76",
     "솔져": "솔저76",
     "솔저: 76": "솔저76",
@@ -92,10 +97,16 @@ HERO_ALIASES = {
     "시메": "시메트라",
     "라인": "라인하르트",
     "정크" : "정크랫",
+    "정크렛": "정크랫",
     "브리" : "브리기테",
     "위도우" : "위도우메이커", 
     "호그" : "로드호그",
-
+    "제트팩" : "제트팩 캣",
+    "캣" : "제트팩 캣",
+    "트레" : "트레이서",
+    "일리야리" : "일리아리",
+    "젠" : "젠야타",
+    "해자드" : "해저드",
 }
 
 MAPS = [
@@ -123,7 +134,7 @@ ROLE_HEROES: Dict[str, List[str]] = {
     "damage": [
         "겐지", "트레이서", "솜브라", "리퍼", "캐서디", "애쉬", "위도우메이커", "한조",
         "소전", "솔저: 76", "파라", "에코", "메이", "토르비욘", "정크랫",
-        "바스티온", "시메트라", "벤처", "벤데타", "시에라", "안란", "엠레", "프레야"
+        "바스티온", "시메트라", "벤처", "벤데타", "시에라", "안란", "엠레", "프레야", "시온"
     ],
     "support": [
         "아나", "키리코", "모이라", "루시우", "브리기테", "젠야타",
@@ -251,12 +262,10 @@ def normalize_hero_name(hero: Optional[str]) -> Optional[str]:
 
 
 def find_first_hero(text: str) -> Optional[str]:
-    # 정식 영웅명 우선
     for hero in HEROES:
         if hero in text:
             return normalize_hero_name(hero)
 
-    # 별칭 처리
     for alias, canonical in HERO_ALIASES.items():
         if alias in text:
             return canonical
@@ -265,25 +274,19 @@ def find_first_hero(text: str) -> Optional[str]:
 
 
 def hero_mentioned_in_text(hero: Optional[str], text: str) -> bool:
-    """
-    정규화된 영웅명이 원문에 직접 또는 별칭으로 언급되었는지 확인한다.
-    예: hero='둠피스트', text='둠피가 나만 노려' -> True
-    """
+    """영웅명이 정식 명칭 또는 별칭으로 텍스트에 등장했는지 확인한다."""
     if not hero or not text:
         return False
 
     normalized = normalize_hero_name(hero)
 
-    # 정식 이름 그대로 등장
     if normalized and normalized in text:
         return True
 
-    # HEROES 원본 표기 확인
     for h in HEROES:
         if normalize_hero_name(h) == normalized and h in text:
             return True
 
-    # 별칭 확인
     for alias, canonical in HERO_ALIASES.items():
         if canonical == normalized and alias in text:
             return True
@@ -292,10 +295,8 @@ def hero_mentioned_in_text(hero: Optional[str], text: str) -> bool:
 
 
 def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
-    """
-    영웅 이름이 문장에 등장했더라도 "상대 겐지"처럼 적으로 언급된 경우와
-    "겐지로 할게"처럼 사용자가 직접 플레이한다고 말한 경우를 구분한다.
-    """
+    """영웅 이름이 "상대 겐지"처럼 적으로 언급된 경우와 "겐지로 할게"처럼
+    사용자가 직접 플레이한다고 말한 경우를 구분한다."""
     normalized = normalize_hero_name(hero)
     if not normalized or not text:
         return False
@@ -311,52 +312,41 @@ def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
 
     for name in names:
         escaped = re.escape(name)
-        if re.search(rf"(?:난|나는|나|저는|제가|내가)\s*{escaped}", text):
+        # 앞에 한글 음절이 없을 때만 매치한다 — 그렇지 않으면 "아나"의 "나"처럼
+        # 다른 단어 안에 우연히 포함된 "나"가 1인칭 표지로 잘못 매칭된다.
+        if re.search(rf"(?<![가-힣])(?:난|나는|나|저는|제가|내가)\s*{escaped}", text):
             return True
         if re.search(rf"{escaped}\s*(?:로|으로)\s*(?:플레이|하고|하는|할|가|갈|쓰|쓸|이기|즐기)", text):
             return True
-        # "윈스턴으로 수비하는데"처럼 "로/으로"와 활용형(하고/하는/할 등) 사이에
-        # 수비·공격·포지션 같은 역할 명사가 끼어 있는 경우도 자기 영웅 선언으로
-        # 인정한다. 명사 없이 바로 붙는 위 패턴만으로는 이런 문장을 놓친다.
+        # "윈스턴으로 수비하는데"처럼 로/으로와 활용형 사이에 역할 명사가 낄 때도 인정한다.
         if re.search(
             rf"{escaped}\s*(?:로|으로)\s*[가-힣]{{0,4}}\s*"
             rf"(?:하고|하는|할|해서|하면서|하는데|하다가)",
             text,
         ):
             return True
-        # "파라를 하고 싶은데"처럼 영웅 이름과 활용형 사이에 목적격 조사(을/를)가
-        # 끼는 경우도 인정한다 — 조사 없이 바로 붙는 경우도 \s*가 0개를 허용하므로
-        # 기존 매칭에는 영향이 없다.
+        # "파라를 하고 싶은데"처럼 목적격 조사(을/를)가 낀 경우도 인정한다.
         if re.search(
             rf"{escaped}\s*(?:을|를)?\s*(?:하고\s*있|하는\s*중|하고\s*싶|하고싶|할\s*거|할건데|"
             rf"쓰고\s*싶|쓰고싶|쓸건데|계속|유지|고정|원챔)",
             text,
         ):
             return True
-        # "시그마인데 둠피가 날뛰어", "겐지인데 상대 아나..."처럼 영웅 이름 바로 뒤에
-        # "인데/이야/임/입니다" 같은 서술격 조사만 붙여 지금 플레이 중인 영웅을 짧게
-        # 밝히는 표현도 자기 영웅 선언으로 인정한다. 위 "로/으로" 계열 패턴들은
-        # 이런 구문을 놓친다.
+        # "시그마인데"처럼 서술격 조사만 붙는 표현도 인정한다 (로/으로 패턴으로는 못 잡음).
         if re.search(rf"{escaped}\s*(?:인데요|인데|이야|이거든|임|입니다|이에요|예요)", text):
             return True
-        # "겐지 하는데 윈스턴 힘들어"처럼 조사 없이 "하다" 활용형만 바로 붙여
-        # 지금 플레이 중인 영웅을 밝히는 표현("X 하는데/할 때/하다가")도 인정한다.
+        # "겐지 하는데"처럼 조사 없이 "하다" 활용형만 붙는 표현도 인정한다.
         if re.search(rf"{escaped}\s*(?:하는데요|하는데|할\s*때|하다가)", text):
             return True
-        # "겐지로 윈스턴 상대법 알려줘"처럼 "로/으로" 뒤에 다른 영웅 이름이 먼저
-        # 나오고 그 뒤에 상대법류 표현이 붙는 경우, 위의 근접 패턴들은 "로"와
-        # 활용형 사이에 다른 영웅 이름이 끼어 있어 놓친다. 문장에 상대법류
-        # 표현이 있고 이 영웅이 "로/으로"로 이어진다면 자기 영웅 선언으로 본다.
+        # "겐지로 윈스턴 상대법 알려줘"처럼 로/으로 뒤에 다른 영웅명이 끼면 위 패턴들이
+        # 놓치므로, 상대법류 표현과 "로/으로"가 함께 있으면 자기 선언으로 본다.
         if (
             any(word in text for word in _STAY_OPERATION_WORDS)
             and re.search(rf"{escaped}\s*(?:로|으로)", text)
         ):
             return True
-        # "트레이서를 고르면", "이걸로 픽할까", "브리기테 선택하면"처럼 아직
-        # 확정은 아니지만 자신이 그 영웅을 고를지 고려/선언하는 표현도 자기
-        # 영웅 선언으로 인정한다. 이게 없으면 "X를 고르면 Y가 잘 나올까?" 같은
-        # 질문에서 X가 자기 후보 영웅으로 인식되지 않아, current_hero_role로
-        # 역할이 자동으로 정해지지 못하고 불필요하게 역할을 되묻게 된다.
+        # "트레이서를 고르면"처럼 확정 전 고려 표현도 인정한다(없으면 후보 영웅이
+        # 인식되지 않아 불필요하게 역할을 되묻는다).
         if re.search(
             rf"{escaped}\s*(?:을|를)?\s*(?:고르면|고를까|고르는\s*게|고르는게|"
             rf"골라도|픽하면|픽할까|선택하면|선택할까)",
@@ -404,11 +394,9 @@ def get_hero_role(hero: Optional[str]) -> Optional[str]:
     return HERO_TO_ROLE.get(hero)
 
 
-# 상대팀/아군팀을 한 문장에서 함께 나열하는 질문(예: "상대팀은 A B C D E 조합이고
-# 우리팀 조합은 C E F G일때...")에서, 각 팀의 정규식 캡처 그룹(`[가-힣A-Za-z0-9\.,\s]+`)
-# 은 한글 조사까지 넓게 허용하다 보니 상대 쪽 캡처가 "우리팀"/"아군" 마커까지 그대로
-# 삼켜버려 상대팀 목록에 아군 영웅이 섞여 들어가는 문제가 생긴다(그 반대도 마찬가지).
-# 캡처된 조각 안에 상대편 팀을 가리키는 마커가 나오면 그 앞까지만 잘라 교차 오염을 막는다.
+# 상대팀/아군팀을 한 문장에 함께 나열한 질문에서는 캡처 그룹이 조사까지 넓게
+# 허용해 한쪽 캡처가 반대 팀 마커까지 삼킬 수 있다. 캡처 조각 안에 반대 팀
+# 마커가 나오면 그 앞까지만 잘라 교차 오염을 막는다.
 _ALLY_TEAM_MARKERS = ["우리팀", "아군", "우리는", "우리가"]
 _ENEMY_TEAM_MARKERS = ["상대팀", "상대는", "상대가", "상대", "적은", "적팀은"]
 
@@ -462,11 +450,8 @@ def extract_ally_team(text: str) -> List[str]:
     return []
 
 
-# 표준 팀 구성(탱커 1 / 딜러 2 / 힐러 2)을 기준으로, 이미 정해진 아군 인원의 역할을
-# 보고 남은 한 자리가 어떤 역할인지 추론한다. 정확히 한 역할만 자리가 비어 있을 때만
-# (즉 나머지 두 역할은 이미 꽉 찼을 때만) 그 역할을 확정하고, 그렇지 않으면(아직
-# 아군 정보가 부족해 여러 역할이 비어 있을 수 있으면) None을 반환해 기존처럼
-# 역할을 되묻게 한다.
+# 표준 구성(탱1/딜2/힐2) 기준으로 남은 역할을 추론한다. 정확히 한 역할만 비어
+# 있을 때만 확정하고, 그 외에는 None을 반환해 역할을 되묻게 한다.
 TEAM_COMP_ROLE_QUOTA = {"tank": 1, "damage": 2, "support": 2}
 
 
@@ -493,19 +478,15 @@ def detect_stat_input(message: str) -> bool:
     return has_keyword and has_number
 
 def detect_wants_to_keep_hero(text: str) -> bool:
-    """
-    사용자가 특정 영웅을 바꾸기보다 계속 하거나,
-    그 영웅으로 이기고 싶어하는 표현인지 판단한다.
-    """
+    """사용자가 특정 영웅을 바꾸기보다 계속 하고 싶어하는 표현인지 판단한다."""
 
-    # 영웅 이름이 아예 없으면 이 함수에서는 판단하지 않음
     hero = find_first_hero(text)
     if not hero:
         return False
     if hero == find_enemy_mentioned_hero(text):
         return False
 
-    # 붙여 쓰기 대응: "파라쓸건데", "파라할건데", "파라하고싶어"
+    # 붙여 쓰기 대응: 예) "파라쓸건데"
     compact = re.sub(r"\s+", "", text)
 
     keep_patterns = [
@@ -513,22 +494,16 @@ def detect_wants_to_keep_hero(text: str) -> bool:
         r"(계속|유지|고정|원챔|포기안|안바꾸|바꾸지않)",
         r"(이기고싶|이기면서|즐기고싶|즐기면서)",
         r"(해도돼|해도될까|가능할까|괜찮을까)",
-        # "트레이서를 고르면 우리팀 딜이 잘 나올까?"처럼 아직 확정은 아니지만
-        # 자신이 그 영웅을 고를지 고려/선언하는 표현. hero_mentioned_as_current_hero
-        # 에도 같은 패턴이 있는데, 그건 "LLM이 이미 current_hero로 준 값을
-        # 검증"할 때만 쓰이고, LLM이 애초에 current_hero를 null로 잘못 판단해
-        # 이 규칙 기반 폴백(infer_current_hero)까지 내려온 경우에는 여기도
-        # 함께 인식해야 실제로 current_hero가 채워진다.
+        # hero_mentioned_as_current_hero의 같은 패턴은 LLM이 준 current_hero 검증에만
+        # 쓰이므로, LLM이 애초에 null로 판단해 이 규칙 기반 폴백까지 온 경우를 위해 필요.
         r"(고르면|고를까|고르는게|골라도|픽하면|픽할까|선택하면|선택할까)",
     ]
 
     return any(re.search(pattern, compact) for pattern in keep_patterns)
 
 
-# "상대법", "어떻게 상대", "어떻게 잡", "어떻게 막", "파훼", "대처", "견제"는 그 자체로는
-# counter를 뜻하지 않는다 — "겐지로 윈스턴 상대법 알려줘"처럼 자기 영웅을 유지한 채
-# 상대법을 묻는 stay 질문에도 똑같이 등장하기 때문이다. counter는 "카운터/상성 목록을
-# 대표적으로 알려달라"는 명확한 요청일 때만 해당한다.
+# "상대법/파훼/대처"는 stay 질문에도 쓰이므로 counter로 바로 분류하지 않는다.
+# counter는 "카운터/상성 목록" 요청일 때만 해당한다.
 _COUNTER_LIST_WORDS = ["카운터", "상성", "상대하기 어려운", "상대하기 쉬운"]
 _STAY_OPERATION_WORDS = ["상대법", "어떻게 상대", "어떻게 잡", "어떻게 막", "파훼", "대처", "견제"]
 
@@ -563,13 +538,32 @@ def detect_situation(text: str) -> bool:
 
 _SWAP_TRIGGER_PATTERN = re.compile(r"말고|다른\s*영웅|바꾸|바꿀|바꿔|교체|변경|픽\s*추천")
 
+# 영웅 이름 없이 "어떻게 플레이해?", "E 스킬은 어디에 써?"처럼 직전에 다루던
+# 영웅의 운영/스킬/포지션/맵을 묻는 생략형 후속 질문. 이런 질문만 이전
+# intent/focus_heroes를 이어받을 자격이 있다 — "조합 추천해줘"처럼 영웅 언급이
+# 없는 다른 종류의 새 질문까지 무조건 이전 흐름을 이어받으면 안 된다.
+_ELLIPSIS_FOLLOWUP_WORDS = ["플레이", "운영", "스킬", "포지션", "타이밍", "궁", "굴리", "굴려"]
+_ELLIPSIS_FOLLOWUP_MAP_PATTERN = re.compile(r"어떤\s*맵|맵에서")
+
+
+def is_ellipsis_followup(text: str) -> bool:
+    if find_all_heroes(text):
+        return False
+    # 특정 맵을 이미 언급한 질문("왕의 길 수비 운영 알려줘")은 그 자체로 완결된
+    # 질문이다 — "운영" 같은 단어가 있다고 해서 이전 턴의 영웅/의도를 이어받을
+    # 생략형 후속 질문으로 보면 안 된다.
+    if find_map(text):
+        return False
+    if any(word in text for word in _ELLIPSIS_FOLLOWUP_WORDS):
+        return True
+    return bool(_ELLIPSIS_FOLLOWUP_MAP_PATTERN.search(text))
+
 
 def infer_intent_by_rule(message: str, context: Dict[str, Any]) -> str:
     text = message.strip()
 
-    # 1. 영웅을 바꾸겠다는 표현이 명확하면 swap. "계속"처럼 stay 신호로도 흔히
-    # 쓰이는 일반 단어와 겹치지 않는, 가장 구체적인 신호이므로 최우선으로 본다.
-    # 단, "안 바꾸고", "바꾸지 않고"는 stay로 처리
+    # 1. swap: 교체 의도가 명확한 표현. stay 신호와 안 겹치는 가장 구체적인
+    # 신호라 최우선으로 본다. 단 "안 바꾸고"류는 stay로 처리.
     if _SWAP_TRIGGER_PATTERN.search(text):
         compact = re.sub(r"\s+", "", text)
 
@@ -578,26 +572,21 @@ def infer_intent_by_rule(message: str, context: Dict[str, Any]) -> str:
 
         return "swap"
 
-    # 2. 인게임 위기/압박 상황을 토로하는 situation
-    # 예: "파라가 계속 압박해", "둠피가 계속 힐러 물어", "트레이서 때문에 뒤가 터져"
-    # detect_wants_to_keep_hero(아래 3번)보다 먼저 확인한다 — "계속"이라는 흔한
-    # 단어 하나만으로 상황 토로 문장까지 "영웅을 유지하고 싶다"는 뜻으로 잘못
-    # 묶이는 것을 막기 위해서다.
+    # 2. situation: 위기/압박 토로. 예: "파라가 계속 압박해"
+    # detect_wants_to_keep_hero(3번)보다 먼저 검사해야 "계속"이라는 흔한 단어
+    # 때문에 stay로 잘못 묶이지 않는다.
     if detect_situation(text):
         return "situation"
 
-    # 3. 사용자가 특정 영웅을 유지하고 싶어하는 경우
-    # 예: "파라 하고싶어", "파라쓸건데", "파라 원챔인데", "파라로 이기고 싶어"
+    # 3. stay: 영웅 유지 의사. 예: "파라 하고싶어"
     if detect_wants_to_keep_hero(text):
         return "stay"
 
-    # 4. 특정 영웅을 유지한 채 상대법을 묻는 stay
-    # 예: "겐지로 윈스턴 상대법 알려줘", "파라로 솔저 어떻게 상대해?"
+    # 4. stay: 영웅을 유지한 채 상대법 문의. 예: "겐지로 윈스턴 상대법 알려줘"
     if detect_stay_with_named_hero(text):
         return "stay"
 
-    # 5. 대표 카운터/상성 목록을 묻는 counter
-    # 예: "겐지 카운터 알려줘", "겐지 상성 알려줘", "겐지가 상대하기 어려운 영웅 알려줘"
+    # 5. counter: 대표 카운터/상성 목록 요청. 예: "겐지 카운터 알려줘"
     if any(word in text for word in _COUNTER_LIST_WORDS):
         return "counter"
 
@@ -616,19 +605,20 @@ def infer_intent_by_rule(message: str, context: Dict[str, Any]) -> str:
     if detect_stat_input(text):
         return "performance_improve"
 
-    previous_intent = context.get("last_intent")
-    if previous_intent in ["counter", "stay", "swap", "performance_improve", "map_strategy", "situation"]:
-        return previous_intent
+    # 이전 intent는 이번 메시지가 생략형 후속 질문("어떻게 플레이해?", "궁은
+    # 언제 써?")일 때만 참고한다. 영웅 언급도 없고 생략형도 아닌 새 질문("조합
+    # 추천해줘")까지 이전 흐름을 그대로 이어받으면 안 된다.
+    if is_ellipsis_followup(text):
+        previous_intent = context.get("last_intent")
+        if previous_intent in ["counter", "stay", "swap", "performance_improve", "map_strategy", "situation"]:
+            return previous_intent
 
     return "general"
 
 
-# "OO 때문에", "상대 OO", "OO를 카운터" 처럼 문장에서 '상대(적) 영웅'을 가리키는
-# 패턴. infer_target_enemy와 infer_current_hero가 공유한다 — current_hero
-# 추론이 이 패턴에 걸리는 영웅(즉, 명백히 "상대"로 언급된 영웅)을 실수로
-# "지금 플레이 중인 영웅"으로 잘못 집어가지 않도록 막기 위해서다.
-# 조사와 동사 사이에 흔히 끼는 부사(예: "OO를 일단 막아야겠어"). \s*만으로는
-# 이 부사를 건너뛸 수 없어 좁히기 패턴이 매칭에 실패하므로 명시적으로 허용한다.
+# "OO 때문에"/"상대 OO"처럼 상대 영웅을 가리키는 패턴. infer_current_hero가 공유해
+# 상대로 언급된 영웅을 자기 영웅으로 잘못 인식하지 않도록 막는다.
+# _NARROWING_FILLER: 조사와 동사 사이 부사(예: "일단")를 허용해 좁히기 매칭이 실패하지 않게 한다.
 _NARROWING_FILLER = r"(?:\s*(?:일단|우선|먼저|이번엔|반드시|꼭|그냥))?"
 
 ENEMY_MENTION_PATTERNS = [
@@ -643,9 +633,8 @@ ENEMY_MENTION_PATTERNS = [
     r"상대\s*([가-힣A-Za-z0-9\.]+)",
 ]
 
-# 사용자가 특정 영웅 이름 대신 "상대 힐러/딜러/탱커부터 처리하려고" 처럼 역할로만
-# 카운터 우선순위를 좁히는 경우. 이때는 상대 조합에 어떤 영웅이 있든, 그 역할
-# 하나에 집중하겠다는 의미이므로 다른 상대 영웅을 같이 언급하면 안 된다.
+# "상대 힐러부터 처리"처럼 역할로만 카운터 대상을 좁히는 경우 — 이땐 다른 상대
+# 영웅을 함께 언급하지 않는다.
 ENEMY_ROLE_FOCUS_WORDS = {"탱커": "tank", "딜러": "damage", "힐러": "support"}
 ENEMY_ROLE_FOCUS_LABELS = {"tank": "상대 탱커", "damage": "상대 딜러", "support": "상대 힐러"}
 ENEMY_ROLE_FOCUS_PATTERN = re.compile(
@@ -670,10 +659,8 @@ def normalize_hero_candidate(candidate: Optional[str]) -> Optional[str]:
     if normalized in valid_heroes:
         return normalized
 
-    # "상대 겐지가"처럼 자유 캡처 패턴이 이름 뒤 조사까지 먹는 경우 보정.
-    # "이랑"/"과"/"와"는 "겐지랑 리퍼랑 둘 다"처럼 나열형 문장에서 자유 캡처가
-    # 뒤에 붙는 접속 조사까지 삼키는 경우를 보정한다("랑"보다 길게 먼저 검사해야
-    # "이랑"이 "랑"만 잘리고 "이"가 남는 일이 없다).
+    # "상대 겐지가"처럼 자유 캡처가 이름 뒤 조사까지 먹는 경우를 보정한다.
+    # "이랑"을 "랑"보다 먼저 검사해야 "겐지랑"에서 "랑"만 떨어지고 "이"가 안 남는다.
     for suffix in ["이랑", "랑", "과", "와", "이", "가", "은", "는", "을", "를", "도", "만"]:
         if cleaned.endswith(suffix):
             normalized = normalize_hero_name(cleaned[:-len(suffix)].strip())
@@ -683,13 +670,9 @@ def normalize_hero_candidate(candidate: Optional[str]) -> Optional[str]:
     return None
 
 
-# "솜브라랑 트레이서랑 둘 다 짤짤이딜이잖아"처럼 자기 후보 영웅 두 개를 나란히
-# 비교/나열하는 문장("A랑 B랑 둘 다") 안에 등장하는 영웅은 상대(적)가 아니라
-# 사용자 자신이 고려 중인 후보다. "우리팀은 A, B, C"처럼 마커가 있는 아군 나열
-# (extract_ally_team)과 달리, 이런 비교문에는 그런 마커가 없어서 기존 아군
-# 배제 로직이 놓친다. 다만 "상대"/"카운터"/"때문에" 같은 적대 신호가 함께
-# 있으면(예: "겐지랑 리퍼 둘 다 상대하기 힘들어") 실제로 상대 조합을 가리키는
-# 것일 수 있으므로 이 경우엔 적용하지 않는다.
+# "A랑 B랑 둘 다"처럼 후보 영웅을 나란히 비교하는 문장은 마커가 없어
+# extract_ally_team이 놓친다. 단 "상대"/"카운터"/"때문에" 같은 적대 신호가
+# 있으면 실제 상대 조합일 수 있어 적용하지 않는다.
 ADVERSARIAL_SIGNAL_WORDS = ["상대", "카운터", "견제", "때문에"]
 
 _SELF_COMPARISON_PATTERN = re.compile(
@@ -712,6 +695,44 @@ def find_self_comparison_heroes(text: str) -> List[str]:
     return heroes
 
 
+# "X가 힐/케어/탱킹/딜을 안/못 한다", "X가 나를 안/못 봐준다"처럼 동료의 역할
+# 수행을 불만하는 문장은 X가 아군이라는 뜻이다(적은 애초에 나를 케어해줄
+# 대상이 아니다). "상대 X가"처럼 적대 마커가 바로 앞에 있으면 적용하지 않는다
+# (예: "상대 메르시가 나를 못 맞추게 방해해"는 방해 행위지 아군 불만이 아니다).
+_ALLY_COMPLAINT_PATTERN = re.compile(
+    r"([가-힣A-Za-z0-9\.]+)[이가]\s*(?:힐|케어|탱킹|딜|나를)[^.!?\n]{0,10}(?:안|못|않)"
+)
+
+
+def find_ally_complaint_hero(text: str) -> Optional[str]:
+    match = _ALLY_COMPLAINT_PATTERN.search(text)
+    if not match:
+        return None
+    candidate = normalize_hero_candidate(match.group(1))
+    if not candidate:
+        return None
+    if re.search(r"(?:상대|적)\s*$", text[:match.start(1)]):
+        return None
+    return candidate
+
+
+# "X랑 조합 어때", "X와 같이 쓰면 어때", "X랑 할 때 어떻게 운영해"처럼 시너지를
+# 묻는 문장에 언급된 영웅은 아군이다. 적대 신호가 있으면(실제 상대 조합일 수
+# 있어) 적용하지 않는다.
+_SYNERGY_WORDS = [
+    "조합", "시너지", "궁합", "같이 쓰면", "같이 하면", "같이 할 때",
+    "함께 쓰면", "함께 하면", "랑 할 때", "이랑 할 때",
+]
+
+
+def find_synergy_ally_heroes(text: str) -> List[str]:
+    if any(word in text for word in ADVERSARIAL_SIGNAL_WORDS):
+        return []
+    if not any(word in text for word in _SYNERGY_WORDS):
+        return []
+    return find_all_heroes(text)
+
+
 def find_enemy_mentioned_hero(text: str) -> Optional[str]:
     for pattern in ENEMY_MENTION_PATTERNS:
         match = re.search(pattern, text)
@@ -720,6 +741,19 @@ def find_enemy_mentioned_hero(text: str) -> Optional[str]:
             if candidate:
                 return candidate
     return None
+
+
+# "맵 이름 + 영웅 이름 + 활용법/운영법"처럼 특정 영웅의 사용법을 묻는 질문의
+# 영웅은 상대가 아니라 설명 대상일 뿐이다.
+_HERO_USAGE_GUIDE_WORDS = ["활용법", "운영법", "사용법", "쓰는 법", "다루는 법", "활용"]
+
+
+def is_hero_usage_guide_question(text: str) -> bool:
+    return bool(
+        find_map(text)
+        and any(word in text for word in _HERO_USAGE_GUIDE_WORDS)
+        and find_all_heroes(text)
+    )
 
 
 def infer_target_enemy(message: str, context: Dict[str, Any], intent: str) -> Optional[str]:
@@ -734,14 +768,19 @@ def infer_target_enemy(message: str, context: Dict[str, Any], intent: str) -> Op
         new_situation = bool(find_map(text) or find_side(text) or extract_enemy_team(text))
         return None if new_situation else context.get("target_enemy")
 
-    # "메시지에 등장한 첫 영웅"을 상대로 보는 이 폴백은 적/아군을 구분하는
-    # 명시적 신호(카운터/견제/잡/막/처리/때문에/상대)가 전혀 없을 때만 쓰는
-    # 최후 수단이다. current_hero뿐 아니라, 이번 메시지에서 "우리팀은/아군은"
-    # 같은 마커로 아군으로 언급된 영웅도 제외해야 한다 — 그렇지 않으면 아군
-    # 조합을 나열하는 문장에서 첫 번째로 언급된 아군 영웅이 엉뚱하게 카운터
-    # 대상으로 잘못 채택된다.
+    if is_hero_usage_guide_question(text):
+        return None
+
+    # 명시적 신호가 없을 때의 최후 수단: 메시지의 첫 영웅을 상대로 본다.
+    # 단, 아군으로 언급된 영웅은 제외해야 아군 나열 문장에서 엉뚱하게 채택되지 않는다.
+    complaint_hero = find_ally_complaint_hero(text)
+    ally_named_this_turn = (
+        set(extract_ally_team(text))
+        | set(find_self_comparison_heroes(text))
+        | set(find_synergy_ally_heroes(text))
+        | ({complaint_hero} if complaint_hero else set())
+    )
     heroes_in_text = find_all_heroes(text)
-    ally_named_this_turn = set(extract_ally_team(text)) | set(find_self_comparison_heroes(text))
     heroes_in_text = [
         h for h in heroes_in_text
         if h != current_hero and h not in ally_named_this_turn
@@ -777,10 +816,8 @@ def infer_current_hero(message: str, context: Dict[str, Any], intent: str) -> Op
     if te:
         enemy_heroes.add(te)
 
-    # 이번 메시지 안에서 "상대 OO", "OO 때문에" 처럼 적으로 언급된 영웅도
-    # 제외 대상에 추가한다. 그렇지 않으면 적 영웅 이름과 "계속" 같은 트리거
-    # 단어가 같은 문장에 우연히 있을 때, 적 영웅을 사용자 본인이 플레이 중인
-    # 영웅으로 잘못 인식하는 문제가 생긴다.
+    # 이번 메시지에서 적으로 언급된 영웅도 제외한다. 그렇지 않으면 "계속" 같은
+    # 트리거 단어와 우연히 겹칠 때 적 영웅을 자기 영웅으로 오인한다.
     enemy_mentioned = find_enemy_mentioned_hero(text)
     if enemy_mentioned:
         enemy_heroes.add(enemy_mentioned)
@@ -791,30 +828,19 @@ def infer_current_hero(message: str, context: Dict[str, Any], intent: str) -> Op
         if hero and hero not in enemy_heroes:
             return hero
 
-    if detect_wants_to_keep_hero(text) or any(word in text for word in [
-        "계속 쓰고",
-        "계속 하고",
-        "현재",
-        "플레이",
-        "하고 있",
-        "하고 싶어",
-        "하고싶어",
-        "쓰고 싶어",
-        "쓸건데",
-        "쓸 거",
-        "고정",
-        "원챔",
-    ]):
-        hero = find_first_hero(text)
-        if hero and hero not in enemy_heroes:
+    # 자기 영웅 선언(hero_mentioned_as_current_hero로 검증된 경우)만 current_hero로
+    # 채택한다. "솔저는 어떻게 플레이해?"처럼 영웅을 주제로 묻기만 하는 질문은
+    # 여기 걸리지 않는다 — 그런 topic 전용 언급은 current_hero가 아니라
+    # focus_heroes로 처리한다(merge_context_node 참고). 세션에 남은 이전
+    # current_hero를 자동으로 되살리지도 않는다 — 후속 질문 연결은 focus_heroes의
+    # 몫이다.
+    for hero in find_all_heroes(text):
+        if hero in enemy_heroes:
+            continue
+        if hero_mentioned_as_current_hero(hero, text):
             return hero
 
-    if intent in ["stay", "performance_improve", "swap", "map_strategy"]:
-        for hero in find_all_heroes(text):
-            if hero not in enemy_heroes:
-                return hero
-
-    return context.get("current_hero")
+    return None
 
 
 def role_filter_from_text(message: str) -> Optional[str]:
@@ -850,39 +876,20 @@ ROLE_CLARIFICATION_INTENTS = {
     "performance_improve", "stay", "swap", "general", "counter", "situation", "composition",
 }
 
-# 답변을 문단 서술 대신 "상성 카드"(상대하기 어려운 영웅 / 쉬운 영웅)로 보여줘야 하는
-# 경우. 카드는 "지금 어떤 영웅을 고를지" 추천하는 화면이므로, 사용자가 이미
-# 플레이 중인 영웅을 밝힌 상태에서는 맞지 않는다 — 예: "키리코인데 상대 트레이서
-# 어떻게 해?"는 키리코로 트레이서를 어떻게 상대할지 묻는 운영 질문이지, 트레이서를
-# 카운터할 다른 영웅을 추천해달라는 게 아니다. 그래서 실제로 카드가 나가는 경우는
-# 두 가지로 좁힌다(merge_context_node의 matchup_subject 계산 참고):
-#   1) intent=="counter"이면서 아직 플레이 중인 영웅이 없는 경우(순수 픽 추천 질문).
-#   2) intent=="swap"이면서 이미 쓰는 영웅이 있는 경우(그 영웅의 상성표를 보고
-#      교체 여부를 판단하려는 질문).
-# intent=="stay"(상성이 불리해도 지금 영웅을 유지하겠다는 질문)는 애초에 다른 영웅
-# 추천이 목적이 아니므로 카드 대상에서 제외한다 — 기존처럼 stay_intent_block이
-# 붙은 운영 조언 텍스트로 답한다. "performance_improve"(운영법·포지션·스킬 사용
-# 시점 등)와 "general"/"map_strategy"도 상성 질문이 아니므로 제외.
+# 상성 카드는 "지금 어떤 영웅을 고를지" 추천하는 화면이라 이미 플레이 중인 영웅이
+# 있으면 맞지 않는다(예: "키리코인데 상대 트레이서 어떻게 해?"는 운영 질문이지 카운터
+# 추천 요청이 아니다). 카드가 나가는 경우는 merge_context_node의 matchup_subject
+# 기준 두 가지뿐이다: 1) counter이면서 아직 영웅 미확정(순수 픽 추천), 2) swap이면서
+# 이미 쓰는 영웅이 있는 경우. stay/performance_improve/general/map_strategy는 제외.
 
 
 def should_ask_role_filter(state: ChatbotGraphState) -> bool:
-    """
-    사용자가 지금 어떤 역할(탱커/딜러/힐러)로 플레이 중인지 전혀 알 수 없을 때
-    역할을 먼저 물어봐야 하는지 판단한다. 두 가지 경우를 모두 포함한다.
-
-    1) 상대 영웅을 카운터하려는 상황(intent=="counter")인데 상대는 지목했지만
-       내 역할을 알 수 없는 경우 — 예전부터 있던 흐름.
-    2) 상대 영웅을 지목했는지 여부와 무관하게, 지금 무슨 영웅으로 플레이
-       중인지조차 전혀 모르는 상태에서 개인화된 답이 필요한 질문이 들어온 경우
-       (상대 영웅 이름조차 없는 일반적인 대처법 질문도 포함). 이때도 역할을
-       모르는 채로 바로 답하면 엉뚱한 역할 기준으로 추천하게 되므로, 2)번도
-       반드시 역할부터 물어야 한다.
-
-    role_filter(effective_role_filter)는 merge_context_node에서 이미
-    explicit_role_filter → current_hero_role → 세션 잔존값 순으로 채워지므로,
-    여기서 role_filter가 비어 있다는 것은 곧 "현재 역할을 어떤 방법으로도
-    알아낼 수 없었다"는 뜻이다.
-    """
+    """현재 역할을 전혀 알 수 없을 때 역할을 먼저 물어야 하는지 판단한다:
+    1) counter이고 상대는 지목했지만 내 역할을 모르는 경우, 2) 상대 지목
+    여부와 무관하게 지금 영웅 자체를 몰라 개인화된 답이 불가능한 경우.
+    role_filter는 merge_context_node가 이미 explicit_role_filter →
+    current_hero_role → 세션 잔존값 순으로 채우므로, 여기서 비어 있다는 것은
+    어떤 방법으로도 역할을 알아낼 수 없었다는 뜻이다."""
     role_filter = state.get("role_filter")
     if role_filter:
         return False
@@ -897,7 +904,15 @@ def should_ask_role_filter(state: ChatbotGraphState) -> bool:
     if intent == "counter" and target_enemy:
         return True
 
-    if not state.get("current_hero") and intent in ROLE_CLARIFICATION_INTENTS:
+    # current_hero가 없다는 이유만으로 무조건 되묻지 않는다 — focus_heroes에
+    # 설명 대상 영웅이 하나라도 있으면("솔저는 어떻게 플레이해?" → 솔저76)
+    # 그 영웅 기준으로 바로 답할 수 있으므로 역할을 몰라도 되묻지 않는다.
+    # 단, performance_improve/stay처럼 focus_heroes가 곧 "설명 대상 영웅"인
+    # 경우에만 그렇다 — general/situation처럼 상대 영웅 하나가 언급됐을 뿐인
+    # 상황(예: "상대 겐지 때문에 힘든데 뭘 해야해?")은 여전히 사용자 자신의
+    # 역할을 알아야 의미 있는 조언이 가능하므로 이 예외에서 제외한다.
+    focus_hero_sufficient = intent in ("performance_improve", "stay") and bool(state.get("focus_heroes"))
+    if not state.get("current_hero") and not focus_hero_sufficient and intent in ROLE_CLARIFICATION_INTENTS:
         return True
 
     return False
@@ -915,8 +930,7 @@ def sanitize_answer_for_user(answer: str, keep_dash_bullets: bool = False) -> st
     sanitized = re.sub(r'\n*"used_doc_ids"\s*:\s*\[.*?\]\s*\}?\s*$', '', sanitized).strip()
 
     sanitized = re.sub(r"\s*\(문서\s*\d+\)", "", sanitized)
-    # "[문서 1]에서 언급했듯이" 처럼 대괄호 출처 표시 뒤에 붙는 어구까지 함께 제거
-    # 대괄호만 지우면 "에서 언급했듯이"라는 어색한 잔여 문구가 발생.
+    # 대괄호만 지우면 "에서 언급했듯이"같은 어색한 잔여 문구가 남아 뒤 어구까지 제거.
     sanitized = re.sub(r"\s*\[문서\s*\d+\][^,.\n]{0,12}(?:듯이|면서)?,?", "", sanitized)
     sanitized = re.sub(r"\s*\[문서\s*\d+\]", "", sanitized)
     banned_phrases = [
@@ -937,29 +951,22 @@ def sanitize_answer_for_user(answer: str, keep_dash_bullets: bool = False) -> st
     for pattern in map_warning_patterns:
         sanitized = re.sub(pattern, "", sanitized)
 
-    # LLM이 마크다운 문법을 지시 위반으로 섞어 쓴 경우를 위한 안전망.
-    # JSON 파싱이 깨지는 가장 흔한 원인이 **볼드**나 *   리스트 같은 마크다운
-    # 기호이므로, 최종 사용자 노출 전에 한 번 더 청소한다.
-    sanitized = re.sub(r"\*\*(.+?)\*\*", r"\1", sanitized)        # **볼드** → 볼드
+    # LLM이 지시를 어기고 마크다운을 섞어 쓸 때를 위한 안전망(JSON 파싱 깨짐의 흔한 원인).
+    sanitized = re.sub(r"\*\*(.+?)\*\*", r"\1", sanitized)
     if keep_dash_bullets:
-        # 간단 모드는 "- "를 의도된 목록 기호로 쓰므로 보존한다. LLM이 실수로 섞어 쓸 수 있는
-        # "*" 글머리 기호만 안전망으로 제거한다(프론트의 simpleMarkdown이 "- "를 <li>로 렌더링함).
+        # 간단 모드는 "- "를 의도된 목록 기호로 써서 보존하고, "*"만 안전망으로 제거한다.
         sanitized = re.sub(r"^\s*\*\s+", "", sanitized, flags=re.MULTILINE)
     else:
-        sanitized = re.sub(r"^\s*[\*\-]\s+", "", sanitized, flags=re.MULTILINE)  # 글머리 기호 제거
+        sanitized = re.sub(r"^\s*[\*\-]\s+", "", sanitized, flags=re.MULTILINE)
 
     sanitized = re.sub(r"[ \t]+", " ", sanitized)
     sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
     return sanitized.strip()
 
 
-# ── "간단히" 스타일 전용: 예측 질문(suggested_questions)을 답변 생성 LLM 호출에
-# 끼워 넣어, generate_suggested_questions_node의 별도 LLM 호출을 생략한다. ──
-# "간단히"는 인게임 중 빠른 응답이 목적이라 LLM 호출 수 자체를 줄여야 하는데,
-# 기존에는 답변 생성(judge_strategy 생략 후에도 1회) + 예측 질문(1회)로 최소
-# 2번의 순차 호출이 필요했다. 답변 텍스트와 예측 질문을 한 번의 JSON 응답으로
-# 함께 받으면 이 중 하나를 없앨 수 있다. "자세히" 스타일은 답변 품질을 우선해
-# 기존처럼 별도 노드(generate_suggested_questions_node)를 그대로 거친다.
+# "간단히" 스타일 전용: 예측 질문을 답변 생성 LLM 호출에 함께 받아 별도 LLM 호출
+# (generate_suggested_questions_node)을 생략한다 — 인게임 빠른 응답이 목적이라
+# 호출 수를 줄여야 한다. "자세히"는 답변 품질 우선으로 기존 방식을 유지한다.
 SUGGESTED_QUESTIONS_INLINE_SCHEMA_LINE = ',\n  "suggested_questions": ["질문1", "질문2", "질문3"]'
 SUGGESTED_QUESTIONS_INLINE_RULES = """
 suggested_questions 작성 규칙:
@@ -982,8 +989,9 @@ def extract_inline_suggested_questions(parsed: Any) -> List[str]:
 def validate_input_node(state: ChatbotGraphState) -> ChatbotGraphState:
     message = state.get("message", "").strip()
     role_filter = state.get("role_filter")
+    focus_hero_pick = state.get("focus_hero_pick")
 
-    if not message and not role_filter:
+    if not message and not role_filter and not focus_hero_pick:
         return {"error": "질문을 입력해주세요."}
 
     return {
@@ -1119,13 +1127,9 @@ def llm_parse_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
     message = state.get("message", "")
 
-    # message가 비어 있는 턴은 실제 사용자 발화가 아니라 role_filter 버튼 클릭
-    # 같은 순수 선택 신호다(chat.html의 sendRoleFilter가 message: ''로 보냄).
-    # 이런 턴을 LLM에 그대로 넘기면 "오버워치와 무관해 보이는 빈 메시지"를
-    # intent="off_topic"으로 잘못 분류해버려, merge_context_node가 원래
-    # 질문(pending_question)을 이어받기도 전에 고정 오프토픽 답변으로 새버리는
-    # 문제가 생긴다. 뽑아낼 정보 자체가 없으므로 LLM 호출 없이 그대로 규칙
-    # 기반 폴백에 맡긴다.
+    # message가 비어 있으면 role_filter 버튼 클릭 같은 순수 선택 신호다(sendRoleFilter가
+    # message: ''로 보냄). 그대로 LLM에 넘기면 off_topic으로 오분류돼 pending_question을
+    # 이어받기 전에 고정 오프토픽 답변으로 샐 수 있어, LLM 호출 없이 규칙 기반 폴백에 맡긴다.
     if not message.strip():
         return {}
 
@@ -1237,10 +1241,15 @@ intent 분류 기준 (각 항목의 예시를 참고해라):
 2. 힐/지원을 받지 못한다는 불만 표현(예: "힐을 못 받는다", "지원이 끊긴다", "케어가 안 된다" 등
    어떤 표현이든)은 사용자가 지원 부족 문제를 겪고 있다는 뜻이지, 사용자 본인이 힐러를
    플레이 중이라는 뜻이 아니다. 이런 표현만으로 current_hero_role을 "support"로 단정하지 마라.
+   이 불만의 주체로 특정 영웅 이름이 등장하면(예: "메르시가 힐을 안 한다", "메르시가
+   나를 안 봐준다", "X가 케어를 안 한다", "X가 탱킹/딜을 못 한다") 그 영웅은 아군이다
+   — ally_team에 넣고, target_enemy/enemy_team에는 절대 넣지 마라. current_hero로도
+   단정하지 마라(사용자 자신이 아니라 동료를 말하는 것이다).
 3. swap일 때 current_hero는 바꾸기 전 영웅(이미 플레이 중이라고 말한 영웅)이고,
    교체 후보로 언급된 영웅은 current_hero도 target_enemy도 아니다. 따라서
    target_enemy는 반드시 null로 설정하라.
-4. 영웅 이름이 메시지에 없으면 이전 컨텍스트의 current_hero를 이어받아라.
+4. 영웅 이름이 메시지에 없으면 current_hero를 null로 둬라 — 이전 대화에서
+   어떤 영웅 얘기가 있었든, 자동으로 이어받지 마라.
 5. 새 판을 시작하는 맥락(다른 영웅 언급, "이번엔" 등)이면 이전 enemy_team/target_enemy는 무시해라.
 6. current_hero_role은 역할 분류를 참고해서 current_hero의 역할을 반환해라.
 7. target_enemy와 enemy_team은 사용자가 이번 메시지에서 영웅 이름을 직접 언급했을 때만
@@ -1256,15 +1265,33 @@ intent 분류 기준 (각 항목의 예시를 참고해라):
 current_hero는 X이고 intent는 "stay"로 판단해라.
 이 경우 사용자는 영웅 교체 추천을 원하는 것이 아니라,
 X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 것이다.
-10. ally_team은 사용자가 이번 메시지에서 "우리팀"/"아군" 영웅으로 직접 언급한
-    경우에만 채워라("상대팀은 A B C D E, 우리팀은 C E F G"처럼 두 팀을 함께
-    나열하는 질문에서 흔하다). 언급이 없으면 빈 배열로 둬라. enemy_team과 마찬가지로
-    짐작으로 채우지 마라.
+10. ally_team은 사용자가 이번 메시지에서 아군으로 언급한 영웅을 채운다. 다음
+    경우 모두 아군으로 본다 — 짐작으로 채우지 말고 아래 경우에만 채워라:
+    - "우리팀"/"아군" 영웅으로 직접 언급("상대팀은 A B C D E, 우리팀은 C E F G").
+    - 규칙 2의 동료 불만 표현("메르시가 힐을 안 한다" 등)의 주체.
+    - "X랑 조합 어때?", "X와 같이 쓰면 어때?", "X랑 할 때 어떻게 운영해?"처럼
+      영웅과의 시너지/조합을 묻는 문장에 언급된 영웅.
 11. "A를 고르면/픽하면 B가 잘 나올까?", "A랑 B랑 둘 다 ~하잖아"처럼 자기 팀
     소속(이미 쓰고 있거나 고민 중인 아군 후보) 영웅끼리 비교/나열하는 문장은
     target_enemy/enemy_team이 아니다. "상대", "적", "카운터", "때문에"처럼
     적을 가리키는 표현이 없다면, 문장에 영웅 이름이 있어도 그 영웅을
     target_enemy로 짐작해서 채우지 마라.
+12. 영웅 두 명 이상이 나오고 "조합", "시너지", "궁합", "같이 쓰면", "같이 하면"
+    같은 표현이 있으며 "상대", "적", "카운터", "때문에" 같은 적대 표현이 없다면,
+    언급된 영웅은 모두 ally_team이고 intent는 composition이다. current_hero는
+    사용자가 자신이 그 영웅을 플레이한다고 직접 말하지 않았다면 null로 둬라.
+13. "맵 이름 + 영웅 이름 + 활용법/운영법" 구조(예: "일리오스 메르시 활용법
+    알려줘")는 그 맵에서 그 영웅을 어떻게 쓰는지 설명해달라는 뜻이지, 사용자가
+    그 영웅을 플레이한다고 밝힌 것이 아니다. intent는 map_strategy이고
+    current_hero는 null로 둬라(자기 선언 표현이 별도로 없는 한).
+
+예시:
+- "메르시가 힐을 안할건데 뭘로 힐을 많이 해야할까" → intent: performance_improve,
+  current_hero: null, ally_team: ["메르시"], target_enemy: null, enemy_team: [].
+- "둠피 메르시 조합 어때?" → intent: composition, ally_team: ["둠피스트", "메르시"],
+  current_hero: null, target_enemy: null, enemy_team: [].
+- "일리오스 메르시 활용법 알려줘" → intent: map_strategy, current_hero: null,
+  target_enemy: null, enemy_team: [].
 """
 
         raw = call_llm_text(llm, prompt)
@@ -1308,27 +1335,18 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
                     role = HERO_TO_ROLE.get(normalized)
                     if role:
                         result["llm_current_hero_role"] = role
-                    # current_hero는 "이전 영웅을 이어받는 것" 자체는 정당한 경우가 많아
-                    # (예: "딜 더 올리는 법은?" 같은 후속 질문) target_enemy처럼 무조건
-                    # 버리지는 않는다. 다만 메시지 원문에 실제로 등장했는지는 별도로
-                    # 표시해, swap처럼 "교체"를 다루는 민감한 intent와 결합됐을 때
-                    # 안전장치가 작동할 수 있게 한다.
+                    # current_hero는 이전 값을 이어받는 게 정당한 경우가 많아 target_enemy처럼
+                    # 무조건 버리지 않되, 원문에 실제로 등장했는지는 별도 플래그로 표시해
+                    # swap 같은 민감한 intent에서 안전장치가 작동하게 한다.
                     if hero_mentioned_as_current_hero(normalized, message):
                         current_hero_confirmed_in_message = True
         result["llm_current_hero_confirmed"] = current_hero_confirmed_in_message
 
-        # 안전장치: intent가 "swap"(영웅 교체 여부 판단)인데 정작 메시지 원문에
-        # current_hero 이름이 전혀 없다면, 이건 "내 영웅을 바꿀지" 묻는 질문이
-        # 아니라 "팀 조합을 어떻게 짤지" 같은 일반적인 질문일 가능성이 높다.
-        # 본인 영웅 언급이 전혀 없는 조합 질문을 LLM이 "지금 영웅을 교체할지"
-        # 묻는 질문으로 오인하는 경우를 막기 위한 안전장치다.
-        #
-        # 이 가드가 실제로 발동했다는 사실 자체를 별도 플래그(swap_guard_triggered)로
-        # 남긴다. merge_context_node에서 "현재 영웅이 불확실하다"고 판단할 근거는
-        # 반드시 이 플래그여야 한다 — 단순히 llm_intent가 "general"이라는 것만으로는
-        # 부족하다. 직전 답변에 대한 순수 후속 질문도 영웅 이름 없이 intent=general로
-        # 분류될 수 있는데, 이런 경우까지 "영웅이 불확실하다"고 처리하면 정상적인
-        # 후속 대화의 맥락(직전에 다루던 영웅)이 통째로 사라지는 문제가 생긴다.
+        # swap인데 메시지에 current_hero 언급이 전혀 없으면 "영웅 교체" 질문이 아니라
+        # "팀 조합" 질문을 LLM이 오인했을 가능성이 높아 general로 재분류한다.
+        # swap_guard_triggered로 발동 여부를 남긴다 — merge_context_node가 "현재 영웅이
+        # 불확실하다"고 판단할 근거는 반드시 이 플래그여야 한다. llm_intent=="general"만으로
+        # 판단하면, 영웅 언급 없는 정상적인 후속 질문까지 영웅 불확실로 처리돼 맥락이 사라진다.
         swap_guard_triggered = False
         if result.get("llm_intent") == "swap" and not current_hero_confirmed_in_message:
             logger.info(
@@ -1340,12 +1358,9 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
             swap_guard_triggered = True
         result["swap_guard_triggered"] = swap_guard_triggered
 
-        # 아군(ally_team)을 target_enemy/enemy_team 검증보다 먼저 계산해, 이번
-        # 메시지에서 이미 우리 편으로 언급된 영웅이 동시에 상대(적)로도 잘못
-        # 채택되는 것을 막는다. LLM이 준 ally_team뿐 아니라 "우리팀은/아군은"
-        # 같은 명시적 마커로 규칙 기반으로 뽑히는 이름도 함께 배제 대상에
-        # 넣는다 — LLM이 ally_team 자체를 놓쳤더라도 이 마커가 있으면 그
-        # 영웅은 확실히 아군이기 때문이다.
+        # ally_team을 target_enemy/enemy_team 검증보다 먼저 계산해, 아군으로 언급된
+        # 영웅이 동시에 상대로 잘못 채택되지 않게 막는다. LLM이 ally_team을 놓쳐도
+        # "우리팀은/아군은" 마커로 뽑힌 이름은 함께 배제 대상에 넣는다.
         ally_team = parsed.get("ally_team", [])
         verified_ally_team = []
         if isinstance(ally_team, list):
@@ -1355,19 +1370,19 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
                     verified_ally_team.append(n)
         if verified_ally_team:
             result["llm_ally_team"] = verified_ally_team
+        message_complaint_hero = find_ally_complaint_hero(message)
         ally_excluded = (
             set(verified_ally_team)
             | set(extract_ally_team(message))
             | set(find_self_comparison_heroes(message))
+            | set(find_synergy_ally_heroes(message))
+            | ({message_complaint_hero} if message_complaint_hero else set())
         )
 
-        # target_enemy/enemy_team은 LLM이 짐작으로 채울 수 있으므로,
-        # 사용자 메시지 원문에 그 영웅 이름이 실제로 등장할 때만 신뢰한다.
-        # (이전 대화의 적이 다음 질문에 근거 없이 단정적으로 이어붙는 문제 방지)
-        # 추가로, 이번 메시지에서 이미 아군으로 언급된 영웅은 target_enemy/
-        # enemy_team으로 절대 채택하지 않는다 — "솜브라랑 트레이서랑 둘 다
-        # 짤짤이딜이잖아"처럼 아군끼리 비교하는 문장에서 아군 영웅(솜브라)이
-        # "카운터해야 할 상대"로 둔갑해 엉뚱하게 역할을 되묻는 사고를 막는다.
+        # target_enemy/enemy_team은 LLM이 짐작으로 채울 수 있으므로 원문에 실제
+        # 등장할 때만 신뢰한다. 또한 이번 메시지에서 아군으로 언급된 영웅은 절대
+        # 채택하지 않는다 — 아군끼리 비교하는 문장에서 아군이 "카운터 대상"으로
+        # 둔갑하는 사고를 막기 위해서다.
         target_enemy = parsed.get("target_enemy")
         if target_enemy and isinstance(target_enemy, str):
             normalized_enemy = normalize_hero_name(target_enemy.strip())
@@ -1416,12 +1431,8 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     message = state.get("message", "").strip()
     context = state.get("conversation_context", {}) or {}
 
-    # ── 세션 타임아웃: 마지막 메시지로부터 일정 시간이 지나면 새 게임으로 간주 ──
-    # 텍스트만으로 "이전 대화 이어가기"와 "새 게임 시작"을 구분하는 데는 한계가
-    # 있다(예: "팀 조합 어떻게 짤까"는 직전 영웅의 후속 질문일 수도, 완전히 새로운
-    # 판의 질문일 수도 있다). 가장 확실한 신호는 경과 시간이다. 오버워치 한 판은
-    # 보통 10~20분 정도 걸리므로, 10분 이상 메시지가 없었다면 직전 판이 끝나고
-    # 새 판이 시작됐을 가능성이 높다고 보고 컨텍스트를 초기화한다.
+    # 텍스트만으로 "대화 이어가기"와 "새 게임"을 구분하기 어려우므로, 10분 이상
+    # 메시지가 없으면(오버워치 한 판 길이 기준) 새 판으로 보고 컨텍스트를 초기화한다.
     SESSION_TIMEOUT_SECONDS = 10 * 60
     now_ts = time.time()
     last_message_ts = context.get("last_message_ts")
@@ -1438,22 +1449,27 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     explicit_role_filter = state.get("role_filter") or role_filter_from_text(message)
     awaiting_role_filter_reply = bool(context.get("pending_question"))
     role_filter_reply_consumed = bool(explicit_role_filter and awaiting_role_filter_reply)
-    # 세션에 남아있는 role_filter를 새 질문에 자동 재사용하지 않는다. 역할 필터는
-    # 사용자가 이번 턴에 버튼/텍스트로 명시했을 때만 적용한다. 그렇지 않으면
-    # 이전 역할 버튼 답변이 다음 새 질문까지 새어 들어가, 현재 역할을 모르는
-    # 상황에서도 되묻지 않고 바로 답하는 문제가 생긴다.
+    # 세션의 role_filter를 새 질문에 자동 재사용하지 않는다 — 그러면 이전 역할
+    # 답변이 다음 질문까지 새어 들어가, 역할을 모르는 상황에서도 되묻지 않게 된다.
     role_filter = explicit_role_filter
 
-    # 답변 스타일(간단히/자세히)은 이번 턴에 명시적으로 온 값을 우선하고, 없으면 세션에
-    # 남아있는 이전 선택을 이어받는다 — 역할 버튼을 누르는 후속 턴(message='')에도 원래
-    # 질문에서 고른 스타일이 그대로 유지되어야 하기 때문이다.
+    # "어떤 영웅 기준으로?" 되묻기(clarify_focus_hero_node)에 사용자가 버튼/텍스트로
+    # 영웅을 골라 응답한 턴. role_filter 버튼과 동일한 패턴(message='' + 전용 필드)이라
+    # message가 비어 있으므로 llm_parse_context_node도 자동으로 건너뛴다.
+    pending_intent = context.get("pending_intent")
+    awaiting_focus_hero_reply = bool(context.get("pending_question")) and pending_intent == "clarify_focus_hero"
+    focus_hero_pick = normalize_hero_name(state.get("focus_hero_pick")) if state.get("focus_hero_pick") else None
+    focus_hero_reply_consumed = bool(awaiting_focus_hero_reply and focus_hero_pick)
+
+    # 답변 스타일(간단히/자세히)은 이번 턴 값을 우선하고 없으면 세션 값을 이어받는다 —
+    # 역할 버튼 클릭 턴(message='')에도 원래 질문에서 고른 스타일이 유지돼야 한다.
     requested_answer_style = state.get("answer_style")
     if requested_answer_style not in ("simple", "detailed"):
         requested_answer_style = None
     answer_style = requested_answer_style or context.get("answer_style") or "detailed"
 
     effective_message = message
-    if role_filter_reply_consumed:
+    if role_filter_reply_consumed or focus_hero_reply_consumed:
         effective_message = context.get("pending_question")
 
     llm_intent       = state.get("llm_intent")
@@ -1483,21 +1499,15 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         llm_hero_role = None
         llm_current_hero_confirmed = False
 
-    # 이번 턴에 사용자가 current_hero를 직접 선언했는지 여부. is_team_comp_question
-    # 판단(아래)과 나중의 stale-hero 정리 가드 둘 다 이 값을 공유해서 써야
-    # 일관되게 동작한다 — current_hero는 위 가드 이후로 바뀌지 않으므로 여기서
-    # 한 번만 계산해도 안전하다.
+    # is_team_comp_question 판단과 뒤쪽 stale-hero 정리 가드가 이 값을 공유해야
+    # 일관되게 동작하므로 여기서 한 번만 계산한다.
     current_hero_explicit_this_turn = bool(
         current_hero and hero_mentioned_as_current_hero(current_hero, effective_message)
     )
 
-    # "나는 파라인데 킬3 데스10 딜4000이야 ... 우리팀은 윈스턴/솜브라/루시우/
-    # 브리기테야, 상대방은 ..."처럼 자기 영웅을 이미 밝혔는데도, 아군/상대
-    # 조합을 함께 나열했다는 이유만으로 LLM이 intent를 "composition"(아직 영웅을
-    # 못 골라 추천이 필요한 질문)으로 잘못 분류하는 경우가 있다. composition은
-    # 정의상 "아직 영웅을 고르지 않은" 상태를 전제하므로, 이번 턴에 자기 영웅을
-    # 이미 밝혔다면 그 전제 자체가 성립하지 않는다 — 규칙 기반 폴백으로 다시
-    # 분류한다(위 is_team_comp_question 가드와 같은 이유, 다른 채널의 오분류를 막음).
+    # 자기 영웅을 이미 밝혔는데도 아군/상대 조합을 나열했다는 이유만으로 LLM이
+    # composition(아직 영웅 미확정 전제)으로 오분류하는 경우가 있어 규칙 기반으로
+    # 재분류한다. 예: "나는 파라인데... 우리팀은 윈스턴/솜브라/루시우/브리기테야."
     if intent == "composition" and current_hero_explicit_this_turn:
         corrected_intent = infer_intent_by_rule(effective_message, context)
         if corrected_intent != "composition":
@@ -1508,26 +1518,17 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
             )
             intent = corrected_intent
 
-    # current_hero가 이번 메시지에 직접 등장하지 않았는데, llm_parse_context_node의
-    # SWAP INTENT GUARD가 실제로 발동했다면(swap_guard_triggered=True) — 즉 LLM이
-    # 원래 "교체 여부 판단" 질문으로 잘못 분류했을 만큼 새로운 상황 설명(상대 조합,
-    # 압박 상황 등)이 담겨 있었는데 본인 영웅 언급이 없었다면 — "지금도 정말 그
-    # 영웅을 플레이 중인지" 자체가 불확실한 상태다.
-    #
-    # 반드시 swap_guard_triggered를 기준으로 삼아야 한다. 단순히 llm_intent가
-    # "general"이라는 것만으로 판단하면, 새로운 정보 없이 직전 답변을 더
-    # 풀어달라는 순수 후속 질문까지 "영웅이 불확실하다"고 오판해서, 멀쩡히
-    # 이어지던 대화 맥락이 끊기는 문제가 생긴다.
+    # swap_guard_triggered가 발동했다면(새 상황 설명은 있는데 본인 영웅 언급이
+    # 없어 LLM이 오분류했던 경우) 지금도 그 영웅을 플레이 중인지 불확실하다고 본다.
+    # llm_intent=="general"만으로 판단하면 순수 후속 질문까지 불확실로 오판해 맥락이 끊긴다.
     current_hero_uncertain = bool(
         current_hero
         and not llm_current_hero_confirmed
         and swap_guard_triggered
     )
 
-    # 힐 수급 문제를 토로하는 표현(예: "힐을 못받아", "힐이 없어", "힐 부족")은
-    # 화이트리스트로 일일이 나열하면 누락되기 쉽다. "힐"이라는 단어와 부정/부족을
-    # 뜻하는 표현이 근접해서 함께 등장하면 힐 수급 불만으로 간주하는 정규식으로
-    # 더 견고하게 잡는다.
+    # 힐 수급 불만 표현은 화이트리스트로 나열하면 누락되기 쉬워, "힐"과 부정/부족
+    # 표현이 근접하면 매칭되는 정규식으로 잡는다.
     HEAL_COMPLAINT_PATTERN = re.compile(
         r"힐[^.!?\n]{0,6}(못|안|부족|없|끊)"
     )
@@ -1545,12 +1546,8 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 effective_message, corrected,
             )
 
-    # 추가 안전장치: current_hero가 이미 명확히 특정 영웅으로 잡혔다면,
-    # 그 영웅의 실제 역할(HERO_TO_ROLE)을 LLM 판단보다 우선한다.
-    # current_hero가 무엇인지는 find_first_hero 등으로 메시지에서 직접
-    # 추출되므로, 역할을 잘못 분류해 허용 영웅 목록이 통째로 어긋나는 문제
-    # (예: 딜러 영웅을 플레이 중인데 역할이 힐러로 잘못 잡혀, 답변에 등장하는
-    # 정상적인 영웅 언급까지 전부 위반으로 처리되는 문제)를 막는다.
+    # current_hero가 확정됐다면 실제 역할(HERO_TO_ROLE)을 LLM 판단보다 우선한다.
+    # 역할이 잘못 잡히면 허용 영웅 목록 전체가 어긋나 정상 답변까지 위반으로 처리된다.
     if current_hero:
         true_role = HERO_TO_ROLE.get(current_hero)
         if true_role and true_role != llm_hero_role:
@@ -1561,7 +1558,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
             )
             llm_hero_role = true_role
 
-    map_name = find_map(effective_message) or state.get("map_name") or None
+    map_name = find_map(effective_message) or context.get("map_name") or None
     side = (
         find_side(effective_message)
         or state.get("side")
@@ -1575,13 +1572,11 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
             k: v for k, v in context.items()
             if k not in ("target_enemy", "enemy_team", "enemy_stats",
                          "high_threat_enemy", "my_stats", "my_team_stats", "has_stats",
-                         "no_enemy_turn_count")
+                         "no_enemy_turn_count", "ally_team")
         }
 
-    # 적 정보가 무한정 세션에 눌어붙는 것을 막는다. current_hero/map_name이 그대로
-    # 유지된 채 대화가 이어지면 should_reset_enemy_context는 리셋을 트리거하지 않으므로,
-    # "이번 턴에 적이 언급되지 않은" 상태가 연속되면 별도로 카운트해서 일정 턴 후
-    # 자동으로 비운다.
+    # should_reset_enemy_context가 트리거되지 않아도 적 정보가 세션에 무한정
+    # 눌어붙지 않도록, 적 미언급 턴이 연속되면 카운트해 일정 턴 후 자동으로 비운다.
     mentioned_heroes_in_message_early = set(find_all_heroes(effective_message))
     enemy_mentioned_early = bool(
         mentioned_heroes_in_message_early & set(context.get("enemy_team", []))
@@ -1602,15 +1597,14 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
             )
             context = {
                 k: v for k, v in context.items()
-                if k not in ("target_enemy", "enemy_team", "high_threat_enemy")
+                if k not in ("target_enemy", "enemy_team", "high_threat_enemy", "ally_team")
             }
             no_enemy_turn_count = 0
     else:
         no_enemy_turn_count = 0
 
-    # ── 이번 메시지에 적 영웅 이름이 실제로 등장했는지 판단 ──
-    # (LLM 결과는 이미 llm_parse_context_node에서 원문 검증을 거쳤으므로 신뢰 가능.
-    #  여기서는 규칙 기반 추출 결과까지 포함해 "이번 턴 한정" 여부를 최종 결정한다.)
+    # LLM 결과는 llm_parse_context_node에서 이미 원문 검증을 거쳤으므로, 여기서는
+    # 규칙 기반 추출까지 포함해 "이번 턴 한정" 여부를 최종 결정한다.
     mentioned_heroes_in_message = set(find_all_heroes(effective_message))
     rule_based_enemy_team = extract_enemy_team(effective_message)
 
@@ -1620,43 +1614,50 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         or (context.get("enemy_team", []) if not context_was_reset else [])
     )
 
-    # 아군 조합("우리팀은 A B C D")은 상대 조합과 달리 매 판 새로 짜이는 정보라
-    # 세션에 이어붙이지 않고, 이번 턴에 실제로 언급된 경우에만 사용한다.
+    # 아군 조합("우리팀은 A B C D")은 이번 턴에 실제로 언급됐는지(ally_team_this_turn)와
+    # 세션에 남아있는 값(대화가 이어지는 동안의 지속 정보)을 구분한다.
+    # is_team_comp_question(아래)처럼 "이번 메시지가 조합 제시 그 자체인지" 판단할
+    # 때는 반드시 this_turn 값만 써야 한다 — 그렇지 않으면 세션에 남은 값 때문에
+    # "아나 견제는 어떻게 할까?" 같은 후속 질문까지 매번 composition으로 오분류된다.
+    # 반면 team_comp_inferred_role(남은 역할 추론)이나 답변 프롬프트의 "아군 조합"
+    # 표시는 세션 값을 이어받아야 한다 — 그렇지 않으면 방금 알려준 아군 조합을
+    # 후속 질문에서 통째로 잊어버리는 문제가 생긴다.
     llm_ally_team = state.get("llm_ally_team")
-    rule_based_ally_team = extract_ally_team(effective_message)
-    ally_team = llm_ally_team or rule_based_ally_team or []
+    # "우리팀은 A B C" 같은 명시적 나열이 최우선이고, 없으면 시너지 질문("X랑
+    # 조합 어때?")에 언급된 영웅들, 그마저 없으면 동료 불만 표현("X가 힐을 안
+    # 한다")에 언급된 영웅 하나를 아군으로 본다.
+    effective_message_complaint_hero = find_ally_complaint_hero(effective_message)
+    rule_based_ally_team = (
+        extract_ally_team(effective_message)
+        or find_synergy_ally_heroes(effective_message)
+        or ([effective_message_complaint_hero] if effective_message_complaint_hero else [])
+    )
+    ally_team_this_turn = llm_ally_team or rule_based_ally_team or []
+    ally_team = ally_team_this_turn or (context.get("ally_team", []) if not context_was_reset else [])
 
-    # 아군 인원을 2명 이상 직접 나열한 질문은 "지금 조합에서 어떤 영웅을 고를지"를
-    # 묻는 팀 조합 분석 질문으로 본다. 표준 구성(탱1/딜2/힐2) 기준으로 이미 채워진
-    # 인원의 역할을 보고 남은 자리가 정확히 한 역할일 때만 그 역할을 확정한다.
-    #
-    # 단, 이번 턴에 사용자가 이미 자기 영웅을 직접 선언했다면(예: "나는
-    # 파라인데 ... 우리팀은 윈스턴, 솜브라, 루시우, 브리기테야") 이건 "아직
-    # 영웅을 못 골라서 추천이 필요한" 조합 질문이 아니다 — 이미 골랐다.
-    # 이 경우를 걸러내지 않으면, 스탯 피드백처럼 전혀 다른 질문에도 아군 인원이
-    # 4명 나열됐다는 이유만으로 intent가 "composition"으로 강제 전환되어
-    # 엉뚱하게 추천 카드가 나가는 문제가 생긴다.
-    is_team_comp_question = len(ally_team) >= 2 and not current_hero_explicit_this_turn
+    # 아군을 2명 이상 나열하면 "조합에서 어떤 영웅을 고를지" 묻는 질문으로 본다.
+    # 단, 이번 턴에 이미 자기 영웅을 선언했다면 이미 영웅을 골랐으므로 이 질문이
+    # 아니다 — 아니면 스탯 피드백 같은 질문도 아군 나열만으로 composition으로
+    # 잘못 전환된다.
+    is_team_comp_question = len(ally_team_this_turn) >= 2 and not current_hero_explicit_this_turn
+    # 표준 구성(탱1/딜2/힐2) 기준 남은 자리가 정확히 한 역할일 때만 확정한다.
+    # is_team_comp_question 여부와 무관하게, 세션에 아군 조합이 남아있다면 후속
+    # 질문에서도 계속 역할을 추론해 불필요한 재확인을 피한다.
     team_comp_inferred_role = (
-        infer_missing_role_from_team_comp(ally_team) if is_team_comp_question else None
+        infer_missing_role_from_team_comp(ally_team) if len(ally_team) >= 2 else None
     )
     if is_team_comp_question:
-        # 아군 조합이 실제로 나열된 것은 LLM의 intent 분류보다 신뢰도 높은 구조적
-        # 신호이므로, 그 결과와 무관하게 "composition"으로 확정한다.
+        # 아군 조합 나열은 LLM의 intent 분류보다 신뢰도 높은 구조적 신호이므로 그대로 확정한다.
         intent = "composition"
 
     context_for_enemy = {**context, "current_hero": current_hero}
     rule_based_target_enemy = infer_target_enemy(effective_message, context_for_enemy, intent)
     target_enemy = llm_target_enemy or rule_based_target_enemy
 
-    # 한 영웅이 이번 턴에 동시에 "내가 고르는 영웅"이자 "카운터해야 할 상대"일
-    # 수는 없다 — 이는 자기모순이다. "트레이서를 고르면 우리팀 딜이 잘
-    # 나올까?"처럼 사용자가 자기 후보로 언급한 영웅을, LLM이 애매한 문장
-    # 구조 때문에 target_enemy로 잘못 판단하는 경우가 있었다(예: current_hero는
-    # null로 판단했지만 target_enemy만 그 영웅으로 채워버림 — current_hero가
-    # 비어 있어서 위 CURRENT HERO ENEMY GUARD로도 못 잡는 케이스). target_enemy가
-    # current_hero와 같거나, 이번 메시지에서 자기 영웅 선언 패턴으로 직접
-    # 인식되면(hero_mentioned_as_current_hero) 무조건 버린다.
+    # 한 영웅이 동시에 "내가 고르는 영웅"이자 "카운터해야 할 상대"일 수는 없다.
+    # LLM이 current_hero는 null로 두고 target_enemy만 그 영웅으로 잘못 채우는
+    # 경우(위 CURRENT HERO ENEMY GUARD로는 못 잡음)를 막기 위해, target_enemy가
+    # current_hero와 같거나 자기 영웅 선언 패턴으로 직접 인식되면 무조건 버린다.
     if target_enemy and (
         normalize_hero_name(target_enemy) == current_hero
         or hero_mentioned_as_current_hero(target_enemy, effective_message)
@@ -1684,15 +1685,12 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         and normalize_hero_name(enemy_focus_hero) == normalize_hero_name(target_enemy)
     )
 
-    # 사용자가 영웅 이름 대신 "상대 힐러부터 처리하려고"처럼 역할로만 카운터
-    # 우선순위를 좁히는 경우도 있다. 이때는 그 역할이 실제로 어떤 영웅인지 몰라도
-    # 상대 조합에 있는 다른 영웅들을 같이 언급하면 안 되므로 별도로 표시해둔다.
+    # "상대 힐러부터 처리"처럼 역할로만 좁히는 경우, 그 역할 외 다른 상대는
+    # 언급하지 않아야 하므로 별도로 표시해둔다.
     enemy_role_focus = find_enemy_role_focus(effective_message)
 
-    # 이번 턴에 실제로 메시지에 등장한 적 이름이 있는지 확인.
-    # llm_target_enemy/llm_enemy_team은 이미 원문 검증됨. rule_based 값도 메시지에서 직접
-    # 추출된 것이므로 신뢰 가능. 반면 컨텍스트에서 그대로 이어받은 값(이전 대화 잔존)은
-    # mentioned_heroes_in_message와 교집합이 없으면 "이번 턴 언급 아님"으로 처리한다.
+    # llm_target_enemy/llm_enemy_team/rule_based 값은 이미 원문 검증됐으므로 신뢰
+    # 가능하다. 컨텍스트에서 이어받은 값은 이번 메시지에 없으면 "언급 아님"으로 처리한다.
     enemy_named_this_turn = bool(
         llm_target_enemy
         or llm_enemy_team
@@ -1710,14 +1708,9 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
             intent = "counter"
 
     previous_target_enemy_for_role = normalize_hero_name(context.get("target_enemy"))
-    # current_hero_explicit_this_turn은 위(ENEMY GUARD 직후)에서 이미 계산해뒀다 —
-    # current_hero는 그 이후로 바뀌지 않으므로 여기서 다시 계산할 필요가 없다.
-    # 아래 두 가드 중 하나라도 current_hero를 비우면, 그 사실을 세션에도 반영해야
-    # 한다. 그렇지 않으면 세션에 남아있는 예전 current_hero가 사라지지 않고,
-    # intent가 performance_improve/swap일 때 곧바로 다시 끌어와지거나(아래
-    # 폴백 로직 참고), 이번엔 같은 상대가 그대로 유지된다는 이유로(target_enemy가
-    # "새 상대"가 아니게 되어) 다음 턴에 새 상대 가드가 재작동하지 않아 그대로
-    # 되살아나는 문제가 생긴다.
+    # 아래 두 가드 중 하나라도 current_hero를 비우면 세션에도 반영해야 한다 —
+    # 안 그러면 예전 값이 performance_improve/swap 폴백에서 되살아나거나, 다음
+    # 턴에 새 상대 가드가 재작동하지 않아 그대로 유지된다.
     current_hero_cleared_this_turn = False
     if explicit_role_filter and current_hero and not current_hero_explicit_this_turn:
         logger.info(
@@ -1752,12 +1745,8 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         current_hero_uncertain = False
         current_hero_cleared_this_turn = True
 
-    # 팀 조합 분석 질문("상대팀은 A~E, 우리팀은 C E F G")은 상대/아군 양쪽에 걸쳐
-    # 여러 영웅 이름이 한 문장에 나열된다. infer_current_hero의 intent 기반 폴백
-    # ("stay/performance_improve/swap/map_strategy면 메시지에 등장한 첫 영웅을
-    # current_hero로 본다")은 원래 "그 영웅 하나만 언급된" 문장을 염두에 둔 것이라,
-    # 이런 나열형 문장에서는 사용자가 아직 고르지 않은 아군/적 영웅을 자기 영웅으로
-    # 잘못 집어가 버린다. 자기 선언("나는 트레이서인데")이 아니라면 비운다.
+    # 팀 조합 나열 문장에서는 infer_current_hero의 "메시지의 첫 영웅" 폴백이
+    # 아직 안 고른 아군/적 영웅을 자기 영웅으로 잘못 집어간다. 자기 선언이 아니면 비운다.
     if is_team_comp_question and current_hero and not current_hero_explicit_this_turn:
         logger.info(
             "[TEAM COMP QUESTION CLEARS UNCONFIRMED HERO] 아군 조합을 나열한 질문에서 "
@@ -1771,16 +1760,10 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
     current_hero_role = llm_hero_role or get_hero_role(current_hero)
 
-    # effective_role_filter 결정 우선순위:
-    # 1순위: 이번 메시지에서 사용자가 명시적으로 요청한 필터(explicit_role_filter) —
-    #        예: "탱커로 추천해줘" 같은 직접적인 요청
-    # 2순위: current_hero_role — 실제로 지금 플레이 중인 영웅의 역할. 가장 신뢰도 높음.
-    # 3순위: team_comp_inferred_role — 아직 영웅을 고르지 않았지만, 이미 정해진
-    #        아군 조합으로 보아 남은 자리(=사용자 역할)가 정확히 하나로 확정되는 경우.
-    # 4순위: 세션에 남아있는 이전 role_filter — 아무 것도 없을 때만 최후 수단으로 사용.
-    #        (이 값을 2순위보다 위에 두면, 예전에 명시했던 역할 필터 잔존값이
-    #         계속 세션에 남아 정작 지금 플레이 중인 영웅의 역할과 무관하게 답변
-    #         허용 목록을 고정시켜버리는 문제가 생긴다)
+    # effective_role_filter 우선순위: 1) 이번 턴 명시 필터 2) current_hero_role(가장
+    # 신뢰도 높음) 3) team_comp_inferred_role(미확정이지만 아군 조합으로 역할이 하나로
+    # 확정되는 경우) 4) 세션 잔존값(최후 수단). 4번을 2번보다 위에 두면 예전 역할
+    # 필터가 지금 영웅과 무관하게 답변 허용 목록을 고정시켜버린다.
     if explicit_role_filter:
         effective_role_filter = explicit_role_filter
     elif current_hero_role:
@@ -1789,15 +1772,6 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         effective_role_filter = team_comp_inferred_role
     else:
         effective_role_filter = role_filter
-
-    # current_hero_cleared_this_turn(바로 위 가드들)이 이번 턴에 현재 영웅을
-    # 모른다고 이미 판단했다면, 여기서 세션의 예전 값을 곧바로 다시 끌어와
-    # 그 판단을 무효화하면 안 된다.
-    if intent == "performance_improve" and not current_hero and not explicit_role_filter and not current_hero_cleared_this_turn:
-        current_hero = context.get("current_hero")
-    if intent == "swap" and not current_hero and not explicit_role_filter and not current_hero_cleared_this_turn:
-        current_hero = context.get("current_hero")
-
 
     if intent in ["counter", "stay", "performance_improve"] and not target_enemy:
         previous_target_enemy = context.get("target_enemy")
@@ -1813,6 +1787,31 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 # 이번 턴에 이름을 다시 말하지 않았지만,
                 # 직전 질문의 상대를 이어받아 운영법을 설명해야 하는 흐름이다.
                 enemy_named_this_turn = True
+
+    # focus_heroes: 이번 질문/답변이 중심적으로 다루는 주제 영웅 목록.
+    # current_hero(실제 플레이 영웅)와 달리, "솔저는 어떻게 플레이해?"처럼
+    # 주제로만 언급된 영웅이나 "겐지 카운터 알려줘"의 겐지처럼 상대로 언급된
+    # 영웅도 포함한다 — 후속 생략형 질문("E 스킬은 어디에 써?")이 어떤 영웅을
+    # 가리키는지는 current_hero가 아니라 focus_heroes로 이어받는다.
+    needs_focus_hero_clarify = False
+    previous_focus_heroes = context.get("focus_heroes") or []
+    if focus_hero_reply_consumed:
+        # "어떤 영웅 기준으로?" 되묻기에 사용자가 하나를 골랐다. 원래 질문
+        # (effective_message)에는 영웅 이름이 없으므로 고른 영웅을 그대로 쓴다.
+        focus_heroes = [focus_hero_pick]
+    elif current_hero:
+        # 자기 영웅을 선언한 경우, 함께 언급된 다른 영웅(상대 등)과 섞이지
+        # 않도록 그 영웅만 담는다 — "아나인데 리퍼가 괴롭혀" → ["아나"]만.
+        focus_heroes = [current_hero]
+    else:
+        focus_heroes = find_all_heroes(effective_message)
+        if not focus_heroes and is_ellipsis_followup(effective_message):
+            if len(previous_focus_heroes) == 1:
+                focus_heroes = list(previous_focus_heroes)
+            else:
+                # 이전 주제 영웅이 0명이거나 2명 이상이면 임의로 하나를 골라
+                # 이어가지 않고 어떤 영웅 기준인지 되묻는다.
+                needs_focus_hero_clarify = True
 
     game_state = {
         "raw_user_message": message,
@@ -1844,7 +1843,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "last_message_ts": now_ts,
         "answer_style": answer_style,
     }
-    if awaiting_role_filter_reply:
+    if awaiting_role_filter_reply or awaiting_focus_hero_reply:
         context_patch["pending_question"] = None
         context_patch["pending_intent"] = None
 
@@ -1853,10 +1852,8 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     if current_hero:
         context_patch["current_hero"] = current_hero
     elif current_hero_cleared_this_turn:
-        # 이번 턴에 명시적으로 "현재 영웅을 모른다"고 판단했다면, 세션에 남아있는
-        # 예전 값도 함께 비워야 한다. 그렇지 않으면 같은 상대를 다시 물어보는
-        # 다음 턴에서(더 이상 "새 상대"가 아니라는 이유로 위 가드가 재작동하지
-        # 않아) 이 예전 값이 그대로 되살아난다.
+        # 세션의 예전 값도 함께 비워야 한다 — 안 그러면 같은 상대를 다시 물을 때
+        # "새 상대"가 아니라는 이유로 가드가 재작동하지 않아 예전 값이 되살아난다.
         context_patch["current_hero"] = None
     if current_hero_role:
         context_patch["current_hero_role"] = current_hero_role
@@ -1868,6 +1865,8 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         context_patch["side"] = side
     if enemy_team:
         context_patch["enemy_team"] = enemy_team
+    if ally_team:
+        context_patch["ally_team"] = ally_team
     if high_threat_enemy:
         context_patch["high_threat_enemy"] = high_threat_enemy
     my_stats_now = state.get("my_stats") or {}
@@ -1890,11 +1889,8 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
             current_hero,
         )
 
-    # "상성 카드"(상대하기 어려운/쉬운 영웅 두 목록)의 분석 대상. 이 카드는 오직
-    # "특정 영웅의 대표 카운터/상성 목록"을 묻는 순수 counter 질문에만 쓴다 —
-    # 이미 플레이 중인 영웅이 있는 상태에서 상대를 어떻게 다룰지 묻는 질문(예:
-    # "키리코인데 상대 트레이서 어떻게 해?")은 "지금 영웅으로 어떻게 운영할지"를
-    # 묻는 stay 질문이지 "다른 영웅을 추천해달라"는 게 아니므로 카드 대상이 아니다.
+    # 상성 카드는 오직 "영웅의 대표 카운터/상성 목록"을 묻는 순수 counter 질문에만
+    # 쓴다 — 이미 영웅이 있는 상태의 대처법 질문(stay)은 카드 대상이 아니다.
     matchup_subject: Optional[str] = None
     matchup_subject_is_enemy = False
     if (
@@ -1903,8 +1899,8 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         and target_enemy
         and not current_hero
     ):
-        # 아직 플레이 중인 영웅이 없는 순수 픽 추천 질문("겐지 카운터 알려줘",
-        # "겐지가 상대하기 어려운 영웅 알려줘")만 상대 영웅을 대상으로 카드를 만든다.
+        # 아직 영웅이 없는 순수 픽 추천 질문만 상대 영웅을 카드 대상으로 삼는다.
+        # 예: "겐지 카운터 알려줘"
         matchup_subject = target_enemy
         matchup_subject_is_enemy = True
 
@@ -1942,6 +1938,9 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "recommend_card_mode": recommend_card_mode,
         "ally_team": ally_team,
         "is_team_comp_question": is_team_comp_question,
+        "focus_heroes": focus_heroes,
+        "needs_focus_hero_clarify": needs_focus_hero_clarify,
+        "previous_focus_heroes": previous_focus_heroes,
         # 직전 턴의 사용자 메시지(있다면). 이번 질문이 짧고 맥락 의존적인 후속
         # 질문일 때, 답변 생성 단계가 원래 상황(왜 교체를 고민하게 됐는지)을
         # 잃지 않도록 전달한다.
@@ -1965,18 +1964,11 @@ def clarify_role_filter_node(state: ChatbotGraphState) -> ChatbotGraphState:
     target_enemy = state.get("target_enemy")
     message = state.get("message", "")
 
-    # target_enemy는 "카운터 대상 1명"만 담는 필드라, 여러 상대를 동시에 언급한
-    # 질문에서는 이걸로만 답하면 사용자가 언급한 영웅 중 일부가 누락된 것처럼
-    # 보인다. enemy_team(상대 조합 전체)이 있으면 그쪽을 우선 사용해 사용자가
-    # 말한 영웅을 전부 언급한다.
-    #
-    # 다만 여러 상대를 나열해놓고도 그중 하나만 콕 집어 카운터하겠다고 명시했다면
-    # (target_enemy_narrowed=True), 나머지는 언급하지 말고 그 하나만 말해야 한다.
-    #
-    # 영웅 이름이 아니라 역할로만 좁힌 경우(enemy_role_focus)도 있다. 이때는
-    # 어떤 영웅인지 특정할 수 없으므로 target_enemy/enemy_team에 잡힌 다른
-    # 상대(역할과 무관하게 원문에 등장했던 영웅들)를 언급하면 안 되고, 사용자가
-    # 말한 역할 그대로("상대 힐러" 등)를 카운터 대상으로 삼아야 한다.
+    # 카운터 대상 표시 우선순위: 1) 역할로만 좁힌 경우(enemy_role_focus) —
+    # 영웅을 특정할 수 없으므로 "상대 힐러" 등 역할 그대로 표시. 2) 여러 상대 중
+    # 하나로 좁힌 경우(target_enemy_narrowed) — 그 하나만 표시. 3) 그 외에는
+    # enemy_team(상대 조합 전체)을 표시해, target_enemy(카운터 대상 1명) 필드만
+    # 쓰면 나머지 언급 영웅이 누락된 것처럼 보이는 문제를 피한다.
     enemy_team = state.get("enemy_team") or []
     target_enemy_narrowed = state.get("target_enemy_narrowed", False)
     enemy_role_focus = state.get("enemy_role_focus")
@@ -1989,10 +1981,20 @@ def clarify_role_filter_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
     if enemy_names:
         enemy_label = ", ".join(enemy_names)
-        answer = (
-            f"{enemy_label}{josa_eul_reul(enemy_names[-1])} 카운터하는 영웅을 어떤 역할 기준으로 볼까요?\n\n"
-            "원하는 역할을 선택하면 그 역할의 영웅만 골라서 추천해드릴게요."
-        )
+        if state.get("intent") == "counter":
+            answer = (
+                f"{enemy_label}{josa_eul_reul(enemy_names[-1])} 카운터하는 영웅을 어떤 역할 기준으로 볼까요?\n\n"
+                "원하는 역할을 선택하면 그 역할의 영웅만 골라서 추천해드릴게요."
+            )
+        else:
+            # intent가 counter가 아니면(예: performance_improve/general) 세션에
+            # 남아있는 상대 조합이 있어도 "카운터하는 영웅을"이라고 단정해서 묻지
+            # 않는다 — "우리 조합 운영법 알려줘" 같은 질문에 "OO를 카운터하는
+            # 영웅을 어떤 역할로 볼까요?"라고 되묻는 것은 질문 취지와 맞지 않는다.
+            answer = (
+                "지금 어떤 역할(탱커/딜러/힐러)로 플레이 중이신가요?\n\n"
+                f"상대 조합({enemy_label})을 고려해서 답변드릴게요."
+            )
     else:
         # 상대 영웅을 특정하지 않은 일반적인 대처법 질문(예: "돌진 때문에 계속
         # 죽어, 어떻게 해야해?")도 current_hero를 모르면 역할부터 물어야 한다.
@@ -2030,22 +2032,55 @@ def clarify_role_filter_node(state: ChatbotGraphState) -> ChatbotGraphState:
     }
 
 
+def clarify_focus_hero_node(state: ChatbotGraphState) -> ChatbotGraphState:
+    """생략형 후속 질문("어떻게 플레이해?", "E 스킬은 어디에 써?")인데 이전
+    focus_heroes가 0명이거나 2명 이상이라 어떤 영웅 기준인지 확정할 수 없을 때,
+    임의로 하나를 고르지 않고 사용자에게 되묻는다."""
+    message = state.get("message", "")
+    candidates = state.get("previous_focus_heroes") or []
+
+    if len(candidates) >= 2:
+        candidate_label = ", ".join(candidates)
+        answer = (
+            f"{candidate_label} 중 어떤 영웅 기준으로 답변드릴까요?\n\n"
+            "원하는 영웅을 선택해주세요."
+        )
+        choice_buttons = [
+            {"label": hero, "value": hero, "type": "focus_hero"} for hero in candidates
+        ]
+    else:
+        answer = "어떤 영웅에 대해 궁금하신가요? 영웅 이름을 알려주시면 그 기준으로 답변드릴게요."
+        choice_buttons = []
+
+    context_patch = {
+        **state.get("context_patch", {}),
+        "pending_question": message,
+        "pending_intent": "clarify_focus_hero",
+    }
+
+    return {
+        "answer": answer,
+        "choice_buttons": choice_buttons,
+        "context_patch": context_patch,
+        "result": {
+            "answer": answer,
+            "type": "focus_hero",
+            "choice_buttons": choice_buttons,
+            "suggested_questions": [],
+            "context_patch": context_patch,
+        },
+    }
+
+
 # ============================================================
 # 고정 버튼(카운터/조합 추천/맵 운영/스탯 피드백/영웅 유지) 캐시 답변
 # ============================================================
-# chat.html 웰컴 화면의 5개 예시 버튼(.sample-chips)은 각각 정해진 질문 하나를
-# 입력창에 채운다. 이 버튼 질문, 그리고 같은 대상(영웅/맵/스탯/조합)을 가리키는
-# 비슷한 표현(예: "겐지 카운터 알려줘"/"겐지 카운터"/"겐지 잡는 영웅"/"겐지
-# 상대하기 좋은 영웅")은 그래프 전체(검색 + LLM 호출 여러 번)를 매번 실행하지
-# 않고 미리 써둔 답을 그대로 돌려준다 — 버튼을 누른 직후 로딩 없이 바로 답을
-# 보여주기 위해서다. 문장을 정확히 일치시키는 대신, 이 5개가 다루는 "고정된
-# 대상"이 메시지에 들어있는지만 판단한다. 대상이 다르면(예: "리퍼 카운터
-# 알려줘") 캐시를 쓰지 않고 평소대로 run_chatbot_graph를 실행한다.
+# 웰컴 화면 5개 예시 버튼과 그 비슷한 표현은 그래프(검색+LLM) 실행 없이 미리
+# 준비된 답을 즉시 돌려준다. 정확한 문장 일치 대신 각 버튼이 다루는 고정된
+# 대상이 메시지에 있는지만 판단하며, 대상이 다르면 평소처럼 그래프를 실행한다.
 #
-# 카운터(겐지)만 유일하게 역할(전체/탱커/딜러/힐러)을 먼저 물어야 한다. 캐시
-# 데이터는 "전체" 역할 답변만 준비돼 있으므로, 탱커/딜러/힐러를 고르면 원래
-# 질문 그대로 실제 그래프를 태워 정상적으로(LLM 호출) 답한다 — try_canned_shortcut의
-# resume_message가 이 경우를 위한 것이다.
+# 카운터(겐지)만 역할을 먼저 물어야 한다. 캐시는 "전체" 역할 답변만 있어, 탱커/
+# 딜러/힐러를 고르면 원래 질문 그대로 그래프를 태운다(resume_message).
 
 CANNED_COUNTER_HERO = "겐지"
 CANNED_COUNTER_TRIGGER_WORDS = [
@@ -2070,158 +2105,192 @@ CANNED_STAY_ENEMY = "아나"
 
 CANNED_GENJI_INTRO = {
     "detailed": (
-        "겐지는 기동성을 활용해 적의 후방을 교란하는 영웅이지만, 튕겨내기로 막을 "
-        "수 없는 광선 공격이나 군중 제어기에 매우 취약합니다. 따라서 적의 공격을 "
-        "무력화하거나 겐지의 진입을 강제로 차단할 수 있는 영웅들이 주요 카운터로 "
-        "꼽힙니다."
+        "겐지는 높은 기동성과 튕겨내기를 활용해 적의 후방을 교란하는 영웅입니다. "
+        "하지만 광선 계열 공격이나 군중 제어기에는 대응이 어려워 이를 보유한 "
+        "영웅들에게 취약한 모습을 보입니다."
     ),
     "simple": (
-        "겐지는 광선 공격·군중 제어기에 약함\n"
-        "진입을 강제로 막을 수 있는 영웅이 주요 카운터"
+        "겐지는 기동성과 튕겨내기를 활용해 적 후방을 교란하는 영웅입니다. "
+        "하지만 광선 공격이나 군중 제어기에 취약하므로 이를 보유한 영웅들을 "
+        "상대할 때 주의가 필요합니다."
     ),
 }
 CANNED_GENJI_HARD_HEROES = [
-    {"hero": "로드호그", "note": "카운터 강도 매우 높음"},
-    {"hero": "윈스턴", "note": "카운터 강도 매우 높음"},
-    {"hero": "자리야", "note": "카운터 강도 매우 높음"},
-    
+    {"hero": "윈스턴", "note": "카운터 강도 높음"},
     {"hero": "시메트라", "note": "카운터 강도 높음"},
-    {"hero": "제트팩 캣", "note": "카운터 강도 높음"},
-    {"hero": "캐서디", "note": "카운터 강도 중간"},
+    {"hero": "브리기테", "note": "카운터 강도 중간"},
+    {"hero": "모이라", "note": "카운터 강도 중간"},
 ]
 CANNED_GENJI_EASY_HEROES = [
-    {"hero": "D.Va", "note": "디바의 모든 공격을 튕겨낼 수 있는 스킬 및 궁극기 게이지 공급원"},
-    {"hero": "바스티온", "note": "디바의 모든 공격을 튕겨낼 수 있는 스킬 및 궁극기 게이지 공급원"},
-    {"hero": "위도우메이커", "note": "기동성으로 접근해 처치 용이"},
-    {"hero": "메이", "note": "근접전에서 압박하기 쉬움"},
-    {"hero": "아나", "note": "생존기 빠지면 진입 성공 시 유리"},
-    {"hero": "브리기테", "note": "거리 조절 시 압박 가능"},
+    {"hero": "위도우메이커", "note": "접근 시 암살 용이"},
+    {"hero": "아나", "note": "생존기 빠지면 압박 가능"},
+    {"hero": "젠야타", "note": "기동성 차이로 제압 가능"},
+    {"hero": "한조", "note": "근접전에서 우위 점함"},
 ]
 CANNED_GENJI_SUGGESTED_QUESTIONS = [
     "겐지 카운터 영웅 추천해줘",
     "겐지 상대할 때 팁 알려줘",
-    "겐지 튕겨내기 대처법은?",
+    "상대 겐지 대처법 더 자세히",
 ]
 
 CANNED_COMPOSITION_INTRO = {
     "detailed": (
-        "상대 팀의 파라와 아나는 우리 팀 라인하르트에게 큰 위협이 됩니다.\n"
-        "공중 견제와 아군 케어를 동시에 수행하며 조합의 안정성을 높여줄 지원가를 "
-        "추천해 드립니다."
+        "상대팀의 파라와 아나를 견제하면서 아군 라인하르트의 전진을 보조할 수 "
+        "있는 지원가 영웅들을 추천합니다.\n"
+        "안정적인 유지력과 원거리 대응 능력을 갖춘 영웅들로 조합의 균형을 "
+        "맞춰보세요."
     ),
     "simple": (
-        "파라·아나가 라인하르트에게 위협적\n"
-        "공중 견제와 치유를 겸할 지원가 추천"
+        "상대 파라의 공중 견제와 아나의 힐밴을 고려하여 아군을 보호하고 "
+        "안정적인 치유를 제공할 영웅을 추천합니다."
     ),
 }
 CANNED_COMPOSITION_HEROES = [
-    {"hero": "바티스트", "note": "파라 견제와 광역 치유에 능함"},
-    {"hero": "키리코", "note": "정화의 방울로 아나 힐밴 무효화"},
-    {"hero": "일리아리", "note": "태양 포탑으로 파라 압박 가능"},
-    {"hero": "젠야타", "note": "부조화로 오리사 처치 속도 향상"},
+    {"hero": "바티스트", "note": "히트스캔으로 파라 견제 및 불사 장치로 생존 보조"},
+    {"hero": "아나", "note": "원거리 힐과 생체 수류탄으로 상대 진영 압박 가능"},
+    {"hero": "키리코", "note": "정화의 방울로 아군 보호 및 쿠나이로 파라 견제"},
+    {"hero": "일리아리", "note": "히트스캔 공격으로 공중의 파라를 효과적으로 견제"},
 ]
 CANNED_COMPOSITION_SUGGESTED_QUESTIONS = [
-    "추천하는 지원가 영웅은?",
-    "오리사 상대하기 좋은 딜러는?",
-    "파라 대응법을 더 자세히 알려줘",
+    "파라 잡기 좋은 영웅 추천해줘",
+    "아나 견제는 어떻게 할까?",
+    "우리 조합 운영법 알려줘",
 ]
 
 CANNED_MAP_ANSWER = {
     "detailed": (
-        "왕의 길 수비는 1포인트 진입로를 좁게 막아 상대의 초반 교전 이득을 "
-        "최소화하는 것이 핵심입니다.\n\n"
-        "1포인트는 정문과 측면 골목으로 나뉘어 있어, 탱커가 정문 시야를 막고 "
-        "딜러가 측면 골목을 견제하는 형태로 자리를 잡아야 합니다. 1포인트가 "
-        "뚫리면 2포인트의 좁은 길목에서 다시 자리를 잡을 수 있으니, 무리하게 "
-        "1포인트를 사수하려다 전멸하지 않는 것이 중요합니다. 궁극기는 상대가 "
-        "좁은 골목에 뭉치는 타이밍(포인트 진입 직전)에 맞춰 광역 궁극기로 "
-        "끊어내는 것이 효율적입니다.\n\n"
-        "바로 적용할 것 3가지:\n"
-        "1. 1포인트 정문과 측면 골목을 동시에 볼 수 있는 위치를 선점한다.\n"
-        "2. 무리한 사수보다 2포인트 좁은 길목에서 다시 자리를 잡는 것을 "
-        "우선한다.\n"
-        "3. 상대가 좁은 골목에 뭉치는 타이밍에 광역 궁극기를 맞춘다."
+        "왕의 길 수비는 좁은 길목과 샛길을 활용해 적의 진입을 차단하고 고지대를 "
+        "선점하는 것이 핵심입니다. 현재 역할 안에서 각 역할별로 추천하는 영웅과 "
+        "운영법은 다음과 같습니다.\n\n"
+        "1. 탱커: 레킹볼을 추천합니다. 좁은 길목과 샛길이 많아 갈고리 고정(우클)을 "
+        "활용해 적의 뒷라인을 흔들고, 지뢰밭(q)으로 좁은 통로를 봉쇄하여 적의 진입을 "
+        "강제로 지연시킬 수 있습니다.\n"
+        "2. 딜러: 정크랫을 추천합니다. 화물 경로가 좁아 유탄과 충격 지뢰(shift)를 "
+        "활용한 고지대 점령이 매우 효과적입니다. 덫(shift)으로 샛길을 봉쇄하고 "
+        "유탄으로 입구에서 화력을 집중하십시오.\n"
+        "3. 힐러: 아나를 추천합니다. 맵이 직선형으로 길게 뻗어 있어 저격 모드(우클)를 "
+        "통해 안전한 거리에서 아군을 지원하기 좋습니다. 수면총(shift)과 생체 "
+        "수류탄(e)으로 진입하는 적을 무력화하십시오.\n\n"
+        "바로 적용할 것 3가지\n"
+        "1. 정크랫을 선택했다면 좁은 골목과 샛길에 덫(shift)을 설치해 적의 우회 "
+        "경로를 차단하십시오.\n"
+        "2. 레킹볼을 선택했다면 갈고리 고정(우클)으로 고지대를 빠르게 선점하여 "
+        "적의 시선을 분산시키십시오.\n"
+        "3. 아나를 선택했다면 직선 지형을 활용해 아군 뒤편 고지대에서 생체 "
+        "소총(좌클)으로 힐과 견제를 동시에 수행하십시오."
     ),
     "simple": (
-        "1포인트 정문·측면 골목 동시에 보는 위치 선점\n"
-        "무리한 사수보다 2포인트 좁은 길목에서 재정비\n"
-        "상대가 좁은 골목에 뭉칠 때 광역 궁 사용\n\n"
+        "왕의 길 수비는 좁은 길목과 고지대를 활용한 방어 전략이 핵심입니다.\n\n"
+        "추천 영웅: 정크랫, 시그마, 아나\n"
+        "- 정크랫: 좁은 골목과 샛길에 유탄과 덫을 배치해 진입로를 봉쇄하기 좋음\n"
+        "- 시그마: 실험용 방벽(우클릭)으로 좁은 입구의 포킹을 차단하고 키네틱 "
+        "손아귀(shift)로 화력을 흡수하기 좋음\n"
+        "- 아나: 직선형 지형에서 생체 소총(좌클릭)으로 후방 지원이 용이하며 나노 "
+        "강화제(q)로 아군 강화 가능\n\n"
         "바로 할 것 3가지\n"
-        "1. 정문·측면 시야 확보\n"
-        "2. 1포인트 무리하게 사수 안 함\n"
-        "3. 뭉치는 타이밍에 광역 궁 사용"
+        "1. 고지대를 선점하여 적의 진입 경로를 내려다보는 위치를 확보할 것\n"
+        "2. 좁은 길목에 광역 피해 스킬을 집중하여 적의 진입 속도를 늦출 것\n"
+        "3. 아군과 함께 리그룹하여 적의 기습적인 옆길 진입을 차단할 것"
     ),
 }
 CANNED_MAP_SUGGESTED_QUESTIONS = [
-    "왕의 길 공격 조합 추천해줘",
-    "왕의 길 2포인트 운영법은?",
-    "수비 궁극기 타이밍 알려줘",
+    "레킹볼 운영 팁 알려줘",
+    "다른 탱커 추천해줘",
+    "수비 시 좋은 자리 어디야?",
 ]
 
 CANNED_STAT_ANSWER = {
     "detailed": (
-        "킬 4에 데스 8은 딜량 6000에 비해 데스가 많아 딜러치고 생존력이 아쉬운 "
-        "수치입니다.\n\n"
-        "솔저76은 안정적인 딜을 넣을 수 있는 영웅이지만, 극딜 타이밍에 너무 "
-        "전진해서 죽는 경우가 많으면 데스가 쌓이기 쉽습니다. 아군 탱커 뒤에서 "
-        "사격하다가 원거리 딜을 넣고, 궁극기 택티컬 바이저(Q)는 반드시 아군과 "
-        "함께 있을 때만 사용해 혼자 이니시에이팅하는 상황을 피하는 것이 "
-        "중요합니다. 스프린트(Shift)를 아껴뒀다가 체력이 50% 이하로 떨어지고 "
-        "상대 궁이 예상되는 위험 신호가 오면 즉시 후퇴하는 습관을 들이면 데스를 "
-        "줄일 수 있습니다.\n\n"
+        "현재 킬 4, 데스 8, 딜량 6000이라는 스탯은 무리한 진입으로 인해 생존력이 "
+        "낮고, 교전 중 지속적인 화력을 투사하지 못하고 있음을 보여줍니다. 솔저: "
+        "76은 고지대와 측면에서 중거리 지속 화력을 유지하는 것이 핵심입니다. "
+        "데스가 많은 이유는 적의 시야에 너무 오래 노출되거나 생체장(e)을 적절한 "
+        "위치에 깔지 못했기 때문일 가능성이 큽니다. 지금보다 생존에 집중하며 "
+        "고지대를 선점하는 운영이 필요합니다.\n\n"
+        "운영 개선 방안:\n"
+        "1. 고지대와 측면 활용: 항상 지상보다는 고지대를 먼저 점령하여 적의 시야를 "
+        "분산시키고, 적의 지원가나 딜러를 우선적으로 압박하십시오.\n"
+        "2. 생체장(e)의 전략적 사용: 생체장(e)은 단순히 체력이 낮을 때 쓰는 것이 "
+        "아니라, 교전 시작 전 고지대 거점이나 엄폐물 뒤에 미리 설치하여 유지력을 "
+        "확보하는 용도로 사용하십시오.\n"
+        "3. 질주(shift)를 통한 위치 선정: 질주(shift)는 단순히 이동용이 아니라, "
+        "적의 공격을 피하거나 유리한 각도로 빠르게 재배치하는 용도로 활용하여 "
+        "생존율을 높이십시오.\n\n"
         "바로 적용할 것 3가지:\n"
-        "1. 탱커 뒤에서 사격하고 무리한 전진을 자제한다.\n"
-        "2. 택티컬 바이저(Q)는 아군과 함께 있을 때만 사용한다.\n"
-        "3. 체력 50% 이하에서는 스프린트(Shift)로 즉시 후퇴한다."
+        "1. 교전 시 항상 생체장(e)을 깔 수 있는 엄폐물 근처에서 싸우기.\n"
+        "2. 무리하게 적 본대로 들어가지 말고 고지대에서 중거리 사격 유지하기.\n"
+        "3. 데스가 8회나 발생했으므로, 교전 중 체력이 절반 이하로 떨어지면 즉시 "
+        "질주(shift)를 사용해 후퇴하고 재정비하기."
     ),
     "simple": (
-        "킬4/데스8은 딜량 6000 대비 데스 많음\n"
-        "탱커 뒤에서 사격, 무리한 전진 자제\n"
-        "택티컬 바이저(Q)는 아군과 함께 있을 때만 사용\n"
-        "체력 50% 이하는 스프린트(Shift)로 즉시 후퇴\n\n"
+        "현재 킬 4 데스 8은 생존력이 부족하고 교전 기여도가 낮음을 의미함. 딜량 "
+        "6000은 지속 화력은 있으나 결정타가 부족한 상태임.\n\n"
+        "고지대와 측면 중거리에서 지속 화력을 유지하며 적의 지원가와 딜러 헤드라인을 "
+        "압박할 것.\n"
+        "생체장(E)은 고지대 유지와 본대 버티기에 활용하고, 나선 로켓(우클)은 적의 "
+        "체력이 낮을 때 마무리 용도로 사용할 것.\n"
+        "질주(Shift)를 활용해 불리한 교전에서 빠르게 이탈하고, 고지대를 선점하여 "
+        "시야를 확보할 것.\n\n"
         "바로 할 것 3가지\n"
-        "1. 무리한 전진 자제\n"
-        "2. 바이저는 아군과 함께\n"
-        "3. 체력 낮으면 즉시 후퇴"
+        "1. 데스 수를 줄이기 위해 무리한 진입 대신 고지대 엄폐물 활용하기\n"
+        "2. 나선 로켓(우클)을 쿨마다 쓰지 말고 적 체력이 낮을 때 마무리로 사용하기\n"
+        "3. 생체장(E)을 아군과 함께 버티거나 고지대 유지용으로만 사용하기"
     ),
 }
 CANNED_STAT_SUGGESTED_QUESTIONS = [
-    "딜량 더 올리는 방법은?",
-    "데스 줄이는 법 알려줘",
-    "이 스탯이면 영웅 바꿔야 해?",
+    "생체장 활용법 알려줘",
+    "포지션 잡는 법 알려줘",
+    "어떻게 안 죽고 딜 넣지?",
 ]
 
 CANNED_STAY_ANSWER = {
     "detailed": (
-        "리퍼는 유지해도 됩니다. 아나의 수면총과 생체 소총 견제 범위만 피해서 "
-        "접근하면 리퍼가 유리한 근접전으로 끌고 갈 수 있습니다.\n\n"
-        "아나는 정면에서 수면총(Shift)으로 리퍼의 진입을 끊을 수 있으므로, "
-        "정면으로 바로 들어가기보다 벽이나 구조물을 낀 측면 경로로 우회해 "
-        "접근하는 것이 안전합니다. 유령 형태(Shift)로 아나의 견제 사거리를 "
-        "좁히며 접근한 뒤, 사거리 안에 들어오면 지옥의 산탄(좌클릭)으로 순식간에 "
-        "처치할 수 있습니다. 궁극기 죽음의 꽃(Q)은 아나가 수면총을 사용한 직후"
-        "(쿨타임 중)이거나 생체 소총 재장전 중인 타이밍에 맞춰 사용하면 무력화 "
-        "없이 확정 처치를 노릴 수 있습니다.\n\n"
+        "리퍼로 아나를 상대하는 것은 충분히 가능하며, 아나의 핵심 스킬을 무력화하는 "
+        "운영이 중요합니다. 아나는 수면총(shift)과 생체 수류탄(e)을 보유하고 있어 "
+        "리퍼에게 위협적이지만, 리퍼의 기동성과 무적기를 활용하면 충분히 제압할 수 "
+        "있습니다.\n\n"
+        "운영 팁:\n"
+        "1. 망령화(shift)를 진입용으로 낭비하지 말고, 아나의 수면총(shift)이나 생체 "
+        "수류탄(e)을 피하는 용도로 아껴두세요.\n"
+        "2. 그림자 밟기(e)는 아나의 시야가 닿지 않는 고지대나 우회로로 이동하여 "
+        "기습적인 근접 교전을 유도하는 데 사용하세요.\n"
+        "3. 아나가 생체 수류탄(e)을 자신에게 사용하게 유도한 뒤, 헬파이어 "
+        "샷건(좌클릭)으로 근접 폭딜을 넣으면 아나의 생존기를 강제로 뺄 수 "
+        "있습니다.\n"
+        "4. 아나의 수면총(shift)이 빠진 것을 확인한 후 죽음의 꽃(q)을 사용하면 "
+        "훨씬 안전하게 다수의 적을 처치할 수 있습니다.\n\n"
         "바로 적용할 것 3가지:\n"
-        "1. 정면 대신 벽·구조물을 낀 측면 경로로 접근한다.\n"
-        "2. 유령 형태(Shift)로 사거리를 좁히며 접근한다.\n"
-        "3. 아나의 수면총 쿨타임 타이밍에 죽음의 꽃(Q)을 사용한다."
+        "1. 아나의 수면총(shift)이 빠지기 전까지는 정면 진입을 자제하고 우회로를 "
+        "이용하세요.\n"
+        "2. 교전 중 아나가 생체 수류탄(e)을 던지는 모션을 취하면 즉시 "
+        "망령화(shift)를 사용하여 효과를 무효화하세요.\n"
+        "3. 아나에게 접근할 때는 항상 엄폐물을 끼고 이동하여 저격 각을 "
+        "최소화하세요."
     ),
     "simple": (
-        "아나 수면총(Shift)·생체 소총 사거리 피해 접근\n"
-        "정면 대신 벽 낀 측면 경로로 우회\n"
-        "유령 형태(Shift)로 거리 좁히기\n"
-        "수면총 쿨타임 타이밍에 죽음의 꽃(Q) 사용\n\n"
+        "아나의 수면총(Shift)과 생체 수류탄(E)을 망령화(Shift)로 회피하며 근접 "
+        "거리까지 접근하기.\n"
+        "그림자 밟기(E)는 아나의 시야가 닿지 않는 고지대나 우회로에서 사용하여 "
+        "기습 각을 확보하기.\n"
+        "아나가 생체 수류탄(E)을 자신에게 사용하거나 아군 탱커에게 던진 직후가 "
+        "진입 최적기.\n\n"
+        "운영 팁:\n"
+        "- 아나의 수면총(Shift)이 빠지기 전까지는 정면 진입을 자제하고 코너를 "
+        "활용해 압박하기.\n"
+        "- 망령화(Shift)는 진입기보다 아나의 수면총(Shift)이나 생체 수류탄(E)을 "
+        "무력화하는 탈출 및 생존기로 우선 사용하기.\n"
+        "- 아나가 후방 엄폐물 뒤에 있다면 그림자 밟기(E)로 거리를 좁혀 헬파이어 "
+        "샷건(좌클릭)의 근접 폭딜을 넣기.\n\n"
         "바로 할 것 3가지\n"
-        "1. 측면 경로로 접근\n"
-        "2. 유령 형태로 거리 좁히기\n"
-        "3. 수면총 쿨타임에 궁극기 사용"
+        "1. 아나의 수면총(Shift) 쿨타임 체크하기.\n"
+        "2. 망령화(Shift)를 아나의 스킬 대응용으로 아껴두기.\n"
+        "3. 우회로를 통해 아나의 후방 시야를 차단하며 접근하기."
     ),
 }
 CANNED_STAY_SUGGESTED_QUESTIONS = [
-    "리퍼 그림자 밟기 활용법은?",
-    "아나 나노 강화제 대처법은?",
-    "리퍼 다른 상대법도 알려줘",
+    "아나 수면총은 어떻게 피할까?",
+    "망령화는 언제 쓰는 게 좋아?",
+    "리퍼 운영 팁 더 알려줘",
 ]
 
 
@@ -2339,6 +2408,7 @@ def _build_canned_counter_genji_clarify(message: str, answer_style: str) -> Dict
     실제 clarify_role_filter_node를 그대로 재사용해 역할부터 물어본다."""
     clarify_state = {
         "message": message,
+        "intent": "counter",
         "target_enemy": CANNED_COUNTER_HERO,
         "enemy_team": [],
         "target_enemy_narrowed": False,
@@ -2369,6 +2439,7 @@ def _build_canned_counter_genji_card(message: str, answer_style: str) -> Dict[st
         "target_enemy": CANNED_COUNTER_HERO,
         "pending_canned_topic": None,
         "pending_canned_question": None,
+        "focus_heroes": [h["hero"] for h in CANNED_GENJI_HARD_HEROES],
     }
     matchup_card = {
         "subject": CANNED_COUNTER_HERO,
@@ -2394,6 +2465,7 @@ def _build_canned_composition(message: str, answer_style: str) -> Dict[str, Any]
     context_patch = {
         **_canned_base_context_patch(message, answer_style, "composition"),
         "enemy_team": list(CANNED_COMPOSITION_ENEMY_LIST),
+        "focus_heroes": [h["hero"] for h in CANNED_COMPOSITION_HEROES],
     }
     recommend_card = {"mode": "composition", "heroes": CANNED_COMPOSITION_HEROES}
     return _canned_result(
@@ -2414,6 +2486,7 @@ def _build_canned_map(message: str, answer_style: str) -> Dict[str, Any]:
         **_canned_base_context_patch(message, answer_style, "map_strategy"),
         "map_name": CANNED_MAP_NAME,
         "side": CANNED_MAP_SIDE,
+        "focus_heroes": [],
     }
     return _canned_result(
         message=message,
@@ -2430,6 +2503,7 @@ def _build_canned_stat(message: str, answer_style: str) -> Dict[str, Any]:
         **_canned_base_context_patch(message, answer_style, "performance_improve"),
         "current_hero": CANNED_STAT_HERO,
         "current_hero_role": HERO_TO_ROLE.get(CANNED_STAT_HERO),
+        "focus_heroes": [CANNED_STAT_HERO],
         "my_stats": {
             CANNED_STAT_HERO: {
                 "kills": CANNED_STAT_KILLS,
@@ -2457,6 +2531,7 @@ def _build_canned_stay(message: str, answer_style: str) -> Dict[str, Any]:
         "current_hero": CANNED_STAY_HERO,
         "current_hero_role": HERO_TO_ROLE.get(CANNED_STAY_HERO),
         "target_enemy": CANNED_STAY_ENEMY,
+        "focus_heroes": [CANNED_STAY_HERO],
     }
     return _canned_result(
         message=message,
@@ -2529,13 +2604,9 @@ OFF_TOPIC_ANSWER = (
 
 
 def off_topic_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
-    """
-    오버워치2와 무관한 메시지(인사, 잡담, 전혀 다른 주제 등)에는 LLM이 매번
-    다른 문구를 즉석에서 지어내지 않고, 항상 같은 고정 문구로만 응답한다.
-    이 노드는 LLM을 호출하지 않는다 — intent 분류(llm_parse_context_node)만
-    LLM이 하고, 실제로 사용자에게 보여줄 답변은 고정값이라 관련 없는 주제에
-    대해 그럴듯하게 대답해버리는 것을 원천 차단한다.
-    """
+    """오버워치2와 무관한 메시지에는 LLM을 호출하지 않고 항상 같은 고정
+    문구로 응답한다 — 관련 없는 주제에 LLM이 그럴듯하게 답을 지어내는 것을
+    막기 위함이다."""
     context_patch = {
         **state.get("context_patch", {}),
     }
@@ -2571,9 +2642,8 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
     role_filter = state.get("role_filter")
     high_threat_enemy = state.get("high_threat_enemy")
     has_stats = state.get("has_stats", False)
-    # 이번 턴에 적 영웅이 실제로 언급되지 않았다면 target_enemy/enemy_team 기반
-    # 검색 쿼리를 만들지 않는다. (이전 대화의 적이 이번 질문의 검색 결과를 오염시켜
-    # 답변에 엉뚱한 영웅이 단정적으로 등장하는 문제를 막기 위함)
+    # 이번 턴에 적이 언급되지 않았다면 target_enemy/enemy_team 기반 쿼리를
+    # 만들지 않는다 — 이전 대화의 적이 검색 결과를 오염시키는 것을 막기 위함.
     enemy_named_this_turn = state.get("enemy_named_this_turn", False)
 
     side_text = "공격" if side == "attack" else "수비" if side == "defense" else ""
@@ -2627,8 +2697,8 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
     elif intent == "map_strategy":
         queries.append(f"{map_name or ''} {side_text} 거점 수비 포지션 운영")
     elif intent == "situation":
-        # 인게임 압박 상황("파라가 계속 압박해" 등)은 현재 영웅으로 어떻게 버티고
-        # 대응할지가 핵심이라, 상대(있다면)와 현재 영웅을 함께 엮은 쿼리를 만든다.
+        # 인게임 압박 상황은 현재 영웅으로 어떻게 버틸지가 핵심이라, 상대(있다면)와
+        # 현재 영웅을 함께 엮은 쿼리를 만든다.
         if enemy_named_this_turn and (target_enemy or high_threat_enemy):
             queries.append(f"{target_enemy or high_threat_enemy} 압박 대처법 운영 {current_hero or ''}")
         else:
@@ -2649,14 +2719,10 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
         queries = state.get("retrieval_queries", []) or []
 
-        # 검색어마다 로컬 임베딩 모델(BAAI/bge-m3, CPU) 계산이 새로 필요해서,
-        # 순차 실행하면 검색어 개수만큼 지연이 그대로 쌓인다(실측 기준 검색어당
-        # 약 0.3~1.6초). 검색어끼리는 서로 결과에 의존하지 않으므로 스레드로
-        # 동시에 실행해 벽시계 시간을 줄인다 — torch/HF 임베딩 연산은 GIL을
-        # 풀어주는 네이티브 연산이 대부분이라 스레드 병렬화 효과가 있다.
-        # 결과 순서는 기존과 동일하게 queries 순서를 그대로 유지해, 뒤이은
-        # dedup(같은 문서가 여러 검색어에서 나올 때 먼저 나온 검색어 기준으로
-        # 채택)과 all_docs[:12] 절단 동작이 병렬화 전과 완전히 동일하게 유지된다.
+        # 검색어마다 로컬 임베딩 계산(BAAI/bge-m3, CPU)이 필요해 순차 실행하면
+        # 검색어 수만큼 지연이 쌓인다. 서로 독립적이므로 스레드로 동시 실행해
+        # 벽시계 시간을 줄인다. 결과는 queries 순서 그대로 병합해 dedup과
+        # all_docs[:12] 절단 동작을 순차 실행과 동일하게 유지한다.
         results_by_query: List[List[Any]] = [[] for _ in queries]
         if len(queries) > 1:
             with ThreadPoolExecutor(max_workers=min(6, len(queries))) as executor:
@@ -2727,10 +2793,8 @@ def judge_strategy_node(state: ChatbotGraphState) -> ChatbotGraphState:
         has_stats = state.get("has_stats", False)
         # 이번 턴에 적이 실제로 언급되지 않았다면 프롬프트에 "확정된 상대"로 넘기지 않는다.
         enemy_named_this_turn = state.get("enemy_named_this_turn", False)
-        # current_hero가 이전 턴에서 이어받은 값일 뿐, 이번 메시지에서 그 영웅을
-        # 계속 플레이 중이라고 확인된 적이 없는 경우. 이런 상태에서 역할을 강제로
-        # 제한하면, 실제로는 새로운 상황(다른 영웅이거나 일반적인 조합 질문)인데도
-        # 옛 영웅 기준으로 답이 좁혀지는 사고가 난다.
+        # current_hero가 이전 턴에서 이어받았을 뿐 이번 메시지에서 확인되지 않은 경우.
+        # 이 상태에서 역할을 강제로 제한하면 옛 영웅 기준으로 답이 좁혀지는 사고가 난다.
         current_hero_uncertain = state.get("current_hero_uncertain", False)
 
         # 버튼/텍스트로 이번 턴에 명시된 역할 필터가 있으면 그것이 최우선이다.
@@ -2761,8 +2825,8 @@ def judge_strategy_node(state: ChatbotGraphState) -> ChatbotGraphState:
         stat_summary = "\n".join(filter(None, [enemy_stat_text, my_stat_text, team_stat_text]))
 
         if current_hero_uncertain:
-            # 영웅이 불확실하면 역할로 영웅 풀을 제한하지 않는다. 이번 질문이
-            # 특정 영웅과 무관한 일반 조합 질문일 가능성이 있기 때문이다.
+            # 영웅이 불확실하면 역할로 영웅 풀을 제한하지 않는다 — 특정 영웅과
+            # 무관한 일반 조합 질문일 수 있기 때문이다.
             role_constraint = (
                 "사용자가 지금 어떤 영웅을 플레이 중인지 이번 메시지만으로는 확실하지 않다. "
                 "이전 대화에서 다른 영웅 얘기가 있었더라도, 이번 질문은 그 영웅과 무관한 "
@@ -2781,7 +2845,10 @@ def judge_strategy_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 f"{', '.join(ROLE_HEROES[current_hero_role])}\n"
                 f"팀 문제·힐 부족·어떤 이유가 있어도 이 목록 밖의 영웅은 절대 추천 불가."
             )
-        elif role_filter == "all":
+        elif role_filter == "all" and role_filter_explicit:
+            # "전체" 버튼을 직접 눌렀을 때만 이 분기를 탄다. 정보 부족으로
+            # 기본값이 "all"이 된 경우(role_filter_explicit=False)까지 걸리면,
+            # 영웅 추천이 필요 없는 질문에도 매번 역할별 추천이 붙는다.
             role_constraint = (
                 "사용자가 '전체' 역할을 선택했다. 특정 역할로 제한하지 말고, "
                 "탱커/딜러/힐러 각 역할에서 이 상황에 대응할 수 있는 영웅을 "
@@ -2920,13 +2987,11 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         suggested_questions_rules = SUGGESTED_QUESTIONS_INLINE_RULES if is_simple_style else ""
         # 이번 턴에 적이 실제로 언급되지 않았다면 답변에서도 "확정된 상대"로 다루지 않는다.
         enemy_named_this_turn = state.get("enemy_named_this_turn", False)
-        # current_hero가 이전 턴에서 이어받은 값일 뿐, 이번 메시지에서 다시 확인되지
-        # 않은 상태. 이럴 때 역할을 강제로 제한하면 실제로는 영웅과 무관한 일반
-        # 질문(예: 팀 조합 질문)인데도 옛 영웅 기준으로 답이 좁혀지는 사고가 난다.
+        # current_hero가 이전 턴에서 이어받았을 뿐 이번 메시지에서 확인되지 않은 경우.
+        # 이 상태에서 역할을 강제로 제한하면 옛 영웅 기준으로 답이 좁혀지는 사고가 난다.
         current_hero_uncertain = state.get("current_hero_uncertain", False)
 
-        # 버튼/텍스트로 이번 턴에 명시된 역할 필터가 있으면 그것이 최우선이다.
-        # current_hero_role은 이전 대화에서 이어진 값일 수 있어, 명시 선택 역할을
+        # 명시 역할 필터가 있으면 최우선이다. current_hero_role은 이전 대화값일 수 있어
         # 덮어쓰면 "힐러" 버튼을 눌렀는데 딜러 추천이 나오는 사고가 난다.
         if (
             not role_filter_explicit
@@ -2965,7 +3030,11 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 f"힐러 교체, 탱커 교체 등 다른 역할 영웅 추천은 절대 하지 마라."
             )
             answer_allowed_hero_set = set(ROLE_HEROES[current_hero_role])
-        elif role_filter == "all":
+        elif role_filter == "all" and role_filter_explicit:
+            # role_filter=="all"이 사용자가 전체 버튼을 직접 눌렀을 때만 이 branch를
+            # 타야 한다. 정보가 없어 기본값으로 "all"이 된 경우(role_filter_explicit=
+            # False)까지 여기 걸리면, 영웅 추천이 필요 없는 질문(예: 맵 운영의
+            # "좋은 자리 어디야?")에도 매번 역할별로 영웅을 추천해버리게 된다.
             allowed_heroes_text = (
                 "사용자가 '전체' 역할을 선택했다. 특정 역할로 제한하지 말고, "
                 "탱커/딜러/힐러 각 역할에서 이 상황에 대응할 수 있는 영웅을 "
@@ -3000,11 +3069,8 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         display_target_enemy = state.get("target_enemy") if enemy_named_this_turn else None
         display_high_threat = state.get("high_threat_enemy") if enemy_named_this_turn else None
         display_enemy_team = state.get("enemy_team", []) if enemy_named_this_turn else []
-        # 아군 조합("우리팀은 A B C D")은 팀 조합 추천 카드(recommend_card)로만
-        # 가는 게 아니라, 이미 자기 영웅을 확정한 채로 운영법을 묻는 질문
-        # (예: "나는 파라인데 ... 우리팀은 윈스턴/솜브라/루시우/브리기테야")
-        # 에도 함께 나올 수 있다. 이 경우 아군 조합 정보를 답변 프롬프트에서
-        # 완전히 빼버리면 시너지를 고려한 조언을 할 수 없으므로 표시해준다.
+        # 아군 조합은 recommend_card로만 가는 게 아니라, 이미 영웅을 확정한 채
+        # 운영법을 묻는 질문에도 함께 나올 수 있어 답변 프롬프트에 표시해준다.
         display_ally_team = state.get("ally_team") or []
 
         enemy_naming_instruction = ""
@@ -3036,6 +3102,18 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
             )
         else:
             current_hero_context_line = "현재 사용자 영웅: 명확히 확인되지 않음"
+            # focus_heroes: 사용자가 실제로 플레이 중이라고 밝힌 적은 없지만, 이번
+            # 질문(또는 방금 고른 "어떤 영웅 기준으로?" 되묻기 응답)이 다루는 주제
+            # 영웅. 이 정보가 없으면, 질문 원문에 영웅 이름이 없는 후속 질문(예:
+            # 되묻기에 골라 답한 "E 스킬은 어디에 써?")에서 LLM이 어떤 영웅을
+            # 기준으로 답해야 할지 전혀 알 수 없다.
+            focus_heroes_for_prompt = state.get("focus_heroes") or []
+            if focus_heroes_for_prompt:
+                current_hero_context_line += (
+                    f"\n질문 주제 영웅: {', '.join(focus_heroes_for_prompt)} — 사용자가 "
+                    "플레이 중이라고 밝힌 영웅은 아니지만, 이번 질문이 다루는 대상이다. "
+                    "이 영웅을 기준으로 답해라."
+                )
 
         selected_role_context_line = ""
         if role_filter_explicit and role_filter in ROLE_LABELS:
@@ -3127,11 +3205,7 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
             )
             markdown_forbidden_line = "- 마크다운 문법(**, *, #, - 등)"
 
-        # "그 영웅을 유지해도 된다"류 안내는 intent가 실제로 "stay"(유지 의사를
-        # 밝힌 질문)일 때만 넣는다. 예전에는 이 블록이 항상 프롬프트에 고정으로
-        # 들어가 있었는데, 그 결과 "겐지인데 상대 아나 어떻게 킬할 수 있을까"처럼
-        # 그냥 지금 플레이 중인 영웅을 언급했을 뿐인 counter성 질문에도 LLM이
-        # "겐지를 유지해도 좋습니다" 같은 불필요한 서두를 붙이는 문제가 있었다.
+        # "그 영웅을 유지해도 된다"류 안내는 intent가 stay일 때만 프롬프트에 넣는다.
         stay_intent_block = ""
         if state.get("intent") == "stay":
             stay_intent_block = f"""
@@ -3139,11 +3213,9 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
    다른 영웅 추천을 먼저 하지 마라.
    {stay_preference_instruction}"""
 
-        # performance_improve(스탯 피드백/운영 개선)는 지금 영웅을 계속 플레이하며
-        # 실력을 늘리고 싶다는 질문이지, 다른 영웅으로 바꾸고 싶다는 게 아니다.
-        # 이 구분이 없으면 아군/상대 조합 정보가 함께 있을 때 모델이 스스로
-        # "추천 영웅" 블록(교체 후보)을 만들어버려, 정작 사용자가 묻지 않은
-        # 영웅 교체 얘기로 새는 문제가 있었다.
+        # performance_improve는 지금 영웅으로 실력을 늘리려는 질문이지 교체 의도가
+        # 아니다. 명시하지 않으면 조합 정보가 있을 때 모델이 스스로 "추천 영웅"
+        # 블록을 만들어 교체 얘기로 샐 수 있다.
         performance_improve_instruction = ""
         if state.get("intent") == "performance_improve":
             performance_improve_instruction = """
@@ -3151,6 +3223,17 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
    것이지, 다른 영웅으로 바꾸고 싶어하는 게 아니다. "추천 영웅" 블록을 만들거나
    다른 영웅으로 바꾸라고 제안하지 말고, 지금 영웅으로 무엇을 다르게 하면
    좋을지만 답해라."""
+
+        # 맵 운영 질문은 영웅 추천을 요청한 게 아닌데도 role_filter가 기본값
+        # "all"로 흐르면 모델이 스스로 "역할별 추천 영웅" 형식으로 답하는 경향이
+        # 있어, 추천을 직접 요청한 게 아니면 위치·타이밍 설명을 우선하도록 명시한다.
+        map_strategy_instruction = ""
+        if state.get("intent") == "map_strategy":
+            map_strategy_instruction = """
+10. 이 질문은 맵 운영에 대한 질문이다. 사용자가 영웅 추천이나 조합을 직접
+    요청한 게 아니라면(예: 좋은 자리, 타이밍, 시야 확보를 묻는 질문), 영웅별
+    추천 목록 형식으로 답하지 말고 질문에 직접 답하는 문단으로 설명해라.
+    영웅 이름은 예시가 필요할 때만 짧게 언급해도 된다."""
 
         prompt = f"""
 너는 오버워치 코칭 RAG 챗봇이다. 사용자에게 한국어로 답변해라.
@@ -3194,7 +3277,7 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
 }}
 
 답변 작성 규칙:
-{style_rules_1to5}{enemy_naming_instruction}{swap_decision_instruction}{stay_intent_block}{performance_improve_instruction}{suggested_questions_rules}
+{style_rules_1to5}{enemy_naming_instruction}{swap_decision_instruction}{stay_intent_block}{performance_improve_instruction}{map_strategy_instruction}{suggested_questions_rules}
 
 절대 금지:
 - 허용 목록 밖 역할의 영웅 추천 (역할 고정으로 게임 내 선택 불가)
@@ -3227,10 +3310,9 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
                 raw_answer = answer_match.group(1).replace("\\n", "\n").replace('\\"', '"')
                 logger.info("[FALLBACK] answer 필드 정규식 추출 성공")
             else:
-                # 응답이 max_output_tokens에 걸려 JSON이 닫히기 전에 잘린 경우,
-                # 위 정규식은 종료 큰따옴표가 없어 매칭되지 않는다. 이때 "answer"
-                # 필드 시작부터 끝까지(닫는 따옴표 없이)라도 추출해 JSON 껍데기
-                # ({, "answer": " 등)가 그대로 사용자에게 노출되는 것을 막는다.
+                # max_output_tokens에 걸려 JSON이 닫히기 전에 잘리면 위 정규식은
+                # 매칭되지 않는다. 이때 닫는 따옴표 없이라도 answer 필드를 추출해
+                # JSON 껍데기가 노출되는 것을 막는다.
                 truncated_match = re.search(
                     r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)\\?$',
                     raw_text, re.DOTALL
@@ -3253,13 +3335,8 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
         answer = sanitize_answer_for_user(raw_answer, keep_dash_bullets=is_simple_style)
 
         if answer_allowed_hero_set is not None:
-            # 사용자가 메시지 원문에서 같은 편 동료를 가리키며 이미 언급한 영웅
-            # 이름은 위반 검사에서 제외한다. 이런 이름은 LLM이 새로 "추천"한 게
-            # 아니라 사용자의 말을 그대로 인용/응답한 것일 뿐이므로, 다른 역할
-            # 이라는 이유로 치환해버리면 사용자가 언급한 동료 영웅이 엉뚱한
-            # 영웅으로 바뀌는 결과가 나온다.
-
-
+            # 사용자가 원문에서 이미 언급한 동료 영웅은 위반 검사에서 제외한다 —
+            # LLM의 "추천"이 아니라 사용자 말을 그대로 인용한 것이므로 치환하면 안 된다.
             user_mentioned_heroes = set(find_all_heroes(state.get("message", "")))
 
             enemy_context_heroes = set()
@@ -3277,12 +3354,21 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
                 if normalized:
                     enemy_context_heroes.add(normalized)
 
+            # 아군 조합("우리팀은 A B C D")도 이번 메시지에 다시 언급되지 않아도
+            # 세션에서 이어받아 프롬프트에 표시되므로, 이미 확정된 아군 영웅을
+            # 답변이 그대로 언급했을 뿐인데 "역할 밖 추천"으로 오인해 "다른 영웅"
+            # 으로 치환해버리는 문제를 막는다.
+            ally_context_heroes = {
+                normalize_hero_name(h) for h in (state.get("ally_team") or []) if h
+            }
+
             forbidden_in_answer = [
                 h for h in find_all_heroes(answer)
                 if (
                     h not in answer_allowed_hero_set
                     and h not in user_mentioned_heroes
                     and h not in enemy_context_heroes
+                    and h not in ally_context_heroes
                 )
             ]
 
@@ -3297,9 +3383,8 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
                     "현재 역할",
                 )
 
-                # 줄 전체를 삭제하면 "교체할지 유지할지"같은 핵심 판단 문장까지
-                # 같은 줄의 다른 위반 단어 때문에 통째로 날아갈 수 있다.
-                # 대신 위반 영웅 이름만 정밀하게 치환하고, 문장 구조는 보존한다.
+                # 줄 전체를 삭제하면 핵심 판단 문장까지 같은 줄의 다른 위반 단어
+                # 때문에 날아갈 수 있어, 위반 영웅 이름만 정밀 치환하고 문장 구조는 보존한다.
                 forbidden_hero_names = set(forbidden_in_answer)
                 # HEROES 원본 표기(예: "솔저: 76")까지 포함해 실제 텍스트에 등장하는
                 # 모든 표기 형태를 치환 대상으로 잡는다.
@@ -3801,12 +3886,34 @@ def build_fallback_suggested_questions(state: ChatbotGraphState) -> List[str]:
     ]
 
 
+def compute_final_focus_heroes(state: ChatbotGraphState) -> List[str]:
+    """이번 답변이 실제로 다룬 영웅을 다음 턴 focus_heroes로 남긴다. 추천 카드/
+    전략 판단이 만든 recommended_heroes(여러 영웅 추천)를 최우선으로 삼고,
+    그 다음은 자기 영웅(단일 설명), 그 다음은 질문 자체의 주제 영웅 순이며,
+    영웅 중심 답변이 아니면 빈 배열로 남긴다."""
+    recommended = state.get("recommended_heroes") or []
+    if recommended:
+        return list(dict.fromkeys(recommended))
+    current_hero = state.get("current_hero")
+    if current_hero:
+        return [current_hero]
+    return list(state.get("focus_heroes") or [])
+
+
 def format_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
     if state.get("error"):
         return {"result": {"error": state["error"]}}
 
     answer_style = state.get("answer_style") or "detailed"
     answer = sanitize_answer_for_user(state.get("answer", ""), keep_dash_bullets=answer_style == "simple")
+
+    # 이번 답변이 다룬 영웅을 다음 턴의 focus_heroes로 남긴다 — 영웅 중심
+    # 답변이 아니었으면 빈 배열로 명시적으로 덮어써서, 무관해진 이전 주제
+    # 영웅이 다음 후속 질문에 계속 눌어붙지 않게 한다.
+    context_patch = {
+        **state.get("context_patch", {}),
+        "focus_heroes": compute_final_focus_heroes(state),
+    }
 
     return {
         "result": {
@@ -3820,7 +3927,7 @@ def format_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
             "recommended_heroes": state.get("recommended_heroes", []),
             "suggested_questions": state.get("suggested_questions", []),
             "choice_buttons": state.get("choice_buttons", []),
-            "context_patch": state.get("context_patch", {}),
+            "context_patch": context_patch,
             "has_stats": state.get("has_stats", False),
             "answer_style": answer_style,
             "matchup_card": state.get("matchup_card"),
@@ -3858,6 +3965,11 @@ def route_after_parse_stats(state: ChatbotGraphState) -> str:
 def route_after_context_merge(state: ChatbotGraphState) -> str:
     if state.get("intent") == "off_topic":
         return "off_topic_response"
+    # 어떤 영웅 기준인지부터 확정해야 하는 경우(생략형 후속 질문인데 이전
+    # focus_heroes가 0/2명 이상)가 역할 확인보다 우선이다 — 영웅을 모르면
+    # 역할을 알아도 답을 만들 수 없다.
+    if state.get("needs_focus_hero_clarify"):
+        return "clarify_focus_hero"
     if should_ask_role_filter(state):
         return "clarify_role_filter"
     return "build_retrieval_queries"
@@ -3872,13 +3984,9 @@ def route_after_retrieve(state: ChatbotGraphState) -> str:
         return "generate_matchup_answer"
     if state.get("recommend_card_mode"):
         return "generate_recommend_card"
-    # "간단히" 스타일은 인게임 중 빠른 응답이 목적이라 LLM 호출 수 자체를
-    # 줄여야 한다. judge_strategy는 recommendation_type/recommended_heroes/
-    # strategy_reason을 만들어 generate_answer의 프롬프트에 "참고 정보"로
-    # 실어주는 별도 LLM 호출인데, generate_answer는 이 정보 없이도 role_filter/
-    # current_hero/target_enemy/stats 등 이미 가진 컨텍스트만으로 같은 판단을
-    # 스스로 내릴 수 있다. "자세히" 스타일은 답변 품질(전략 판단 근거를 먼저
-    # 잡아두는 것)을 우선해 기존처럼 judge_strategy를 그대로 거친다.
+    # "간단히" 스타일은 LLM 호출 수를 줄여야 한다. judge_strategy가 만드는 참고
+    # 정보 없이도 generate_answer가 role_filter/current_hero/target_enemy/stats로
+    # 같은 판단을 스스로 내릴 수 있다. "자세히"는 답변 품질 우선으로 기존 방식을 유지한다.
     if state.get("answer_style") == "simple":
         return "generate_answer"
     return "judge_strategy"
@@ -3889,11 +3997,9 @@ def route_after_judge(state: ChatbotGraphState) -> str:
 def route_after_generate(state: ChatbotGraphState) -> str:
     if state.get("error"):
         return "format_response"
-    # "간단히" 스타일은 답변 생성 노드(generate_answer/generate_matchup_answer/
-    # generate_recommend_card) 안에서 이미 suggested_questions를 함께 받아왔다
-    # (SUGGESTED_QUESTIONS_INLINE_* 참고). 유효한 질문 3개를 확보했다면 별도
-    # LLM 호출(generate_suggested_questions_node)을 또 하지 않고 바로 끝낸다.
-    # 인라인 요청이 실패했거나(개수 부족) "자세히" 스타일이면 기존처럼 진행한다.
+    # "간단히"는 답변 생성 노드 안에서 이미 suggested_questions를 함께 받아왔으므로
+    # (SUGGESTED_QUESTIONS_INLINE_* 참고) 유효한 질문 3개가 있으면 별도 LLM 호출
+    # 없이 끝낸다. 실패했거나 "자세히" 스타일이면 기존처럼 진행한다.
     if state.get("answer_style") == "simple" and len(state.get("suggested_questions") or []) >= 3:
         return "format_response"
     return "generate_suggested_questions"
@@ -3907,6 +4013,7 @@ def build_chatbot_graph():
     graph.add_node("llm_parse_context", llm_parse_context_node)
     graph.add_node("merge_context", merge_context_node)
     graph.add_node("clarify_role_filter", clarify_role_filter_node)
+    graph.add_node("clarify_focus_hero", clarify_focus_hero_node)
     graph.add_node("off_topic_response", off_topic_response_node)
     graph.add_node("build_retrieval_queries", build_retrieval_queries_node)
     graph.add_node("retrieve_docs", retrieve_docs_node)
@@ -3926,10 +4033,12 @@ def build_chatbot_graph():
     graph.add_conditional_edges("merge_context", route_after_context_merge,
         {
             "clarify_role_filter": "clarify_role_filter",
+            "clarify_focus_hero": "clarify_focus_hero",
             "off_topic_response": "off_topic_response",
             "build_retrieval_queries": "build_retrieval_queries",
         })
     graph.add_edge("clarify_role_filter", "format_response")
+    graph.add_edge("clarify_focus_hero", "format_response")
     graph.add_edge("off_topic_response", "format_response")
     graph.add_edge("build_retrieval_queries", "retrieve_docs")
     graph.add_conditional_edges("retrieve_docs", route_after_retrieve,
@@ -3968,10 +4077,11 @@ def run_chatbot_graph(
     conversation_context: Optional[Dict[str, Any]] = None,
     role_filter: Optional[str] = None,
     answer_style: Optional[str] = None,
+    focus_hero_pick: Optional[str] = None,
 ) -> Dict[str, Any]:
     logger.info(
-        "[GRAPH START] message=%s role_filter=%s answer_style=%s context=%s",
-        message, role_filter, answer_style, conversation_context,
+        "[GRAPH START] message=%s role_filter=%s answer_style=%s focus_hero_pick=%s context=%s",
+        message, role_filter, answer_style, focus_hero_pick, conversation_context,
     )
     t0 = time.time()
 
@@ -3981,6 +4091,7 @@ def run_chatbot_graph(
         "conversation_context": conversation_context or {},
         "role_filter": role_filter,
         "answer_style": answer_style,
+        "focus_hero_pick": focus_hero_pick,
     })
 
     logger.info("[TIMING] run_chatbot_graph 전체: %.2fs (answer_style=%s)", time.time() - t0, answer_style)
