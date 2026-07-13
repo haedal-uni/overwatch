@@ -59,8 +59,7 @@ https://github.com/user-attachments/assets/55608d31-8515-4a07-b698-2bdbb32e7998
 
 <br>
 
-<img src="https://github.com/user-attachments/assets/5368c7d4-0f2c-40c6-9fd7-3c8f57dc64eb" width="60%"/>
-
+<img src="https://github.com/user-attachments/assets/152df4dc-5bc0-49a8-a410-ab256b1ec99d" width="50%"/>     
 
 <br><br>
 
