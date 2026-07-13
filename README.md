@@ -1,6 +1,11 @@
 # overwatch
 오버워치 2 영웅 추천, 카운터 픽, 운영 팁을 문서 기반으로 답변하는 RAG 챗봇
 
+
+https://github.com/user-attachments/assets/55608d31-8515-4a07-b698-2bdbb32e7998
+
+<br><br> 
+
 <img src="https://github.com/user-attachments/assets/0d1a274a-2baf-4e25-b40a-1143824aa274" />
 
 채팅 화면
