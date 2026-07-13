@@ -1,8 +1,11 @@
 import json
+import logging
 import os
 import re
+import shutil
 from urllib.parse import urlencode
 
+from django import forms
 from django.conf import settings
 from django.contrib import admin
 from django.http import FileResponse, Http404, HttpResponseRedirect
@@ -13,6 +16,8 @@ from django.utils.html import format_html, format_html_join
 from .chatbot_graph import ROLE_LABELS
 from .models import ChatLog, ErrorChatLog, UnsatisfiedChatLog
 
+logger = logging.getLogger(__name__)
+
 # 점수판 디버그 이미지 파일명 화이트리스트. vision_stats._save_debug_images가
 # 만드는 파일명 규칙과 일치해야 하며, 여기 안 맞는 이름은 경로 조작 방지를
 # 위해 scoreboard_debug_image_view가 전부 거부한다.
@@ -20,6 +25,30 @@ SCOREBOARD_DEBUG_FILENAME_RE = re.compile(
     r"(?:ally|enemy)_row_[1-5]_(?:row|hero)_crop\.png|original\.png|coarse_crop\.png"
 )
 SCOREBOARD_DEBUG_TURN_ID_RE = re.compile(r"[A-Za-z0-9\-]+")
+
+
+def _delete_scoreboard_debug_dirs(turn_ids):
+    """ChatLog 삭제 시 그 turn_id의 logs/scoreboard_debug/{turn_id}/ 폴더
+    (디버그 이미지)도 함께 지운다. 대부분의 turn_id는 일반 채팅이라 폴더가
+    없으며 이 경우는 건너뛴다. 삭제 실패(주로 서버 파일 권한 문제) turn_id
+    목록을 반환해 호출자가 관리자에게 알릴 수 있게 한다."""
+    base_dir = str(getattr(settings, "BASE_DIR", os.getcwd()))
+    debug_root = os.path.normpath(os.path.join(base_dir, "logs", "scoreboard_debug"))
+    failed_turn_ids = []
+    for turn_id in turn_ids:
+        if not turn_id or not SCOREBOARD_DEBUG_TURN_ID_RE.fullmatch(turn_id):
+            continue
+        target = os.path.normpath(os.path.join(debug_root, turn_id))
+        if os.path.commonpath([debug_root, target]) != debug_root:
+            continue
+        if not os.path.exists(target):
+            continue
+        try:
+            shutil.rmtree(target)
+        except OSError:
+            logger.warning("[SCOREBOARD] 디버그 폴더 삭제 실패(권한 문제 의심): %s", target, exc_info=True)
+            failed_turn_ids.append(turn_id)
+    return failed_turn_ids
 
 
 ROLE_BADGE_STYLES = {
@@ -41,22 +70,63 @@ class ChatLogDisplayMixin:
         # 만들 이유가 없다.
         return False
 
+    @property
+    def media(self):
+        # 표 컬럼 헤더 클릭 시 그 값으로 필터링하는 드롭다운을 추가한다.
+        # 서버 필터링 로직은 그대로 두고, 사이드바 필터 링크를 JS가 재사용해
+        # 팝업으로 보여준다(column_filter.js 참고).
+        return super().media + forms.Media(
+            css={"all": ("chat/admin/column_filter.css",)},
+            js=("chat/admin/column_filter.js",),
+        )
+
     def has_change_permission(self, request, obj=None):
-        # 로그는 수정하지 못하게 막고, 상세 조회만 가능하게 한다.
-        return True
+        # 로그는 읽기 전용이다 — readonly_fields만으로는 저장 버튼이 계속
+        # 노출돼 클릭할 때마다 실질적 변경 없이 LogEntry가 쌓이므로, False로
+        # 막아 저장 버튼 자체를 없앤다(목록/상세 조회는 별도 권한이라 가능).
+        return False
 
     def history_view(self, request, object_id, extra_context=None):
         """기본 "히스토리" 버튼을 세션 대화 전체보기로 리다이렉트한다.
 
-        Django 기본 히스토리 화면은 admin에서 직접 값을 수정한 기록(LogEntry)만
-        보여주는데, ChatLog는 챗봇 파이프라인이 자동 생성만 하므로 항상 비어
-        있다. 대화 내용을 보려면 session_transcript_view로 가야 한다.
+        ChatLog는 자동 생성만 되어 Django 기본 히스토리(LogEntry)가 항상
+        비어 있으므로, 실제 대화 내용은 session_transcript_view로 보여준다.
         """
         obj = self.get_object(request, object_id)
         if obj is not None and obj.log_session_id:
             url = reverse("admin:chat_chatlog_session_transcript", args=[obj.log_session_id])
             return HttpResponseRedirect(url)
         return super().history_view(request, object_id, extra_context)
+
+    def _warn_if_debug_dir_cleanup_failed(self, request, failed_turn_ids):
+        """디스크의 점수판 디버그 폴더 삭제가 실패했으면(주로 서버의 파일
+        소유권/권한 문제) DB 로그 삭제는 이미 끝났더라도 관리자에게 알려서
+        조용히 고아 폴더가 쌓이지 않게 한다."""
+        if not failed_turn_ids:
+            return
+        self.message_user(
+            request,
+            f"로그는 삭제됐지만 디스크의 점수판 디버그 폴더 {len(failed_turn_ids)}개는 "
+            f"권한 문제로 삭제하지 못했습니다(turn_id: {', '.join(failed_turn_ids)}). "
+            "서버에서 logs/scoreboard_debug 폴더의 소유권/권한을 확인해주세요.",
+            level="warning",
+        )
+
+    def delete_model(self, request, obj):
+        """개별 로그 삭제(변경 화면의 "삭제") 시 그 turn_id의 점수판 디버그
+        이미지 폴더도 함께 지운다."""
+        turn_id = obj.turn_id
+        super().delete_model(request, obj)
+        failed = _delete_scoreboard_debug_dirs([turn_id])
+        self._warn_if_debug_dir_cleanup_failed(request, failed)
+
+    def delete_queryset(self, request, queryset):
+        """기본 "delete_selected" 일괄 삭제 액션의 삭제 경로. 지워지는 로그들의
+        turn_id를 먼저 모아두고, 삭제 후 해당 디버그 이미지 폴더도 함께 지운다."""
+        turn_ids = list(queryset.values_list("turn_id", flat=True).distinct())
+        super().delete_queryset(request, queryset)
+        failed = _delete_scoreboard_debug_dirs(turn_ids)
+        self._warn_if_debug_dir_cleanup_failed(request, failed)
 
     @admin.action(description="선택한 로그가 속한 세션 전체 삭제(같은 log_session_id의 모든 USER/AI/ERROR 로그)")
     def delete_entire_session(self, request, queryset):
@@ -67,11 +137,15 @@ class ChatLogDisplayMixin:
         if not session_ids:
             self.message_user(request, "선택한 로그에 세션 정보가 없습니다.", level="warning")
             return
-        deleted_count, _ = ChatLog.objects.filter(log_session_id__in=session_ids).delete()
+        session_logs = ChatLog.objects.filter(log_session_id__in=session_ids)
+        turn_ids = list(session_logs.values_list("turn_id", flat=True).distinct())
+        deleted_count, _ = session_logs.delete()
+        failed = _delete_scoreboard_debug_dirs(turn_ids)
         self.message_user(
             request,
             f"세션 {len(session_ids)}개, 로그 {deleted_count}건을 삭제했습니다.",
         )
+        self._warn_if_debug_dir_cleanup_failed(request, failed)
 
     @admin.display(description="구분", ordering="role")
     def role_badge(self, obj):
@@ -230,16 +304,14 @@ class ChatLogDisplayMixin:
 
     def _scoreboard_debug_image_url(self, turn_id, rel_path):
         """admin_log에 저장된 "logs/scoreboard_debug/{turn_id}/파일명" 상대
-        경로를, 그 파일을 실제로 서빙하는 관리자 전용 URL(scoreboard_debug_
-        image_view)로 바꾼다. rel_path/turn_id가 없으면 None을 반환한다."""
+        경로를, 그 파일을 실제로 서빙하는 관리자 전용 URL로 바꾼다."""
         if not rel_path or not turn_id:
             return None
         filename = rel_path.rsplit("/", 1)[-1]
         return reverse("admin:chat_chatlog_scoreboard_debug_image", args=[turn_id, filename])
 
     def _render_debug_thumb(self, turn_id, rel_path, alt):
-        """crop 경로 하나를 클릭하면 원본 크기로 열리는 56x56 썸네일 <img>로
-        렌더링한다. 경로가 없으면(저장 실패/turn_id 없음) 안내 문구만 낸다."""
+        """crop 경로 하나를 클릭하면 원본 크기로 열리는 56x56 썸네일 <img>로 렌더링한다."""
         img_url = self._scoreboard_debug_image_url(turn_id, rel_path)
         if not img_url:
             return "(저장 안 됨)"
@@ -328,41 +400,14 @@ class ChatLogDisplayMixin:
             return ", ".join(f"{m['hero']} {m['score']}" for m in matches)
 
         def render_hero_row(r):
-            crop_before = r.get("crop_size_before")
-            crop_after = r.get("crop_size_after")
-            crop_before_text = f"{crop_before[0]}×{crop_before[1]}" if crop_before else "-"
-            crop_after_text = f"{crop_after[0]}×{crop_after[1]}" if crop_after else "-"
-            within_text = "예" if r.get("hero_crop_box_within_row_box") else "아니오"
-            native_size = r.get("native_size")
-            native_size_text = f"{native_size[0]}×{native_size[1]}" if native_size else "-"
-            upscale_text = f"예(INTER_CUBIC, native {native_size_text})" if r.get("upscaled") else "아니오"
-
             cells = [
                 self._sb_td("우리팀" if r["team"] == "ally" else "상대팀"),
                 self._sb_td(r["row_index"]),
                 self._sb_td(ROLE_LABELS.get(r["role"], r["role"])),
-                self._sb_td(format_html(
-                    '{}<br><span style="color:#9ca3af; font-size:11px;">{}</span>',
-                    self._render_debug_thumb(turn_id, r.get("row_crop_path"), "row crop"),
-                    self._format_box(r.get("row_box")),
-                )),
-                self._sb_td(format_html(
-                    '{}<br><span style="color:#9ca3af; font-size:11px;">{} · 포함:{} · relative_x:{} · '
-                    '크기:{}→{} · 업스케일:{}</span>',
-                    self._render_debug_thumb(turn_id, r.get("crop_path"), "hero crop"),
-                    self._format_box(r.get("hero_crop_box")), within_text,
-                    r.get("hero_crop_relative_x"), crop_before_text, crop_after_text, upscale_text,
-                )),
+                self._sb_td(self._render_debug_thumb(turn_id, r.get("row_crop_path"), "row crop")),
+                self._sb_td(self._render_debug_thumb(turn_id, r.get("crop_path"), "hero crop")),
                 self._sb_td(format_html("{} ({})", r["hero"], r["confidence_label"])),
-                self._sb_td(format_html(
-                    "{} → {} (차이 {})", r.get("pre_role_best_score"), r.get("post_role_best_score"), r.get("score_gap"),
-                )),
                 self._sb_td(fmt_matches(r.get("post_role_top_matches"))),
-                self._sb_td(format_html(
-                    "raw {} / blurred {} / clahe {} / edge {} / baseline {} / final {}",
-                    r.get("raw_gray_score"), r.get("blurred_gray_score"), r.get("clahe_gray_score"),
-                    r.get("edge_score"), r.get("baseline_score"), r.get("final_score"),
-                )),
                 self._sb_td(r.get("template_path") or "-"),
             ]
             row_html = format_html_join("", "{}", ((c,) for c in cells))
@@ -371,11 +416,10 @@ class ChatLogDisplayMixin:
         hero_rows = log.get("hero_rows", [])
         if hero_rows:
             headers = [
-                "팀", "행", "역할", "row crop (row_box)",
-                "hero crop (hero_crop_box / 포함·relative_x·크기·업스케일)",
-                "인식 결과 (확신도)", "best: 필터 전→후",
-                "top3(필터 후)",
-                "score 상세(raw/blurred/clahe/edge/baseline/final)", "사용 템플릿",
+                "팀", "행", "역할", "row crop", "hero crop",
+                "인식 결과 (확신도)",
+                "TOP3",
+                "사용 템플릿",
             ]
             header_html = format_html_join("", "{}", ((self._sb_th(h),) for h in headers))
             rows_html = format_html_join("", "{}", ((render_hero_row(r),) for r in hero_rows))
@@ -617,8 +661,12 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         if not self.has_delete_permission(request):
             from django.core.exceptions import PermissionDenied
             raise PermissionDenied
-        deleted_count, _ = ChatLog.objects.filter(log_session_id=log_session_id).delete()
+        session_logs = ChatLog.objects.filter(log_session_id=log_session_id)
+        turn_ids = list(session_logs.values_list("turn_id", flat=True).distinct())
+        deleted_count, _ = session_logs.delete()
+        failed = _delete_scoreboard_debug_dirs(turn_ids)
         self.message_user(request, f"세션 {log_session_id}의 로그 {deleted_count}건을 삭제했습니다.")
+        self._warn_if_debug_dir_cleanup_failed(request, failed)
         return HttpResponseRedirect(reverse("admin:chat_chatlog_changelist"))
 
     def scoreboard_debug_image_view(self, request, turn_id, filename):
@@ -731,17 +779,25 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         "created_at",
         "log_session_link",
         "turn_link",
+        "intent",
         "current_hero",
         "target_enemy",
         "enemy_team_display",
         "message_preview",
         "feedback_reason_preview",
+        "resolved_badge",
     )
-    list_filter = ("current_hero", "created_at")
-    search_fields = ("log_session_id", "turn_id", "message", "feedback_reason")
+    list_filter = ("intent", "current_hero", "is_resolved", "created_at")
+    search_fields = ("log_session_id", "turn_id", "message", "feedback_reason", "resolution_note")
     date_hierarchy = "created_at"
     ordering = ("-created_at",)
     list_per_page = 50
+
+    # is_resolved/resolution_note만 관리자가 직접 편집할 수 있어야 하므로,
+    # 이 admin에서만 has_change_permission을 True로 되돌린다(다른 로그
+    # admin은 ChatLogDisplayMixin의 기본값인 완전 읽기 전용을 유지).
+    def has_change_permission(self, request, obj=None):
+        return True
 
     readonly_fields = (
         "created_at",
@@ -771,11 +827,19 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         ("불만족 이유", {
             "fields": ("feedback_reason",),
         }),
+        ("처리 상태 (관리자 메모)", {
+            "fields": ("is_resolved", "resolution_note"),
+            "description": "처리 완료 여부는 체크만으로 표시할 수 있고, 메모는 처리 완료와 별개로 자유롭게 남기고 나중에 다시 고칠 수 있습니다.",
+        }),
         ("상세 컨텍스트 / 메타데이터", {
             "fields": ("metadata_pretty",),
             "classes": ("collapse",),
         }),
     )
+
+    @admin.display(description="처리 상태", ordering="is_resolved", boolean=True)
+    def resolved_badge(self, obj):
+        return obj.is_resolved
 
     @admin.display(description="불만족 이유")
     def feedback_reason_preview(self, obj):

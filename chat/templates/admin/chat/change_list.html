@@ -1,0 +1,64 @@
+{% extends "admin/change_list.html" %}
+
+{% block content %}
+<details class="intent-legend">
+  <summary>intent(질문 의도) 값 설명 펼치기/접기</summary>
+  <table>
+    <thead>
+      <tr>
+        <th>intent</th>
+        <th>의미</th>
+        <th>예시</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>counter</code></td>
+        <td>특정 영웅의 대표 카운터/상성 목록을 묻는 질문</td>
+        <td>"겐지 카운터 알려줘"</td>
+      </tr>
+      <tr>
+        <td><code>stay</code></td>
+        <td>지금 영웅을 유지한 채로 상대 영웅을 어떻게 파훼할지 묻는 질문</td>
+        <td>"겐지로 윈스턴 상대법 알려줘"</td>
+      </tr>
+      <tr>
+        <td><code>swap</code></td>
+        <td>지금 영웅이 힘들어서 다른 영웅으로 교체하거나 추천 영웅을 묻는 질문</td>
+        <td>"겐지 하는데 윈스턴 힘들어. 다른 영웅 추천해줘"</td>
+      </tr>
+      <tr>
+        <td><code>composition</code></td>
+        <td>상대팀 조합과 우리팀 조합을 함께 알려주며 추천이나 운영 방향, 또는 그 조합 평가를 묻는 질문</td>
+        <td>"상대는 둠피, 겐지, 트레, 아나, 루시우고 우리팀은 윈스턴, 소전, 키리코, 루시우야. 나는 뭐 하면 돼?"</td>
+      </tr>
+      <tr>
+        <td><code>performance_improve</code></td>
+        <td>스탯, 운영, 실력 향상, 플레이 개선을 묻는 질문(팀원 간 활약 비교/순위 질문 포함)</td>
+        <td>"내 솔저 딜 6000 킬 4 데스 8이야", "겐지 운영법 알려줘", "누가 제일 잘했어?"</td>
+      </tr>
+      <tr>
+        <td><code>situation</code></td>
+        <td>인게임에서 특정 상대나 상황 때문에 압박받고 있다는 것을 그대로 토로하는 질문(추천 요청이 아님)</td>
+        <td>"파라가 계속 압박해", "둠피가 계속 힐러 물어"</td>
+      </tr>
+      <tr>
+        <td><code>map_strategy</code></td>
+        <td>맵, 공격, 수비, 거점, 화물 등 맵 운영을 묻는 질문</td>
+        <td>"왕의 길 수비 조합 추천해줘", "리장타워에서 뭐 하면 좋아?"</td>
+      </tr>
+      <tr>
+        <td><code>general</code></td>
+        <td>위 항목 어디에도 속하지 않는 일반 질문</td>
+        <td>-</td>
+      </tr>
+      <tr>
+        <td><code>off_topic</code></td>
+        <td>오버워치2 게임과 전혀 무관한 메시지(인사말, 잡담 등) — 그래프를 타지 않고 고정 안내 문구만 반환</td>
+        <td>"안녕", "오늘 날씨 어때?"</td>
+      </tr>
+    </tbody>
+  </table>
+</details>
+{{ block.super }}
+{% endblock %}

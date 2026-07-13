@@ -10,11 +10,11 @@ from .chatbot_service import get_chatbot_components
 
 logger = logging.getLogger(__name__)
 
-# False면 Gemini로 하는 숫자(K/D/A·피해량·치유량·경감량) 인식과 코치/개인
-# 피드백 생성을 건너뛴다 — get_chatbot_components()도 호출하지 않아 CV 인식
-# 로직만 테스트할 때 더 빠르다. 꺼져 있는 동안 표의 수치 칸은 "확인 필요"로,
-# 피드백은 고정 안내 문구로 나간다.
-ENABLE_GEMINI_STATS_AND_FEEDBACK = False
+# False면 Gemini로 하는 숫자 인식과 코치/개인 피드백 생성을 건너뛴다 —
+# get_chatbot_components()도 호출하지 않아 CV 인식 로직만 테스트할 때 더
+# 빠르다. 꺼진 동안 표의 수치 칸은 "확인 필요", 피드백은 고정 안내 문구로
+# 나간다. 다시 끄고 켤 때는 benchmark_matching.py로 회귀 여부를 확인할 것.
+ENABLE_GEMINI_STATS_AND_FEEDBACK = True
 
 HERO_ICON_DIR = os.path.join(os.path.dirname(__file__), "hero_icons")
 
@@ -266,16 +266,15 @@ def _scoreboard_debug_dir(turn_id: str) -> str:
 
 
 def _save_debug_images(
-    cv2, turn_id: str, image,
+    cv2, turn_id: str,
     ally_row_crops: List[Optional[Any]], ally_hero_crops: List[Optional[Any]],
     enemy_row_crops: List[Optional[Any]], enemy_hero_crops: List[Optional[Any]],
-    coarse_crop_image: Optional[Any] = None,
 ) -> Dict[str, str]:
-    """turn_id별 디버그 폴더에 원본 이미지, 1단계(coarse) sub-image, 행별
-    row crop, hero crop을 저장한다. coarse_crop_image는 1단계가 실제로 크롭을
-    적용했을 때만(원본 폴백 시에는 None) 넘어오며, "표만 캡처"/"전체화면
-    캡처" 모두에서 크롭이 제대로 됐는지 눈으로 바로 확인하는 용도다. 저장
-    실패(디스크 권한 등)는 예외를 삼켜 분석 자체가 죽지 않게 한다."""
+    """turn_id별 디버그 폴더에 행별 row crop, hero crop만 저장한다. 원본
+    이미지/1단계(coarse) sub-image는 저장하지 않는다 — 인식 문제 진단에는
+    행별 crop만으로 충분하고, 원본까지 남기면 디스크 사용량과 개인정보
+    보관 범위만 늘어난다. 저장 실패(디스크 권한 등)는 예외를 삼켜 분석
+    자체가 죽지 않게 한다."""
     debug_dir = _scoreboard_debug_dir(turn_id)
     try:
         os.makedirs(debug_dir, exist_ok=True)
@@ -287,13 +286,6 @@ def _save_debug_images(
 
     def _rel(filename: str) -> str:
         return f"logs/{SCOREBOARD_DEBUG_DIR_NAME}/{turn_id}/{filename}"
-
-    if _imwrite_unicode(cv2, os.path.join(debug_dir, "original.png"), image):
-        paths["original"] = _rel("original.png")
-
-    if coarse_crop_image is not None and coarse_crop_image.size > 0:
-        if _imwrite_unicode(cv2, os.path.join(debug_dir, "coarse_crop.png"), coarse_crop_image):
-            paths["coarse_crop"] = _rel("coarse_crop.png")
 
     sources = (
         ("ally", "row", ally_row_crops), ("ally", "hero", ally_hero_crops),
@@ -1111,20 +1103,12 @@ def _resolve_row_height_mismatch(
     cv2, np, image, layout: Dict[str, Any], picked_by_team: Dict[str, Optional[Dict[str, Any]]],
     candidates_by_team: Dict[str, List[Dict[str, Any]]], width_img: int,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """두 팀 모두 유효한 team_box를 얻었는데 expected_row_height가 서로 크게
-    다르면(ROW_HEIGHT_MISMATCH_RATIO 이상), 작은 쪽만 완화된 색 기준으로
-    반대 팀 인접 위치에서 재탐색한다(_relaxed_search_adjacent 재사용) — 본인
-    강조 행만 크기가 큰 명도 임계값을 통과해 team_box가 강조 행 1개 크기로
-    잘못 잡히는 경우를 잡아낸다.
-
-    반대 팀 검출이 아예 실패해 교차 비교가 불가능하면(enemy_h/ally_h 중 하나가
-    None), 있는 쪽 팀의 expected_row_height를 이미지 높이 대비 절대 비율로만
-    판단해(EXPECTED_ROW_HEIGHT_MIN_TRUST_RATIO) 자체적으로 재탐색을 시도한다
-    (_self_relaxed_retry_no_cross_team). 이쪽은 색 마스크 자체가 완전히
-    실패하는(candidate가 아예 없는) 팀은 대상이 아니다 — 원인이 다를 수 있는
-    문제(예: 다른 색상의 아이콘 아트가 반대 팀 색과 혼동되는 경우)를 검증 없이
-    건드리지 않기 위해, "일단 candidate는 있는데 비정상적으로 작은" 경우로
-    한정한다."""
+    """두 팀의 expected_row_height가 크게 다르면(ROW_HEIGHT_MISMATCH_RATIO
+    이상) 작은 쪽만 완화된 색 기준으로 인접 위치를 재탐색한다 — 본인 강조
+    행만 명도 임계값을 통과해 team_box가 그 행 1개 크기로 잘못 잡히는
+    경우를 구제한다. 교차 비교가 불가능하면(한쪽 검출 실패) 이미지 높이
+    대비 절대 비율로 자체 재탐색하되(_self_relaxed_retry_no_cross_team),
+    candidate 자체가 없는 팀은 원인이 다를 수 있어 대상에서 제외한다."""
     ally_h = layout["ally"].get("expected_row_height")
     enemy_h = layout["enemy"].get("expected_row_height")
     diagnostics = {
@@ -1879,6 +1863,36 @@ TEAM_FEEDBACK_PROMPT_TEMPLATE = """너는 오버워치2 코치다. 방금 TAB �
   톤으로 써라.
 - 확인되지 않은 정보를 사실처럼 단정하지 말고, 실제로 제공된 스탯 범위
   안에서만 판단해라. 승률/티어 같은 통계는 언급하지 마라.
+- 스탯 항목마다 그 영웅이 애초에 그 수치를 낼 수 있는 스킬을 가졌는지부터
+  너의 오버워치2 지식으로 판단해라. 힐 전담형 영웅의 낮은 피해량, 피해를
+  막거나 흡수하는 스킬(방벽·보호막·벽 등)이 없는 영웅의 경감량 0은 전부
+  구조적으로 정상인 수치이니 약점처럼 지적하지 마라. 특히 경감량은 실제로
+  그런 스킬을 쓴 결과로만 기록되는 값이므로, 그런 스킬이 없는 영웅에게
+  "경감량이 낮으니 어떤 스킬을 더 활용했어야 한다"처럼 확인되지 않은
+  스킬 운용을 지어내지 마라.
+- 치유량 대비 피해량 비율처럼 팀 내부 숫자만 보고 판단하지 말고, 상대팀에서
+  같은 역할 영웅의 실제 수치와 비교해서 상대적으로 높은지 낮은지를 근거로
+  삼아라. 상대 같은 역할보다 치유량과 피해량이 모두 앞선다면 그건 약점이
+  아니라 강점이니 아쉬운 점으로 지적하지 마라. 단, 이 비교 규칙은 두 힐러
+  모두 스스로 의미 있는 피해를 낼 수 있는 킷일 때만 적용해라. 메르시처럼
+  피해 증폭(우클릭) 말고는 사실상 자체 공격 수단이 없는 힐러는, 상대
+  힐러가 딜을 얼마나 냈든 상관없이 피해량 항목 자체를 비교·지적 대상에서
+  제외해라 — "상대 힐러는 공격적으로 운영했는데 이쪽은 피해 기여가 없다"
+  같은 문장도 메르시에게는 쓰지 마라. 단, 치유량은 예외가 아니다 — 이런
+  힐러도 치유량이 같은 역할 상대보다 유의미하게 낮으면 그건 정상적인 약점
+  지적 대상이다.
+- 경감량도 같은 원리로 판단해라: 방벽·보호막이나 디플렉트/매트릭스처럼
+  피해를 흡수·차단하는 스킬이 있는 탱커는 그런 스킬이 없는 탱커보다
+  경감량이 구조적으로 훨씬 높게 나온다. 아군과 상대 탱커의 킷이 다르면
+  경감량 차이만으로 어느 쪽이 못했다고 판단하지 마라.
+- 회복 자원을 소모해 채워야 하는 킷(자원이 바닥나면 다시 찰 때까지 치유를
+  못 하는 힐러 등)을 하는 영웅은, 치유량/피해량 총합만 보지 말고 두
+  수치를 그 영웅의 자원 관리 메커니즘에 맞게 배분했는지도 함께 판단해라.
+- 영웅의 고유 특성(예: 생존력이 높다, 기동성이 좋다)을 근거로 언급할 때,
+  그 특성 덕분에 나온 결과(예: 데스가 적음)를 "~인 영웅임에도" 처럼
+  특성과 결과가 서로 모순되는 것처럼 쓰지 마라. 특성이 원인이라면
+  "~답게", "~덕분에"처럼 인과관계가 맞는 표현만 써라(예: "생존력이 뛰어난
+  영웅답게 0데스를 유지하며..." O, "생존력이 뛰어난 영웅임에도 0데스" X).
 - 마크다운 문법(**, #, - 등)은 쓰지 마라. 문단 서술로 작성해라.
 - 각 항목은 2~4문장 이내로 간결하게 작성해라.
 
@@ -1934,10 +1948,38 @@ PERSONAL_FEEDBACK_PROMPT_TEMPLATE = """너는 오버워치2 코치다. 본인은
 {role}({hero})로 플레이했고 다음 스탯을 기록했다.
 
 {stat_line}
+{enemy_counterpart_line}
 
 본인 스탯을 중심으로 잘한 점과 아쉬운 점, 다음 판에 바로 적용할 팁 1~2가지를
 문단 서술로 3~4문장 이내로 작성해라. 마크다운 문법은 쓰지 말고, 확인되지 않은
-정보를 단정하지 마라."""
+정보를 단정하지 마라.
+
+판단 기준:
+- 스탯 항목마다 그 영웅이 애초에 그 수치를 낼 수 있는 스킬을 가졌는지부터
+  너의 오버워치2 지식으로 판단해라. 힐 전담형 영웅의 낮은 피해량, 피해를
+  막거나 흡수하는 스킬(방벽·보호막·벽 등)이 없는 영웅의 경감량 0은 전부
+  구조적으로 정상인 수치이니 약점으로 지적하지 마라. 특히 경감량은 실제로
+  그런 스킬을 쓴 결과로만 기록되는 값이므로, 그런 스킬이 없는 영웅에게
+  "경감량이 낮으니 어떤 스킬을 더 활용했어야 한다"처럼 확인되지 않은
+  스킬 운용을 지어내지 마라.
+- 위에 상대팀 같은 역할 스탯이 주어졌다면, 치유량 대비 피해량 같은 내부 비율
+  만으로 판단하지 말고 그 상대 수치와 비교해서 실제로 상대적으로 낮은지
+  판단해라. 상대보다 앞서는 수치를 약점처럼 지적하지 마라. 단, 본인이
+  메르시처럼 피해 증폭(우클릭) 말고는 사실상 자체 공격 수단이 없는
+  힐러라면, 상대 힐러가 딜을 얼마나 냈든 상관없이 피해량 항목은 비교·
+  지적 대상에서 제외해라(치유량은 예외가 아니다 — 상대보다 유의미하게
+  낮으면 그건 정상적인 약점 지적 대상이다).
+- 경감량도 같은 원리로 판단해라: 본인이나 상대가 방벽·보호막이나 디플렉트/
+  매트릭스처럼 피해를 흡수·차단하는 스킬을 쓰는 탱커라면, 그런 스킬이
+  없는 탱커보다 경감량이 구조적으로 훨씬 높게 나온다 — 킷이 다른 탱커와의
+  경감량 차이만으로 못했다고 판단하지 마라.
+- 본인이 회복 자원을 소모해 채워야 하는 킷(자원이 바닥나면 다시 찰 때까지
+  치유를 못 하는 힐러 등)이라면, 치유량/피해량 총합만 보지 말고 두
+  수치를 그 영웅의 자원 관리 메커니즘에 맞게 배분했는지도 함께 판단해라.
+- 영웅의 고유 특성(예: 생존력이 높다, 기동성이 좋다)을 근거로 언급할 때,
+  그 특성 덕분에 나온 결과(예: 데스가 적음)를 "~인 영웅임에도" 처럼
+  특성과 결과가 서로 모순되는 것처럼 쓰지 마라. 특성이 원인이라면
+  "~답게", "~덕분에"처럼 인과관계가 맞는 표현만 써라."""
 
 
 def _self_feedback_eligible(self_row_idx: Optional[int], my_team: List[Dict[str, Any]]) -> bool:
@@ -1955,15 +1997,28 @@ def _self_feedback_eligible(self_row_idx: Optional[int], my_team: List[Dict[str,
     )
 
 
-def _generate_personal_feedback(llm, self_entry: Dict[str, Any]) -> str:
+def _generate_personal_feedback(
+    llm, self_entry: Dict[str, Any], enemy_counterpart: Optional[Dict[str, Any]] = None,
+) -> str:
     kda = self_entry["kda"]
     stat_line = (
         f"K/D/A {_fmt_num(kda['kill'])}/{_fmt_num(kda['death'])}/{_fmt_num(kda['assist'])}, "
         f"피해량 {_fmt_num(self_entry.get('damage'))}, 치유량 {_fmt_num(self_entry.get('healing'))}, "
         f"경감량 {_fmt_num(self_entry.get('mitigation'))}"
     )
+    enemy_counterpart_line = ""
+    if enemy_counterpart is not None:
+        enemy_kda = enemy_counterpart["kda"]
+        enemy_counterpart_line = (
+            f"참고로 상대팀 같은 역할({enemy_counterpart['hero']})의 이번 판 스탯: "
+            f"K/D/A {_fmt_num(enemy_kda['kill'])}/{_fmt_num(enemy_kda['death'])}/{_fmt_num(enemy_kda['assist'])}, "
+            f"피해량 {_fmt_num(enemy_counterpart.get('damage'))}, "
+            f"치유량 {_fmt_num(enemy_counterpart.get('healing'))}, "
+            f"경감량 {_fmt_num(enemy_counterpart.get('mitigation'))}"
+        )
     prompt = PERSONAL_FEEDBACK_PROMPT_TEMPLATE.format(
         role=self_entry["role"], hero=self_entry["hero"], stat_line=stat_line,
+        enemy_counterpart_line=enemy_counterpart_line,
     )
     try:
         return call_llm_text(llm, prompt).strip()
@@ -1988,6 +2043,27 @@ def _team_table(entries: List[Dict[str, Any]]) -> str:
         ]
         lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines)
+
+
+def _build_stat_dict(team: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """chatbot_graph의 my_team_stats/enemy_stats 포맷(영웅명 -> kills/assists/
+    deaths/damage/healing)으로 변환한다. 영웅 인식 실패(unknown)나 숫자 인식
+    실패 행은 제외한다."""
+    result: Dict[str, Any] = {}
+    for e in team:
+        if e["hero"] == "unknown":
+            continue
+        kda = e["kda"]
+        if all(v is None for v in [kda["kill"], kda["death"], kda["assist"], e.get("damage"), e.get("healing")]):
+            continue
+        result[e["hero"]] = {
+            "kills": kda["kill"],
+            "deaths": kda["death"],
+            "assists": kda["assist"],
+            "damage": e.get("damage"),
+            "healing": e.get("healing"),
+        }
+    return result
 
 
 def build_scoreboard_report(
@@ -2028,15 +2104,10 @@ def build_scoreboard_report(
 # ============================================================
 
 def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", turn_id: Optional[str] = None) -> Dict[str, Any]:
-    """TAB 점수판 스크린샷(bytes)을 분석해 사용자에게 보여줄 "report"(표 +
-    코치 피드백 마크다운)와, 관리자 페이지 전용 진단 정보 "admin_log"를 담은
-    dict를 반환한다. 팀 구분/역할 배정/본인 판별/영웅 아이콘 인식은
-    OpenCV(contour 기반 패널 검출, 고정 행 순서, 역할별 후보 제한 + hero_icons/
-    템플릿 유사도 매칭)로, 숫자 인식과 코치 피드백만 Gemini(gemini-3.1-
-    flash-lite)로 처리한다.
-
-    turn_id를 넘기면 원본 이미지와 각 행의 row/hero crop을
-    logs/scoreboard_debug/{turn_id}/에 저장하고 그 경로를 admin_log에 담는다."""
+    """TAB 점수판 스크린샷(bytes)을 분석해 "report"(사용자에게 보여줄 표+
+    피드백 마크다운)와 "admin_log"(관리자 전용 진단 정보) dict를 반환한다.
+    turn_id를 넘기면 원본 이미지와 행별 row/hero crop을
+    logs/scoreboard_debug/{turn_id}/에 저장하고 경로를 admin_log에 담는다."""
     cv2, np = _cv2_np()
 
     array = np.frombuffer(image_bytes, dtype=np.uint8)
@@ -2076,15 +2147,10 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
         cv2, np, image, layout["enemy"]["row_boxes"], templates, team="enemy", team_box=layout["enemy"]["team_box"],
     )
 
-    original_image_path = None
-    coarse_crop_image_path = None
     if turn_id:
         debug_paths = _save_debug_images(
-            cv2, turn_id, image, ally_row_crops, ally_hero_crops, enemy_row_crops, enemy_hero_crops,
-            coarse_crop_image=coarse_crop_image,
+            cv2, turn_id, ally_row_crops, ally_hero_crops, enemy_row_crops, enemy_hero_crops,
         )
-        original_image_path = debug_paths.get("original")
-        coarse_crop_image_path = debug_paths.get("coarse_crop")
         for i, entry in enumerate(my_team):
             entry["row_crop_path"] = debug_paths.get(f"ally_{i + 1}_row")
             entry["crop_path"] = debug_paths.get(f"ally_{i + 1}_hero")
@@ -2114,7 +2180,17 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
         team_feedback = _generate_team_feedback(llm, my_team, enemy_team, enemy_ok, low_hero_recognition)
 
         self_known = _self_feedback_eligible(self_row_idx, my_team)
-        personal_feedback = _generate_personal_feedback(llm, my_team[self_row_idx]) if self_known else None
+        enemy_counterpart = None
+        if self_known and enemy_ok and self_row_idx < len(enemy_team):
+            # 행 순서가 [탱커, 딜러, 딜러, 힐러, 힐러]로 고정이라 같은 행
+            # 인덱스가 곧 같은 역할이다.
+            candidate = enemy_team[self_row_idx]
+            if candidate["hero"] != "unknown":
+                enemy_counterpart = candidate
+        personal_feedback = (
+            _generate_personal_feedback(llm, my_team[self_row_idx], enemy_counterpart)
+            if self_known else None
+        )
     else:
         # ENABLE_GEMINI_STATS_AND_FEEDBACK=False — Gemini를 아예 호출하지
         # 않는다. my_team/enemy_team의 kda/damage/healing/mitigation은
@@ -2133,9 +2209,9 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
     # 그대로 None이든) admin_log를 만들어야 missing_stats가 정확하다.
     admin_log = _build_admin_log(
         my_team, enemy_team, ally_detected_count, enemy_detected_count,
-        self_row_idx, self_reason, original_image_path, layout, pair_evaluations,
+        self_row_idx, self_reason, None, layout, pair_evaluations,
         coarse_crop_box=coarse_crop_box, coarse_crop_used=coarse_crop_used,
-        coarse_crop_reason=coarse_crop_reason, coarse_crop_image_path=coarse_crop_image_path,
+        coarse_crop_reason=coarse_crop_reason, coarse_crop_image_path=None,
         original_image_shape=image.shape[:2],
     )
     admin_log["self_feedback_eligible"] = self_known
@@ -2148,4 +2224,7 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
     return {
         "report": report,
         "admin_log": admin_log,
+        "my_team_stats": _build_stat_dict(my_team),
+        "enemy_team_stats": _build_stat_dict(enemy_team),
+        "my_stats": _build_stat_dict([my_team[self_row_idx]]) if self_known else {},
     }

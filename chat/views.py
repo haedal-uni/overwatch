@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import uuid
 import traceback
 
@@ -315,12 +316,11 @@ def chat_feedback(request):
 
 @require_http_methods(["POST"])
 def chat_scoreboard_ocr(request):
-    """오버워치2 TAB 점수판 스크린샷을 분석해 표+코치 피드백 마크다운(report)을 반환한다.
+    """TAB 점수판 스크린샷을 분석해 표+코치 피드백 마크다운(report)을 반환한다.
 
-    분석 자체는 vision_stats.analyze_scoreboard_image가 담당한다(팀 구분/역할
-    배정/본인 판별/영웅 인식은 OpenCV, 숫자 인식과 피드백은 Gemini). 인식 실패
-    목록/유사도 점수/crop 경로 같은 진단 정보(admin_log)는 사용자 응답에는
-    포함하지 않고 ChatLog.metadata에만 저장해 관리자 페이지에서만 노출한다.
+    분석은 vision_stats.analyze_scoreboard_image가 담당한다(팀/역할/본인 판별과
+    영웅 인식은 OpenCV, 숫자와 피드백 생성은 Gemini). 진단 정보(admin_log)는
+    ChatLog.metadata에만 남기고 사용자 응답에는 포함하지 않는다.
     """
     try:
         image_file = request.FILES.get("image")
@@ -364,7 +364,46 @@ def chat_scoreboard_ocr(request):
             },
         )
 
-        return JsonResponse({"report": result["report"]})
+        # 점수판에서 인식된 팀 조합을 coach_context에 남겨, 이어지는 채팅
+        # 질문이 다시 언급하지 않아도 이어받게 한다. current_hero는 매 턴
+        # 메시지에 직접 선언해야만 인정되는 값이라 여기서는 건드리지 않는다.
+        hero_rows = admin_log.get("hero_rows", [])
+        enemy_team = [
+            r["hero"] for r in sorted(hero_rows, key=lambda r: r["row_index"])
+            if r.get("team") == "enemy" and r.get("hero") and r["hero"] != "unknown"
+        ]
+        ally_team = [
+            r["hero"] for r in sorted(hero_rows, key=lambda r: r["row_index"])
+            if r.get("team") == "ally" and r.get("hero") and r["hero"] != "unknown"
+        ]
+        # 팀 조합 이름뿐 아니라 실제 K/D/A·피해량·치유량 수치도 함께 세션에
+        # 남긴다. my_stats(본인 1인 스탯)는 chatbot_graph.infer_current_hero()가
+        # current_hero 판단의 최우선 근거로 쓰므로, 여기서 채워두면 점수판
+        # 분석 직후 후속 질문에서 current_hero/역할이 자동으로 확정된다.
+        my_team_stats = result.get("my_team_stats") or {}
+        enemy_team_stats = result.get("enemy_team_stats") or {}
+        my_stats = result.get("my_stats") or {}
+        if enemy_team or ally_team or my_team_stats or enemy_team_stats or my_stats:
+            conversation_context = request.session.get("coach_context", {})
+            if enemy_team:
+                conversation_context["enemy_team"] = enemy_team
+            if ally_team:
+                conversation_context["ally_team"] = ally_team
+            if my_team_stats:
+                conversation_context["my_team_stats"] = my_team_stats
+            if enemy_team_stats:
+                conversation_context["enemy_stats"] = enemy_team_stats
+            if my_stats:
+                conversation_context["my_stats"] = my_stats
+            # merge_context_node는 마지막 채팅 메시지로부터 10분이 지나면
+            # coach_context를 초기화한다(SESSION_TIMEOUT_SECONDS). 점수판
+            # 분석은 별도 엔드포인트라 이 타임스탬프를 갱신하지 않으면, 방금
+            # patch한 값이 다음 채팅 질문에서 바로 삭제될 수 있다.
+            conversation_context["last_message_ts"] = time.time()
+            request.session["coach_context"] = conversation_context
+            request.session.modified = True
+
+        return JsonResponse({"report": result["report"], "turn_id": turn_id})
 
     except ScoreboardAnalysisError as e:
         logger.warning("chat_scoreboard_ocr 분석 실패: %s", e)

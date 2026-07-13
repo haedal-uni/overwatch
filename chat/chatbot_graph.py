@@ -68,6 +68,7 @@ class ChatbotGraphState(TypedDict, total=False):
     recommend_card: Optional[Dict[str, Any]]
     ally_team: List[str]
     llm_ally_team: List[str]
+    compared_heroes: List[str]
     is_team_comp_question: bool
     focus_heroes: List[str]
     focus_hero_pick: Optional[str]
@@ -450,6 +451,47 @@ def extract_ally_team(text: str) -> List[str]:
     return []
 
 
+# "조합 어때?"류 평가 질문과 "뭘 더 뽑아야 해?"류 추천 요청 질문을 가르는
+# 표현. 후자만 추천 영웅 카드(recommend_card_mode="composition")로 보낸다 —
+# is_team_comp_question(아군 2명 이상 나열)만으로는 사용자가 평가를 원하는지
+# 추천을 원하는지 알 수 없다.
+_COMPOSITION_RECOMMEND_REQUEST_WORDS = (
+    "추천", "뭐 하면", "뭘 하면", "뭘 해야", "뭐 해야", "뭐가 좋을까", "뭐로 하면",
+    "골라야", "고를까", "고르면", "선택하는", "선택하면", "선택해야",
+    "누구를 고르", "누구 고르", "누구를 선택", "누구 선택", "누구를 뽑", "누구 뽑",
+)
+
+
+def wants_composition_recommendation(message: str) -> bool:
+    return any(w in message for w in _COMPOSITION_RECOMMEND_REQUEST_WORDS)
+
+
+# "아나랑 바티스트중 누가 더 잘 했어"처럼 아군 2명 이상의 실제 활약을
+# 비교해달라는 질문을 감지한다. 아군 2명 이상 나열만으로 composition으로
+# 확정하는 is_team_comp_question보다 이 판정을 우선해야, 조합 평가가 아니라
+# 실제 스탯 비교에 근거한 답으로 이어진다.
+_PERFORMANCE_COMPARISON_PATTERN = re.compile(
+    r"누(가|구)\s*(더|제일|가장)?\s*(잘\s*(했|하|한)|못\s*(했|하|한)|나은|나아|잘함|못함)"
+)
+
+
+def is_performance_comparison_question(message: str) -> bool:
+    return bool(_PERFORMANCE_COMPARISON_PATTERN.search(message))
+
+
+def find_performance_comparison_heroes(text: str) -> List[str]:
+    """비교 질문("바티스트랑 아나중에 누가 더 잘했어?")에 등장한 영웅들을
+    ally_team 후보로 뽑는다. LLM이 intent 분류 프롬프트의 규칙 14를 안 지켜
+    ally_team을 못 채워와도(즉 llm_ally_team이 비어도) 이 규칙 기반 폴백이
+    비교 대상을 잡아내야 compared_heroes가 정상적으로 채워진다. "상대"/"카운터"
+    같은 적대 신호가 있으면 실제로는 상대와의 비교일 수 있어 적용하지 않는다."""
+    if any(word in text for word in ADVERSARIAL_SIGNAL_WORDS):
+        return []
+    if not is_performance_comparison_question(text):
+        return []
+    return find_all_heroes(text)
+
+
 # 표준 구성(탱1/딜2/힐2) 기준으로 남은 역할을 추론한다. 정확히 한 역할만 비어
 # 있을 때만 확정하고, 그 외에는 None을 반환해 역할을 되묻게 한다.
 TEAM_COMP_ROLE_QUOTA = {"tank": 1, "damage": 2, "support": 2}
@@ -772,13 +814,17 @@ def infer_target_enemy(message: str, context: Dict[str, Any], intent: str) -> Op
         return None
 
     # 명시적 신호가 없을 때의 최후 수단: 메시지의 첫 영웅을 상대로 본다.
-    # 단, 아군으로 언급된 영웅은 제외해야 아군 나열 문장에서 엉뚱하게 채택되지 않는다.
+    # 아군으로 언급된 영웅은 제외해야 아군 나열 문장에서 엉뚱하게 채택되지
+    # 않는다. 규칙 기반 탐지만으로는 "메르시 힐량이 딸리는데" 같은 자연스러운
+    # 불만 표현을 놓치므로, merge_context_node가 LLM 결과까지 반영해 확정한
+    # ally_team_this_turn도 함께 제외 대상으로 삼는다.
     complaint_hero = find_ally_complaint_hero(text)
     ally_named_this_turn = (
         set(extract_ally_team(text))
         | set(find_self_comparison_heroes(text))
         | set(find_synergy_ally_heroes(text))
         | ({complaint_hero} if complaint_hero else set())
+        | set(context.get("ally_team_this_turn") or [])
     )
     heroes_in_text = find_all_heroes(text)
     heroes_in_text = [
@@ -872,8 +918,12 @@ def role_filter_from_text(message: str) -> Optional[str]:
 
 # current_hero가 전혀 파악되지 않은 채로 들어오면 역할을 반드시 되물어야 하는
 # intent. "map_strategy"는 특정 영웅과 무관한 맵 운영 질문일 수 있어 제외한다.
+# "composition"도 제외한다 — "둠피 메르시 조합 어때?"처럼 아군 조합 자체를
+# 묻는 질문은 사용자 자신의 역할과 무관하게 평가 가능하고,
+# generate_recommend_card_node가 역할을 못 정하면 role_filter="all"로
+# 탱커/딜러/힐러 골고루 추천하는 폴백이 있어 먼저 물어볼 필요가 없다.
 ROLE_CLARIFICATION_INTENTS = {
-    "performance_improve", "stay", "swap", "general", "counter", "situation", "composition",
+    "performance_improve", "stay", "swap", "general", "counter", "situation",
 }
 
 # 상성 카드는 "지금 어떤 영웅을 고를지" 추천하는 화면이라 이미 플레이 중인 영웅이
@@ -903,6 +953,14 @@ def should_ask_role_filter(state: ChatbotGraphState) -> bool:
 
     if intent == "counter" and target_enemy:
         return True
+
+    # 점수판 분석으로 이미 팀 전체 스탯(my_team_stats)을 알고 있다면, 그
+    # 데이터 자체가 답변의 근거가 되므로 사용자 자신의 역할을 몰라도 의미
+    # 있는 답을 만들 수 있다 — 질문 문구와 무관하게 역할 되묻기를 건너뛴다.
+    # counter(위에서 이미 처리됨)는 역할 고정 때문에 여전히 역할이 필요하므로
+    # 이 예외에서 제외된다.
+    if state.get("my_team_stats"):
+        return False
 
     # current_hero가 없다는 이유만으로 무조건 되묻지 않는다 — focus_heroes에
     # 설명 대상 영웅이 하나라도 있으면("솔저는 어떻게 플레이해?" → 솔저76)
@@ -1103,7 +1161,22 @@ def should_reset_enemy_context(
     new_current_hero: Optional[str],
 ) -> bool:
     prev_hero = context.get("current_hero")
+    # my_stats(점수판 본인 스탯)가 있으면 그 판의 사용자 영웅은 점수판으로 이미
+    # 고정돼 있어 같은 판 안에서 바뀔 수 없다. prev_hero가 이전 턴에 잘못
+    # 앵커링된 값으로 오염됐다가 my_stats 기반 추론으로 원래 영웅으로 돌아오는
+    # 경우까지 "영웅 변경"으로 보고 리셋하면, 점수판으로 이미 확보한
+    # my_team_stats/enemy_stats가 근거 없이 통째로 날아간다.
+    my_stats_hero = normalize_hero_name(
+        next(iter((context.get("my_stats") or {}).keys()), None)
+    )
     if prev_hero and new_current_hero and prev_hero != new_current_hero:
+        if my_stats_hero and my_stats_hero in (prev_hero, new_current_hero):
+            logger.info(
+                "[CONTEXT RESET SKIPPED] 영웅 변경처럼 보이지만(%s → %s) 점수판 "
+                "확정 영웅(%s)과 겹쳐 실제 교체로 보지 않음 — 컨텍스트 유지",
+                prev_hero, new_current_hero, my_stats_hero,
+            )
+            return False
         logger.info(
             "[CONTEXT RESET] 영웅 변경 감지: %s → %s — 적팀 컨텍스트 초기화",
             prev_hero, new_current_hero,
@@ -1284,6 +1357,12 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
     알려줘")는 그 맵에서 그 영웅을 어떻게 쓰는지 설명해달라는 뜻이지, 사용자가
     그 영웅을 플레이한다고 밝힌 것이 아니다. intent는 map_strategy이고
     current_hero는 null로 둬라(자기 선언 표현이 별도로 없는 한).
+14. "A랑 B 중 누가 더 잘했어/잘하는지", "A 아니면 B, 누가 나아?"처럼 아군
+    2명 이상의 실제 활약/기여도를 비교해달라는 질문은 규칙 12(조합/시너지
+    평가)가 아니라 performance_improve다 — "조합", "시너지", "궁합", "같이
+    쓰면" 같은 표현이 전혀 없고 "누가 (더) 잘했/잘하/못했/나은"류 비교·판단
+    요청이 핵심이면, 영웅 이름이 2개 이상이어도 그 조합 자체를 평가해달라는
+    질문으로 보지 마라. 이때도 ally_team은 규칙 10에 따라 채운다.
 
 예시:
 - "메르시가 힐을 안할건데 뭘로 힐을 많이 해야할까" → intent: performance_improve,
@@ -1292,6 +1371,8 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
   current_hero: null, target_enemy: null, enemy_team: [].
 - "일리오스 메르시 활용법 알려줘" → intent: map_strategy, current_hero: null,
   target_enemy: null, enemy_team: [].
+- "아나랑 바티스트중 누가 더 잘 했어" → intent: performance_improve,
+  current_hero: null, ally_team: ["아나", "바티스트"], target_enemy: null, enemy_team: [].
 """
 
         raw = call_llm_text(llm, prompt)
@@ -1630,16 +1711,59 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     rule_based_ally_team = (
         extract_ally_team(effective_message)
         or find_synergy_ally_heroes(effective_message)
+        or find_performance_comparison_heroes(effective_message)
         or ([effective_message_complaint_hero] if effective_message_complaint_hero else [])
     )
     ally_team_this_turn = llm_ally_team or rule_based_ally_team or []
     ally_team = ally_team_this_turn or (context.get("ally_team", []) if not context_was_reset else [])
 
+    # "아나랑 바티스트중 누가 더 잘 했어"처럼 아군 2명 이상의 실제 활약을
+    # 비교해달라는 질문의 대상 영웅을 기억해둔다. 후속 질문("판단해줘"처럼
+    # 영웅 이름 없이 이어지는 질문)에서도 이 비교 대상을 그대로 이어받아야,
+    # 전체 팀 순위나 이 질문과 무관한 다른 영웅/상대팀 얘기로 새지 않는다.
+    # focus_heroes(정확히 1명일 때만 이어받음)와 달리 비교는 애초에 2명
+    # 이상을 전제로 하므로 별도 필드로 둔다.
+    performance_comparison_this_turn = is_performance_comparison_question(effective_message)
+    # "제일"/"가장"("누가 제일 잘했어?")은 특정 2명이 아니라 팀 전체를 대상으로
+    # 하는 새 순위 질문이라는 뜻이다 — "더"만 있는 후속 질문과 달리 이전 비교
+    # 대상을 이어받으면 안 된다. 이 구분이 없으면 예전 비교 세션이 완전히
+    # 새로운 "누가 제일 잘했어?" 질문까지 옛 비교 대상으로 좁혀버린다.
+    has_superlative_ranking_word = any(w in effective_message for w in ("제일", "가장"))
+    if performance_comparison_this_turn and len(ally_team_this_turn) >= 2:
+        compared_heroes = ally_team_this_turn
+    elif (
+        performance_comparison_this_turn
+        and not mentioned_heroes_in_message
+        and not has_superlative_ranking_word
+        and not context_was_reset
+    ):
+        inherited_compared_heroes = context.get("compared_heroes", []) or []
+        # 상속받은 비교 대상이 이번 판 로스터(점수판에서 온 my_team_stats)에
+        # 아예 없으면, 그 사이 새 점수판을 올려 완전히 다른 판으로 넘어갔는데
+        # 세션에 예전 비교 대상만 남아있는 경우다 — 이때는 무관한 옛 값으로
+        # 보고 버린다.
+        current_roster = {
+            normalize_hero_name(h) for h in (context.get("my_team_stats") or {}).keys()
+        }
+        if current_roster and not any(
+            normalize_hero_name(h) in current_roster for h in inherited_compared_heroes
+        ):
+            compared_heroes = []
+        else:
+            compared_heroes = inherited_compared_heroes
+    else:
+        compared_heroes = []
+
     # 아군을 2명 이상 나열하면 "조합에서 어떤 영웅을 고를지" 묻는 질문으로 본다.
-    # 단, 이번 턴에 이미 자기 영웅을 선언했다면 이미 영웅을 골랐으므로 이 질문이
-    # 아니다 — 아니면 스탯 피드백 같은 질문도 아군 나열만으로 composition으로
-    # 잘못 전환된다.
-    is_team_comp_question = len(ally_team_this_turn) >= 2 and not current_hero_explicit_this_turn
+    # 이번 턴에 이미 자기 영웅을 선언했다면 이 질문이 아니다(스탯 피드백 질문이
+    # 아군 나열만으로 composition으로 잘못 전환되는 걸 막는다). 팀원 간 실제
+    # 활약을 비교해달라는 질문("누가 더 잘했어")도 조합 평가가 아니므로
+    # 제외한다 — 포함하면 스탯 비교 대신 회피성 답으로 샐 수 있다.
+    is_team_comp_question = (
+        len(ally_team_this_turn) >= 2
+        and not current_hero_explicit_this_turn
+        and not performance_comparison_this_turn
+    )
     # 표준 구성(탱1/딜2/힐2) 기준 남은 자리가 정확히 한 역할일 때만 확정한다.
     # is_team_comp_question 여부와 무관하게, 세션에 아군 조합이 남아있다면 후속
     # 질문에서도 계속 역할을 추론해 불필요한 재확인을 피한다.
@@ -1649,8 +1773,14 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     if is_team_comp_question:
         # 아군 조합 나열은 LLM의 intent 분류보다 신뢰도 높은 구조적 신호이므로 그대로 확정한다.
         intent = "composition"
+    elif performance_comparison_this_turn and len(ally_team_this_turn) >= 2 and intent == "composition":
+        # is_team_comp_question 규칙 자체는 위에서 이미 비교 질문을 제외했지만,
+        # intent 분류 프롬프트를 LLM이 안 지키고 그래도 composition으로 분류해오는
+        # 경우를 위한 안전장치 — 비교 질문 패턴도 구조적 신호이므로 LLM의 intent
+        # 분류보다 우선한다. 이게 없으면 비교를 회피하는 답으로 샐 수 있다.
+        intent = "performance_improve"
 
-    context_for_enemy = {**context, "current_hero": current_hero}
+    context_for_enemy = {**context, "current_hero": current_hero, "ally_team_this_turn": ally_team_this_turn}
     rule_based_target_enemy = infer_target_enemy(effective_message, context_for_enemy, intent)
     target_enemy = llm_target_enemy or rule_based_target_enemy
 
@@ -1804,7 +1934,12 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         # 않도록 그 영웅만 담는다 — "아나인데 리퍼가 괴롭혀" → ["아나"]만.
         focus_heroes = [current_hero]
     else:
-        focus_heroes = find_all_heroes(effective_message)
+        # ally_team으로 이미 분류된 영웅(아군 불만/시너지 등으로 언급된 팀원)은
+        # "설명 대상"이 아니라 "같이 뛰는 아군"이므로 제외한다 — 안 그러면
+        # "메르시 힐량이 딸리는데 내가 뭘 골라야 할까"처럼 아군의 약점을 근거로
+        # 자기 픽을 묻는 질문에서, 문장의 유일한 영웅이라는 이유만으로
+        # focus_heroes에 잡혀 사용자 자신이 그 영웅인 것처럼 답이 샐 수 있다.
+        focus_heroes = [h for h in find_all_heroes(effective_message) if h not in ally_team]
         if not focus_heroes and is_ellipsis_followup(effective_message):
             if len(previous_focus_heroes) == 1:
                 focus_heroes = list(previous_focus_heroes)
@@ -1829,7 +1964,9 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "my_stats": state.get("my_stats") or context.get("my_stats"),
         "my_team_stats": state.get("my_team_stats") or context.get("my_team_stats"),
         "high_threat_enemy": high_threat_enemy,
-        "has_stats": state.get("has_stats", False) or bool(context.get("my_stats") or context.get("enemy_stats")),
+        "has_stats": state.get("has_stats", False) or bool(
+            context.get("my_stats") or context.get("enemy_stats") or context.get("my_team_stats")
+        ),
         "enemy_named_this_turn": enemy_named_this_turn,
         "current_hero_uncertain": current_hero_uncertain,
     }
@@ -1867,6 +2004,13 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         context_patch["enemy_team"] = enemy_team
     if ally_team:
         context_patch["ally_team"] = ally_team
+    if compared_heroes:
+        context_patch["compared_heroes"] = compared_heroes
+    elif performance_comparison_this_turn:
+        # 비교 질문인데 이번 턴/세션 어디에도 비교 대상이 없으면(예: 세션이
+        # 리셋됐거나 처음부터 영웅을 안 밝힌 경우) 오래된 값이 남아있지 않게
+        # 명시적으로 비운다.
+        context_patch["compared_heroes"] = []
     if high_threat_enemy:
         context_patch["high_threat_enemy"] = high_threat_enemy
     my_stats_now = state.get("my_stats") or {}
@@ -1906,9 +2050,13 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
     # "추천 영웅 카드"(단일 목록 + 이유)의 모드. swap(교체 고민)과
     # composition(팀 조합 분석)은 서로 다른 질문이지만 둘 다 "지금 상황에 맞는
-    # 새 영웅을 추천해달라"는 목적은 같아서 같은 카드 형식을 쓴다.
+    # 새 영웅을 추천해달라"는 목적은 같아서 같은 카드 형식을 쓴다. composition은
+    # 메시지에 실제로 추천을 요청하는 표현이 있을 때만 카드로 보내고, "둠피
+    # 메르시 조합 어때?"처럼 조합 자체를 평가해달라는 질문은 generate_answer_
+    # node가 일반 텍스트로 답한다(intent는 composition으로 유지 — ally_team
+    # 표시 등은 그대로 필요).
     recommend_card_mode: Optional[str] = None
-    if is_team_comp_question:
+    if is_team_comp_question and wants_composition_recommendation(effective_message):
         recommend_card_mode = "composition"
     elif intent == "swap" and current_hero and not current_hero_uncertain:
         # 이미 쓰는 영웅이 있지만 상성이 안 좋아 교체를 고민하는 질문
@@ -1927,6 +2075,18 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "role_filter": effective_role_filter,
         "role_filter_explicit": bool(explicit_role_filter),
         "game_state": game_state,
+        # game_state 안에 계산해둔 값이지만, 뒤 노드들(judge_strategy_node,
+        # generate_answer_node, should_ask_role_filter 등)은 전부
+        # state.get("my_team_stats")처럼 최상위 키를 직접 읽는다. 여기서
+        # 최상위로도 꺼내주지 않으면, 이번 턴 메시지에 텍스트로 스탯을 직접
+        # 적지 않은 이상(parse_stats_from_text_node가 그 경우에만 최상위
+        # 키를 채움) 세션에 이어져 온 점수판 스탯이 답변 단계까지 전달되지
+        # 않는다.
+        "has_stats": game_state["has_stats"],
+        "my_stats": game_state["my_stats"],
+        "my_team_stats": game_state["my_team_stats"],
+        "enemy_stats": game_state["enemy_stats"],
+        "high_threat_enemy": game_state["high_threat_enemy"],
         "context_patch": context_patch,
         "enemy_named_this_turn": enemy_named_this_turn,
         "target_enemy_narrowed": target_enemy_narrowed,
@@ -1937,6 +2097,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "matchup_subject_is_enemy": matchup_subject_is_enemy,
         "recommend_card_mode": recommend_card_mode,
         "ally_team": ally_team,
+        "compared_heroes": compared_heroes,
         "is_team_comp_question": is_team_comp_question,
         "focus_heroes": focus_heroes,
         "needs_focus_hero_clarify": needs_focus_hero_clarify,
@@ -2558,17 +2719,11 @@ def try_canned_shortcut(
     answer_style: Optional[str],
 ) -> Dict[str, Any]:
     """5개 고정 버튼(과 비슷한 표현)에 대해 그래프를 실행하지 않고 미리 준비된
-    답을 즉시 돌려준다. chat_api가 run_chatbot_graph를 호출하기 전에 먼저
-    호출한다.
+    답을 즉시 돌려준다. chat_api가 run_chatbot_graph보다 먼저 호출한다.
 
-    반환값:
-    - result: 매칭됐다면 그대로 응답에 쓸 결과(run_chatbot_graph 반환값과 동일한
-      모양). 매칭 안 됐으면 None.
-    - resume_message: 캐시된 역할 되묻기(겐지 카운터)에 답했지만 캐시 데이터가
-      없는 역할(탱커/딜러/힐러)을 골라 실제 그래프를 태워야 하는 경우, 그래프에
-      넘길 원래 질문 원문. 그 외에는 None.
-    - context_updates: 세션에 즉시 반영해야 하는 정리용 값(캐시 pending 정리).
-    """
+    반환값: result(매칭 시 응답 결과, 아니면 None), resume_message(캐시된
+    역할 되묻기에 캐시 없는 역할로 답해 그래프를 태워야 할 때 넘길 원문,
+    그 외 None), context_updates(세션에 즉시 반영할 정리용 값)."""
     style = answer_style or context.get("answer_style") or "detailed"
     pending_topic = context.get("pending_canned_topic")
     pending_question = context.get("pending_canned_question") or ""
@@ -2976,6 +3131,14 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         current_hero = state.get("current_hero")
         current_hero_role = state.get("current_hero_role")
         has_stats = state.get("has_stats", False)
+        compared_heroes = state.get("compared_heroes") or []
+        # "겐지랑 아나중에 누가 더 잘했어?"(특정 2명 비교)뿐 아니라 "누가
+        # 제일 잘했어?"(팀 전체 순위)도 판단/순위를 원하는 질문이지 운영법을
+        # 원하는 게 아니다 — 둘 다 "바로 적용할 것 3가지" 같은 운영 팁을
+        # 만들지 않아야 한다.
+        is_hero_comparison_question = len(compared_heroes) >= 2 or is_performance_comparison_question(
+            state.get("message") or ""
+        )
         # 간단히/자세히 토글. "자세히"는 기존 서술형 답변을 그대로 유지하고,
         # "간단히"는 인게임 중 한눈에 훑어볼 수 있도록 영웅별 짧은 불릿 + 실행 목록만 남긴다.
         answer_style = state.get("answer_style") or "detailed"
@@ -3050,19 +3213,146 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         my_stats = state.get("my_stats") or {}
         my_team_stats = state.get("my_team_stats") or {}
 
+        # "둠피 메르시 조합 어때?"처럼 조합 평가 질문에 나온 영웅이 실제 분석된
+        # 이번 판 로스터(my_team_stats)와 전혀 겹치지 않으면, 점수판과 무관한
+        # 가정형 질문이다. 이때 점수판 스탯을 계속 프롬프트에 흘려보내면 LLM이
+        # 실제 로스터(예: 윈스턴)를 그 가정형 조합의 일부인 것처럼 섞어서 답한다
+        # — 이 경우엔 스탯 컨텍스트 자체를 답변 프롬프트에서 뺀다.
+        composition_ally_this_turn = {normalize_hero_name(h) for h in (state.get("ally_team") or [])}
+        composition_unrelated_to_match = bool(
+            state.get("intent") == "composition"
+            and not state.get("recommend_card_mode")
+            and my_team_stats
+            and composition_ally_this_turn
+            and not (composition_ally_this_turn & {normalize_hero_name(h) for h in my_team_stats.keys()})
+        )
+        if composition_unrelated_to_match:
+            enemy_stats = {}
+            my_stats = {}
+            my_team_stats = {}
+
         enemy_stat_text = _format_stat_text(enemy_stats, "상대팀")
         my_stat_text = _format_stat_text(my_stats, "나")
         team_stat_text = _format_stat_text(my_team_stats, "우리팀")
         stat_summary = "\n".join(filter(None, [enemy_stat_text, my_stat_text, team_stat_text]))
 
         stat_analysis_instruction = ""
-        if has_stats:
+        if has_stats and not composition_unrelated_to_match:
             stat_analysis_instruction = """
 스탯 분석 지시:
 - 사용자가 입력한 스탯을 바탕으로 현재 상황을 구체적으로 짚어줘라.
 - 내 스탯이 있으면: 딜량/킬/데스 수치를 언급하며 잘한 점과 개선할 점을 말해라.
 - 상대 스탯이 있으면: 딜량/킬이 높은 상대를 먼저 언급하고 어떻게 대처할지 설명해라.
 - 수치가 낮은 항목(예: 딜량 낮음, 데스 많음)의 원인과 해결책을 알려줘라.
+- 스탯 항목마다 그 영웅이 애초에 그 수치를 낼 수 있는 스킬을 가졌는지부터
+  너의 오버워치2 지식으로 판단해라. 힐 전담형 영웅의 낮은 피해량, 피해를
+  막거나 흡수하는 스킬(방벽·보호막·벽 등)이 없는 영웅의 경감량 0은 전부
+  구조적으로 정상인 수치이니 약점으로 지적하지 마라. 확인되지 않은 스킬
+  운용을 지어내서 그 수치의 원인처럼 서술하지 마라 — 반대로 수치가 높다고
+  "OO 스킬을 효율적으로 활용했다"처럼 실제로 확인할 수 없는 특정 스킬
+  사용을 칭찬하지도 마라(예: 딜량이 높다고 특정 기동 스킬을 잘 썼다고
+  단정하지 마라). 킬/데스/딜량/힐량/경감량처럼 스탯으로 실제 확인된 수치
+  자체만 근거로 삼아라. 치유량 대비 피해량
+  같은 비율도 팀 내부 숫자만 보지 말고, 상대 스탯이 있다면 같은 역할
+  상대와 비교해서 실제로 낮은지 판단해라. 단, 메르시처럼 피해 증폭(우클릭)
+  말고는 사실상 자체 공격 수단이 없는 힐러는 상대 힐러의 피해량과 상관없이
+  피해량 항목 자체를 비교·지적 대상에서 제외해라(치유량은 예외가 아니다 —
+  이런 힐러도 치유량이 다른 힐러보다 유의미하게 낮다면 그건 정상적인 약점
+  지적 대상이다).
+- 메르시가 아닌 힐러(모이라, 바티스트, 젠야타, 아나, 라이프위버 등)는
+  힐량과 별개로 상당한 딜량을 낼 수 있는 킷을 가지고 있다. 이런 힐러의
+  딜량이 같은 판 아군 탱커/딜러의 딜량에 준할 정도로 높으면서 힐량도
+  충분히 뒷받침된다면(치유량이 부족하지 않다면), 그건 힐러로서 이례적
+  으로 뛰어난 기여다 — "힐러니까 힐량/도움만 본다"는 식으로 이 딜량을
+  순위·비교 판단에서 빼거나 무시하지 마라. 역할이 다른 아군(예: 탱커)과
+  비교할 때도 이 힐러의 딜량을 그 아군의 딜량과 나란히 놓고 판단 근거로
+  반드시 포함해라 — 킬/도움/데스/힐량만 보고 판단하면 안 된다.
+- 경감량도 같은 원리로 판단해라: 방벽·보호막이나 디플렉트/매트릭스처럼
+  피해를 흡수·차단하는 스킬이 있는 탱커(예: 라인하르트, 시그마, 디바)는
+  그런 스킬이 없는 탱커보다 경감량이 구조적으로 훨씬 높게 나온다. 아군과
+  상대 탱커의 킷이 다르면 경감량 차이만으로 어느 쪽이 못했다고 판단하지
+  마라 — 아군 탱커에게 없는 스킬을 기준으로 "경감이 부족하다"고 지적하지
+  마라.
+- 회복 자원을 소모해 채워야 하는 킷(예: 자원이 바닥나면 다시 찰 때까지
+  치유를 못 하는 힐러)을 하는 영웅은, 치유량/피해량 총합 수치만 보지 말고
+  두 수치를 어떻게 배분했는지도 함께 판단해라. 치유와 피해(또는 견제)를
+  그 영웅의 자원 관리 메커니즘에 맞게 오가며 운용했다면 총합 수치가 낮아도
+  잘한 플레이로 봐야 하고, 자원 관리 없이 한쪽에만 치우쳤다면 총합이 높아도
+  운용이 미숙했을 수 있다는 걸 감안해 판단해라.
+- 사용자가 팀원 중 누가 잘했는지/못했는지 순위를 묻는다면 전략 조언으로
+  화제를 돌리며 회피하지 말고, 위에 주어진 실제 스탯을 근거로 직접 답해라.
+  순위만 나열하고 끝내지 말고, 각 순위마다 왜 그 순서인지 근거가 되는
+  구체적 수치(킬/데스/딜량/힐량/경감량 등)를 함께 짚어라. 이때도 위 스킬/
+  역할 판단 기준은 그대로 적용해라. 순위를 나열할 때는 "1위 ○○는 ...",
+  "2위 ○○는 ..."처럼 순위마다 줄을 바꿔 한 문단씩 써라 — 여러 순위를
+  한 문단에 이어 붙이지 마라.
+- 순위를 매길 때 킬/데스/도움 숫자만으로 판단하지 마라. 딜량/힐량/경감량도
+  반드시 함께 비교해서 실제 기여도를 판단해라. 킬 수가 가장 많다고 자동으로
+  최상위가 아니다 — 같은 역할군의 다른 딜러(아군이든 상대든)와 딜량을
+  비교해서, 킬은 많아도 딜량 자체는 다른 딜러와 비슷하거나 낮다면 화력
+  기여를 과대평가하지 마라. 반대로 킬 수는 비슷해도 딜량이나 힐량이 더
+  높은 쪽이 있다면 그 기여를 킬 수만으로 저평가하지 마라. 힐러의 딜량을
+  "힐러 항목이니까" 순위 판단에서 제외하지 마라 — 메르시가 아닌 힐러가
+  탱커/딜러급 딜량을 힐량 저하 없이 냈다면, 역할이 다르더라도 그 딜량을
+  탱커/딜러의 딜량과 직접 맞대어 비교해 순위에 반영해라.
+- 영웅의 고유 특성(예: 생존력이 높다, 기동성이 좋다)을 근거로 언급할 때,
+  그 특성 덕분에 나온 결과(예: 데스가 적음)를 "~인 영웅임에도" 처럼
+  특성과 결과가 서로 모순되는 것처럼 쓰지 마라. 특성이 원인이라면
+  "~답게", "~덕분에"처럼 인과관계가 맞는 표현만 써라(예: "생존력이 뛰어난
+  영웅답게 0데스를 유지하며..." O, "생존력이 뛰어난 영웅임에도 0데스" X).
+- 사용자가 팀 전체 순위나 팀원 전체 평가를 물었다면(본인 스탯 개선을
+  물은 게 아니라면), 답변 전체가 그 팀 전체 순위/평가만 다뤄야 한다.
+  "현재 [본인 영웅]의 스탯은 훌륭하며 ~하는 것이 좋습니다" 같은 본인 개인
+  운영 문단을 별도로 추가하지 마라 — 사용자가 묻지 않았다. 순위 질문에는
+  순위와 그 근거만 답하고 운영 팁이나 본인 얘기로 끝맺지 마라.
+"""
+            if len(compared_heroes) >= 2:
+                # "아나랑 바티스트중 누가 더 잘 했어" 같은 특정 2명 비교 질문은
+                # 위의 "팀 전체 순위" 지시와 범위가 다르다 — 이 지시가 없으면
+                # 후속 질문("판단해줘")에서 비교 대상을 잊고 전체 팀(+ 상대팀,
+                # 무관한 영웅의 플레이법)까지 다루는 엉뚱한 답으로 샌 적이 있다.
+                compared_list = ", ".join(compared_heroes)
+                compared_roles = {
+                    h: HERO_TO_ROLE.get(normalize_hero_name(h)) for h in compared_heroes
+                }
+                role_values = list(compared_roles.values())
+                same_role = len(set(role_values)) == 1 and all(role_values)
+                if same_role:
+                    comparison_method = (
+                        f"{compared_list}는 같은 역할이니 서로의 실제 스탯을 직접 비교해라."
+                    )
+                else:
+                    # 역할이 다르면 나오는 스탯 종류 자체가 다르다(딜러는 딜량/킬,
+                    # 힐러는 힐량/도움 위주) — "역할이 달라 비교 불가"라며 결론을
+                    # 회피하는 답이 반복돼, 방법을 구체적인 절차로 못박았다(추상적
+                    # 지시만으로는 LLM이 계속 회피하는 경향이 있었다).
+                    comparison_method = (
+                        f"{compared_list}는 역할이 달라 곧바로 비교할 수 없다는 이유로 "
+                        "회피하지 마라. 절차: 1) 각 영웅을 상대팀에서 같은 역할인 "
+                        "영웅과 먼저 비교해라(예: 딜러는 상대 딜러와 딜량/킬을, 힐러는 "
+                        "상대 힐러와 힐량/도움을 — 단, 힐러가 메르시가 아니고 딜량도 "
+                        "탱커/딜러에 준할 만큼 높다면 그 딜량도 반드시 함께 비교 근거에 "
+                        "포함해라, 힐량/도움만 보고 딜량을 빼면 안 된다) — 상대와 비교해 "
+                        "더 앞섰는지 판단해라. "
+                        "2) 아군 중 같은 역할이 더 있다면 그 아군과도 비교해라. 비교 대상의 "
+                        "역할이 서로 다르면(예: 탱커 vs 힐러), 딜량처럼 두 역할 모두에 있는 "
+                        "공통 지표는 역할에 상관없이 직접 맞대어 비교해라. "
+                        f"3) 두 비교 결과를 종합해 {compared_list} 중 누가 더 낫다고 "
+                        "볼 수 있는지 결론을 내려라."
+                    )
+                stat_analysis_instruction += f"""
+- 지금 사용자가 실제로 비교해달라고 한 대상은 정확히 {compared_list}뿐이다.
+  위 순위/평가 지시보다 이 지시를 우선해라 — 팀 전체 순위를 매기거나 다른
+  팀원, 상대팀 얘기로 범위를 넓히지 말고 "누가 더 낫다"는 명확한 결론을
+  내려라. {comparison_method} 반드시 한쪽의 손을 들어주는 결론으로 답을
+  끝내라 — "우열을 가리기 어렵다", "각자 역할을 충분히 수행했다", "판단
+  하기보다는 ~가 중요하다"처럼 결론을 회피하는 문장으로 답을 마무리하지
+  마라. 답변 전체에서 상대팀의 위협 요소(비교 근거로 쓴 상대 동일 역할
+  영웅 제외)나 사용자 본인 영웅(current_hero)의 스킬 활용법 얘기를 아예
+  꺼내지 마라 — {compared_list} 둘 다 사용자 본인이 아니라면 사용자 본인
+  얘기는 답변에 전혀 나오면 안 된다. 운영 팁이나 "바로 적용할 것 3가지"
+  없이 비교 결론과 그 근거만 답해라 — 사용자는 운영법이 아니라 판단을
+  원했다.
 """
 
         # 이번 턴에 언급되지 않은 상대 정보는 답변 프롬프트에서도 "없음"으로 표시한다.
@@ -3162,10 +3452,21 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "2. 추천 영웅이 있으면 \"추천 영웅: 영웅1, 영웅2\" 한 줄 뒤 영웅마다 이름 줄과 "
                 "\"- \"로 시작하는 짧은 이유 1~2개를 적어라. 없으면(운영 개선/유지 등) 이 블록 "
                 "없이 서론 없이 바로 4번만 적어라.\n"
-                "3. 스킬은 단축키를 괄호로 붙여라(예: 투창(우클릭)).\n"
-                "4. 마지막에 \"바로 할 것 3가지\" 아래 1~3개 항목을 \"1. \", \"2. \" 숫자 "
-                "목록으로 적어라."
+                "3. 스킬은 단축키를 괄호로 붙여라(예: 투창(우클릭))."
             )
+            if is_hero_comparison_question:
+                # "겐지랑 바티스트 중 누가 더 나아?" 같은 비교 질문은 운영 팁이
+                # 아니라 판단을 원하는 질문이다 — "3가지"를 강제로 채우면 결국
+                # 무관한 운영 팁으로 새는 원인이 된다.
+                style_rules_1to5 += (
+                    "\n4. \"바로 할 것 3가지\"는 만들지 마라 — 사용자는 운영 팁이 "
+                    "아니라 비교 결론을 원했다."
+                )
+            else:
+                style_rules_1to5 += (
+                    "\n4. 마지막에 \"바로 할 것 3가지\" 아래 1~3개 항목을 \"1. \", \"2. \" "
+                    "숫자 목록으로 적어라."
+                )
             stay_preference_instruction = (
                 "\"추천 영웅\" 블록과 서두 결론 문장 없이 핵심 운영 아이디어부터 한 줄씩 "
                 "적어라. 그 아래 \"운영 팁:\" 한 줄과 구체적 팁을 줄마다 하나씩 적어라."
@@ -3187,9 +3488,15 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "3. 힐 부족·팀 문제처럼 현재 역할로 해결하기 어려운 상황이라면,\n"
                 "   역할 변경 대신 \"현재 영웅으로 생존력을 높이는 법\" 또는 \"힐팩 활용\" 등 "
                 "대안을 제시해라.\n"
-                "4. 스킬명에 단축키를 같이 써라. 예: 다이너마이트(shift), 코치건(e).\n"
-                "5. 마지막에 \"바로 적용할 것 3가지\"를 적어라."
+                "4. 스킬명에 단축키를 같이 써라. 예: 다이너마이트(shift), 코치건(e)."
             )
+            if is_hero_comparison_question:
+                style_rules_1to5 += (
+                    "\n5. \"바로 적용할 것 3가지\"는 만들지 마라 — 사용자는 운영 팁이 "
+                    "아니라 비교 결론을 원했다."
+                )
+            else:
+                style_rules_1to5 += "\n5. 마지막에 \"바로 적용할 것 3가지\"를 적어라."
             stay_preference_instruction = (
                 "첫 문장은 반드시 \"그 영웅을 유지해도 된다\" 또는 \"불리하지만 운영으로 풀 수 "
                 "있다\"처럼\n"
@@ -3215,14 +3522,21 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
         # performance_improve는 지금 영웅으로 실력을 늘리려는 질문이지 교체 의도가
         # 아니다. 명시하지 않으면 조합 정보가 있을 때 모델이 스스로 "추천 영웅"
-        # 블록을 만들어 교체 얘기로 샐 수 있다.
+        # 블록을 만들어 교체 얘기로 샐 수 있다. 단, "아나랑 바티스트중 누가 더
+        # 잘했어"처럼 아군 2명의 활약을 비교해달라는 질문(compared_heroes)에는
+        # 이 지시를 넣지 않는다 — 비교 대상이 current_hero와 다른 영웅일 수
+        # 있는데 "지금 영웅 중심으로 답하라"는 문구가 붙으면 비교 대신
+        # current_hero 코칭으로 샐 수 있다. 이 경우 stat_analysis_instruction의
+        # compared_heroes 지시가 범위를 이미 정해준다.
         performance_improve_instruction = ""
-        if state.get("intent") == "performance_improve":
+        if state.get("intent") == "performance_improve" and len(state.get("compared_heroes") or []) < 2:
             performance_improve_instruction = """
 9. 사용자는 지금 영웅을 계속 플레이하면서 스탯/실력/운영을 개선하고 싶어하는
    것이지, 다른 영웅으로 바꾸고 싶어하는 게 아니다. "추천 영웅" 블록을 만들거나
    다른 영웅으로 바꾸라고 제안하지 말고, 지금 영웅으로 무엇을 다르게 하면
-   좋을지만 답해라."""
+   좋을지만 답해라. 단, 사용자가 본인이 아니라 팀원 전체나 다른 특정 팀원의
+   활약/순위를 물었다면 이 지시를 따르지 말고 위 "스탯 분석 지시"의 순위
+   관련 규칙을 따라라 — 그 팀원(들) 얘기만 답하고 본인 얘기는 꺼내지 마라."""
 
         # 맵 운영 질문은 영웅 추천을 요청한 게 아닌데도 role_filter가 기본값
         # "all"로 흐르면 모델이 스스로 "역할별 추천 영웅" 형식으로 답하는 경향이
@@ -3234,6 +3548,20 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
     요청한 게 아니라면(예: 좋은 자리, 타이밍, 시야 확보를 묻는 질문), 영웅별
     추천 목록 형식으로 답하지 말고 질문에 직접 답하는 문단으로 설명해라.
     영웅 이름은 예시가 필요할 때만 짧게 언급해도 된다."""
+
+        # composition인데 recommend_card_mode가 없다는 것은(merge_context_node
+        # 참고) "이 조합 어때?"류 평가 질문이지 "뭘 더 뽑아야 해?" 같은 추천
+        # 요청이 아니라는 뜻이다. 이 경우 답변이 곧바로 "보완할 영웅 추천"으로
+        # 새는 것을 막아야 한다 — 그건 추천 영웅 카드의 역할이고, 필요하면
+        # 후속 질문 버튼으로 유도하면 된다.
+        composition_evaluation_instruction = ""
+        if state.get("intent") == "composition" and not state.get("recommend_card_mode"):
+            composition_evaluation_instruction = """
+11. 사용자는 이미 정한 아군 조합(위 "아군 조합")이 어떤지 평가해달라고 묻고
+    있다(무엇을 더 뽑을지 추천해달라는 질문이 아니다). 그 조합의 강점/약점과
+    함께 쓸 때의 운영 방식을 답변의 중심 내용으로 다뤄라. 부족한 역할이나
+    약점이 있다면 "이런 부분이 아쉽다" 정도로 짧게만 짚고, 그걸 보완할 구체적인
+    영웅을 여러 명 나열해서 추천하지는 마라 — 그건 이 답변이 할 일이 아니다."""
 
         prompt = f"""
 너는 오버워치 코칭 RAG 챗봇이다. 사용자에게 한국어로 답변해라.
@@ -3277,7 +3605,7 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
 }}
 
 답변 작성 규칙:
-{style_rules_1to5}{enemy_naming_instruction}{swap_decision_instruction}{stay_intent_block}{performance_improve_instruction}{map_strategy_instruction}{suggested_questions_rules}
+{style_rules_1to5}{enemy_naming_instruction}{swap_decision_instruction}{stay_intent_block}{performance_improve_instruction}{map_strategy_instruction}{composition_evaluation_instruction}{suggested_questions_rules}
 
 절대 금지:
 - 허용 목록 밖 역할의 영웅 추천 (역할 고정으로 게임 내 선택 불가)
@@ -3354,13 +3682,30 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
                 if normalized:
                     enemy_context_heroes.add(normalized)
 
+            # enemy_stats(점수판에서 인식한 상대팀 실제 스탯)의 영웅도 같은
+            # 이유로 제외 대상에 포함한다 — enemy_team 텍스트 목록과 별도
+            # 경로로 세션에 남는 값이라, 둘 중 하나만 갱신되는 경우에도
+            # 빠짐없이 커버한다.
+            for h in (state.get("enemy_stats") or {}).keys():
+                normalized = normalize_hero_name(h)
+                if normalized:
+                    enemy_context_heroes.add(normalized)
+
             # 아군 조합("우리팀은 A B C D")도 이번 메시지에 다시 언급되지 않아도
             # 세션에서 이어받아 프롬프트에 표시되므로, 이미 확정된 아군 영웅을
             # 답변이 그대로 언급했을 뿐인데 "역할 밖 추천"으로 오인해 "다른 영웅"
-            # 으로 치환해버리는 문제를 막는다.
+            # 으로 치환해버리는 문제를 막는다. my_team_stats(점수판 실제 팀
+            # 스탯)의 영웅도 같은 이유로 포함한다 — ally_team은 텍스트 나열/
+            # hero_rows 기반이라 인식 실패 등으로 my_team_stats와 어긋날 수
+            # 있는데, 실제 매치에 있었던 팀원을 설명하는 문장까지 "다른 영웅"
+            # 으로 뭉개면 랭킹/총평 답변 자체가 망가진다.
             ally_context_heroes = {
                 normalize_hero_name(h) for h in (state.get("ally_team") or []) if h
             }
+            for h in (state.get("my_team_stats") or {}).keys():
+                normalized = normalize_hero_name(h)
+                if normalized:
+                    ally_context_heroes.add(normalized)
 
             forbidden_in_answer = [
                 h for h in find_all_heroes(answer)

@@ -1,0 +1,142 @@
+/* column_filter.js가 만드는 컬럼 헤더 드롭다운 필터의 스타일.
+   Django 관리자 기본 CSS 변수(--body-bg 등)를 그대로 써서 라이트/다크
+   테마가 바뀌어도 자동으로 맞춰진다. */
+
+th.col-filter-th {
+  position: relative;
+}
+
+.col-filter-toggle {
+  /* 헤더 배경이 어두운 마스트헤드가 아니라 밝은 표 헤더라, --header-link-color
+     (마스트헤드용 흰색)를 쓰면 흰 배경에 흰 글자가 되어 안 보이는 문제가
+     있었다 — body-quiet-color(회색)로 항상 보이는 칩 형태로 바꿨다. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-color, #ccc);
+  background: var(--body-bg, #fff);
+  color: var(--body-quiet-color, #666);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin-left: 6px;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.col-filter-toggle:hover {
+  background: var(--selected-bg, #e4e4e4);
+  color: var(--body-fg, #333);
+}
+
+.col-filter-toggle.active {
+  border-color: var(--link-fg, #417893);
+  color: var(--link-fg, #417893);
+  font-weight: 700;
+}
+
+.col-filter-popup {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  min-width: 160px;
+  max-width: min(80vw, 320px);
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--body-bg, #fff);
+  color: var(--body-fg, #333);
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  font-weight: normal;
+  text-transform: none;
+  white-space: normal;
+}
+
+.col-filter-popup.open {
+  display: block;
+}
+
+.col-filter-popup ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+
+.col-filter-popup li {
+  margin: 0;
+}
+
+.col-filter-popup li a {
+  display: block;
+  padding: 6px 12px;
+  color: var(--body-fg, #333);
+  text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.col-filter-popup li a:hover {
+  background: var(--selected-bg, #e4e4e4);
+}
+
+.col-filter-popup li.selected a {
+  font-weight: 700;
+  color: var(--link-selected-fg, var(--secondary, #417690));
+}
+
+/* 모바일: 팝업이 화면 밖으로 넘어가지 않게 폭을 화면 기준으로 제한한다. */
+@media (max-width: 600px) {
+  .col-filter-popup {
+    max-width: 90vw;
+  }
+}
+
+/* intent 값 설명 토글(change_list.html) */
+.intent-legend {
+  margin-bottom: 16px;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 6px;
+  background: var(--body-bg, #fff);
+  color: var(--body-fg, #333);
+  padding: 10px 14px;
+}
+
+.intent-legend summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--link-fg, #417893);
+}
+
+.intent-legend table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.intent-legend th,
+.intent-legend td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color, #ccc);
+  vertical-align: top;
+}
+
+.intent-legend th {
+  color: var(--body-quiet-color, #666);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.intent-legend td:first-child {
+  white-space: nowrap;
+  font-weight: 700;
+}
