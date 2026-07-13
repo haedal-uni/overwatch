@@ -18,20 +18,12 @@ MD_PATH = "source/overwatch.md"
 DB_PATH = "./chroma_db_overwatch"
 COLLECTION_NAME = "overwatch_docs"
 
-# Component class
 class ChatBot:
-    """
-    - markdown 문서 로드
-    - 문서 chunk 분할
-    - HuggingFace embedding 로드
-    - Chroma vectorstore 생성/로드
-    - Gemini LLM 로드
-    - CLI 테스트용 질의응답
+    """markdown 문서를 chunk/임베딩/벡터스토어로 준비하고 Gemini LLM을 로드하는 RAG 컴포넌트 빌더.
 
-    주의:
-    - self.chat_history는 CLI 테스트용이다.
-    - Django 웹 서비스에서는 사용자별 세션 컨텍스트를 사용해야 하므로
-      singleton ChatBot의 chat_history를 웹 대화 기억으로 쓰면 안 된다.
+    self.chat_history는 CLI 테스트 전용이다. Django 웹 서비스는 사용자별 세션
+    컨텍스트를 쓰므로, 싱글턴인 이 인스턴스의 chat_history를 웹 대화 기억으로
+    재사용하면 안 된다.
     """
 
     def __init__(
@@ -43,7 +35,7 @@ class ChatBot:
         chunk_overlap=50,
         search_k=7,
         embedding_device="cpu",
-        llm_model="gemini-3.1-flash-lite", # gemini-2.5-flash
+        llm_model="gemini-3.1-flash-lite",
         temperature=0,
         max_history=5,
     ):
@@ -59,7 +51,6 @@ class ChatBot:
         self.llm_model = llm_model
         self.temperature = temperature
 
-        # CLI 전용 대화 기록
         self.chat_history = []
         self.max_history = max_history
 
@@ -67,9 +58,7 @@ class ChatBot:
         self._llm = None
 
     def load_docs(self):
-        """
-        markdown 문서를 읽고 RAG 검색용 chunk로 나눈다.
-        """
+        """markdown 문서를 읽고 RAG 검색용 chunk로 나눈다."""
         if not os.path.exists(self.md_path):
             raise FileNotFoundError(f"'{self.md_path}' 파일이 없습니다.")
 
@@ -105,9 +94,7 @@ class ChatBot:
         return docs
 
     def get_embeddings(self):
-        """
-        HuggingFace embedding 모델을 lazy loading한다.
-        """
+        """HuggingFace embedding 모델을 최초 호출 시 생성하고 이후 재사용한다."""
         if self._embeddings is None:
             from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -122,9 +109,7 @@ class ChatBot:
         return self._embeddings
 
     def create_vectorstore(self, reset=True):
-        """
-        markdown 문서를 chunk로 나눈 뒤 Chroma vectorstore를 생성한다.
-        """
+        """markdown 문서를 chunk로 나눈 뒤 Chroma vectorstore를 생성한다."""
         logger.info("=" * 50)
         logger.info("[VectorStore 생성] markdown 문서 저장 시작")
 
@@ -144,9 +129,7 @@ class ChatBot:
         return vectorstore
 
     def build_rag_components(self):
-        """
-        RAG 검색에 사용할 retriever를 준비한다.
-        """
+        """RAG 검색에 사용할 retriever를 준비한다."""
         if not os.path.exists(self.db_path):
             logger.info("'%s' 디렉토리가 없습니다. VectorStore를 새로 생성합니다.", self.db_path)
             self.create_vectorstore(reset=True)
@@ -171,9 +154,7 @@ class ChatBot:
         return retriever
 
     def get_llm(self):
-        """
-        Gemini LLM을 lazy loading한다.
-        """
+        """Gemini LLM을 최초 호출 시 생성하고 이후 재사용한다."""
         if self._llm is None:
             api_key = os.getenv("GOOGLE_API_KEY")
 

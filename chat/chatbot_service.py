@@ -1,4 +1,3 @@
-# chatbot_service.py
 import logging
 from typing import Any, Optional, Tuple
 
@@ -12,9 +11,7 @@ _llm: Optional[Any] = None
 
 
 def initialize_chatbot() -> Tuple[ChatBot, Any, Any]:
-    """
-    RAG 챗봇에 필요한 무거운 컴포넌트를 한 번만 초기화한다.
-    """
+    """RAG 챗봇에 필요한 무거운 컴포넌트를 최초 1회만 초기화하고 이후 재사용한다."""
     global _chatbot, _retriever, _llm
 
     if _chatbot is not None and _retriever is not None and _llm is not None:
@@ -36,7 +33,5 @@ def initialize_chatbot() -> Tuple[ChatBot, Any, Any]:
 
 
 def get_chatbot_components() -> Tuple[ChatBot, Any, Any]:
-    """
-    LangGraph 노드에서 사용하는 공용 컴포넌트 getter.
-    """
+    """LangGraph 노드에서 쓰는 공용 컴포넌트 getter."""
     return initialize_chatbot()

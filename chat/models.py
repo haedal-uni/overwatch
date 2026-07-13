@@ -24,7 +24,17 @@ class ChatLog(models.Model):
     is_unsatisfied = models.BooleanField("불만족 여부", default=False, db_index=True)
     feedback_reason = models.TextField("불만족 사유", null=True, blank=True)
 
+    # 관리자가 불만족 피드백을 검토하며 남기는 처리 상태. is_unsatisfied와 달리
+    # 관리자가 admin에서 직접 체크/작성하며, 처리 완료 표시와 별개로 메모만
+    # 남기고 나중에 다시 고칠 수도 있어야 해서 두 필드로 분리했다.
+    is_resolved = models.BooleanField("처리 완료", default=False, db_index=True)
+    resolution_note = models.TextField("처리 메모", null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = "채팅 로그"
+        verbose_name_plural = "채팅 로그"
 
     def __str__(self):
         return f"[{self.role}] {self.message[:30]}"
@@ -36,11 +46,7 @@ class ErrorLogManager(models.Manager):
 
 
 class ErrorChatLog(ChatLog):
-    """
-    ChatLog 중 role="ERROR"인 것만 모아 보여주는 프록시 모델.
-    실제 테이블은 chat_chatlog를 그대로 쓰고, 관리자 페이지 사이드바에
-    "오류 로그"로 별도 진입점을 만들기 위한 용도다.
-    """
+    """ChatLog 중 role="ERROR"인 것만 보여주는 프록시 모델(관리자 페이지 "오류 로그" 메뉴)."""
 
     objects = ErrorLogManager()
 
@@ -56,9 +62,7 @@ class UnsatisfiedAnswerManager(models.Manager):
 
 
 class UnsatisfiedChatLog(ChatLog):
-    """
-    사용자가 "만족스럽지 않다"고 표시한 AI 답변만 모아 보여주는 프록시 모델.
-    """
+    """사용자가 "만족스럽지 않다"고 표시한 AI 답변만 모아 보여주는 프록시 모델."""
 
     objects = UnsatisfiedAnswerManager()
 
