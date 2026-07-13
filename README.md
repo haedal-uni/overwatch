@@ -6,31 +6,39 @@ https://github.com/user-attachments/assets/55608d31-8515-4a07-b698-2bdbb32e7998
 
 <br><br> 
 
-<img src="https://github.com/user-attachments/assets/0d1a274a-2baf-4e25-b40a-1143824aa274" />
+**도움말**      
 
-채팅 화면
+<img src="https://github.com/user-attachments/assets/60137cb3-3d19-46b8-9223-45f0bf383d0b" width="60%" />
+
+<img src="https://github.com/user-attachments/assets/e04de4fb-c1e5-48f3-a833-cbf291f3e3b2" width="80%" />   
 
 <br><br>
 
-<img src="https://github.com/user-attachments/assets/e3e2bfe1-c0e7-441c-8060-3772d8f1ab5d" width="40%" />
+**이미지 분석**    
+
+<img src="https://github.com/user-attachments/assets/881567f9-4e82-41e1-9204-bfe1b45c040a" width="80%" />  
+
+<br><br>
+
+**맵 선택하기**
+
+<img src="https://github.com/user-attachments/assets/6ccc5e90-ca8e-4885-94e5-061636b3d268" width="50%"/>   
+
+<img src="https://github.com/user-attachments/assets/c5d7e5a9-f173-4819-9838-58ba27d4f831" width="70%"/>
+
+<img src="https://github.com/user-attachments/assets/94d809b3-5e40-4a62-85f0-71bbfbd2df95" width="70%"/>
+
+<br><br>
+
+**스탯 감지**
+
+<img src="https://github.com/user-attachments/assets/3bd9320a-3136-44b9-a134-ac5358a3be87" width="80%"/>    
 
 <br><br> 
 
-<img src="https://github.com/user-attachments/assets/76d20276-4ca0-437e-b11a-09fe1cc62d50" />
+**대화 저장하기 및 불러오기**
 
-공수 구분이 있을 경우 선택 버튼 
-
-<br>
-
-<img src="https://github.com/user-attachments/assets/9e56c7d3-8959-4490-86f4-ec9aa6552dba" />
-
-맵 구분
-
-<br><br>
-
-<img src="https://github.com/user-attachments/assets/d0a866d7-199c-4c10-b799-354ac667f2cc" />
-
-스탯 감지
+<img src="https://github.com/user-attachments/assets/b6f9314e-3dd7-449d-8c48-5712a5044205"  width="80%"/>    
 
 <br><br> 
 
