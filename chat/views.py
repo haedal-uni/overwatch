@@ -407,7 +407,7 @@ def chat_scoreboard_ocr(request):
 
     except ScoreboardAnalysisError as e:
         logger.warning("chat_scoreboard_ocr 분석 실패: %s", e)
-        return JsonResponse({"error": "이미지를 분석할 수 없습니다. 점수판 화면 캡처인지 확인해주세요."}, status=400)
+        return JsonResponse({"error": "이미지를 분석할 수 없습니다. 스탯창 화면 캡처인지 확인해주세요."}, status=400)
 
     except Exception as e:
         logger.exception("chat_scoreboard_ocr 오류: %s", e)
