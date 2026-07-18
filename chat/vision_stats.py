@@ -1940,7 +1940,7 @@ def _generate_team_feedback(llm, my_team: List[Dict[str, Any]], enemy_team: List
         "overview": (parsed.get("overview") or "").strip() or "이번 판의 교전 흐름을 판단하기에 정보가 부족합니다.",
         "good_points": (parsed.get("good_points") or "").strip() or "확인된 정보 안에서 뚜렷한 강점을 판단하기 어렵습니다.",
         "concerns": (parsed.get("concerns") or "").strip() or "확인된 정보 안에서 뚜렷한 약점을 판단하기 어렵습니다.",
-        "next_tips": (parsed.get("next_tips") or "").strip() or "다음 판에는 좀 더 선명한 점수판 스크린샷으로 다시 확인해보세요.",
+        "next_tips": (parsed.get("next_tips") or "").strip() or "다음 판에는 좀 더 선명한 스탯창 스크린샷으로 다시 확인해보세요.",
     }
 
 
@@ -2146,6 +2146,14 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
     enemy_team, enemy_detected_count, _, _, enemy_row_crops, enemy_hero_crops = _build_team_rows(
         cv2, np, image, layout["enemy"]["row_boxes"], templates, team="enemy", team_box=layout["enemy"]["team_box"],
     )
+
+    # 양쪽 팀 다 파란/빨간 팀 패널을 하나도 못 찾았다면 점수판 캡처가 아닐
+    # 가능성이 높다 — 이 상태로 Gemini에 숫자 인식을 요청하면 관계없는
+    # 이미지에 대해 헛수치/헛피드백만 생성하게 되므로, 여기서 조기에
+    # 반려한다. chat_scoreboard_ocr의 ScoreboardAnalysisError 핸들러가
+    # "점수판 화면 캡처인지 확인해달라"는 안내를 사용자에게 보여준다.
+    if ally_detected_count == 0 and enemy_detected_count == 0:
+        raise ScoreboardAnalysisError("점수판 팀 패널을 전혀 찾지 못했습니다(점수판 캡처가 아닐 가능성).")
 
     if turn_id:
         debug_paths = _save_debug_images(

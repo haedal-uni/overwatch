@@ -106,7 +106,7 @@ class ChatLogDisplayMixin:
             return
         self.message_user(
             request,
-            f"로그는 삭제됐지만 디스크의 점수판 디버그 폴더 {len(failed_turn_ids)}개는 "
+            f"로그는 삭제됐지만 디스크의 스탯창 디버그 폴더 {len(failed_turn_ids)}개는 "
             f"권한 문제로 삭제하지 못했습니다(turn_id: {', '.join(failed_turn_ids)}). "
             "서버에서 logs/scoreboard_debug 폴더의 소유권/권한을 확인해주세요.",
             level="warning",
@@ -339,7 +339,7 @@ class ChatLogDisplayMixin:
     def _sb_th(self, text):
         return format_html('<th style="{}">{}</th>', self.SCOREBOARD_TH_STYLE, text)
 
-    @admin.display(description="점수판 분석 진단 정보 (관리자 전용)")
+    @admin.display(description="스탯창 분석 진단 정보 (관리자 전용)")
     def scoreboard_admin_log_display(self, obj):
         """점수판 분석 진단 정보(metadata.admin_log: 팀 패널 좌표, 행별 crop,
         영웅 유사도 점수/후보)를 관리자 전용으로 렌더링한다. 사용자 응답에는
@@ -618,7 +618,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         ("메시지", {
             "fields": ("related_question", "message_box", "matchup_card_display", "recommend_card_display", "suggested_questions_display"),
         }),
-        ("점수판 분석 진단 정보 (관리자 전용)", {
+        ("스탯창 분석 진단 정보 (관리자 전용)", {
             "fields": ("scoreboard_admin_log_display",),
             "classes": ("collapse",),
         }),

@@ -1825,7 +1825,7 @@
         <div class="input-box">
           <textarea id="userInput" rows="1" placeholder="질문을 입력하세요. Enter 전송, Shift+Enter 줄바꿈"></textarea>
           <input type="file" id="screenshotInput" accept="image/png,image/jpeg,image/webp" hidden>
-          <button type="button" class="upload-btn" id="uploadBtn" title="점수판(TAB) 스크린샷 업로드"></button>
+          <button type="button" class="upload-btn" id="uploadBtn" title="스탯창(TAB) 스크린샷 업로드"></button>
           <button class="send-btn" id="sendBtn">전송</button>
         </div>
         <div class="composer-hint">
@@ -2049,8 +2049,8 @@
       // 인식 요약/표/불확실 항목/코치 피드백까지 전부 서버(vision_stats.py의
       // build_scoreboard_report)에서 마크다운으로 완성해서 내려준다 — 본인
       // 판별 우선순위나 표 형식이 바뀌어도 프론트를 따로 손볼 필요가 없다.
-      if (data.report) return `📋 점수판 분석 결과\n\n${data.report}`;
-      return '📋 점수판을 분석했지만 표시할 내용이 없습니다.';
+      if (data.report) return `📋 스탯창 분석 결과\n\n${data.report}`;
+      return '📋 스탯창을 분석했지만 표시할 내용이 없습니다.';
     }
 
     async function uploadScoreboard(file) {
@@ -2075,7 +2075,7 @@
       } finally {
         uploadBtn.disabled = false;
         uploadBtn.innerHTML = UPLOAD_ICON;
-        uploadBtn.title = '점수판(TAB) 스크린샷 업로드';
+        uploadBtn.title = '스탯창(TAB) 스크린샷 업로드';
         if (composerHintText) composerHintText.textContent = composerHintDefault;
         screenshotInput.value = '';
       }
@@ -2089,10 +2089,10 @@
       const modal = document.createElement('div'); modal.className = 'save-modal';
       modal.innerHTML = `
         <div class="save-modal-header">
-          <h3>점수판 이미지 올리는 법</h3>
+          <h3>스탯창 이미지 올리는 법</h3>
           <button type="button" class="save-modal-close" id="scoreboardGuideCloseBtn">×</button>
         </div>
-        <div class="save-modal-sub">인게임에서 Tab 키를 눌렀을 때 나오는 K/D/A 점수판 화면을 캡쳐해서 올려주세요.<br><br>⚠️ 휴대폰으로 화면을 촬영한 사진이 아니라, 반드시 PC 화면 캡쳐(스크린샷)로 올려야 정확하게 분석돼요.</div>
+        <div class="save-modal-sub">인게임에서 Tab 키를 눌렀을 때 나오는 K/D/A 스탯창 화면을 캡쳐해서 올려주세요.<br><br>⚠️ 휴대폰으로 화면을 촬영한 사진이 아니라, 반드시 PC 화면 캡쳐(스크린샷)로 올려야 정확하게 분석돼요.</div>
         <button type="button" class="save-modal-save-btn" id="scoreboardGuideConfirmBtn">확인했어요</button>
       `;
       overlay.appendChild(modal);
@@ -2445,7 +2445,7 @@
       {
         target: () => $('uploadBtn'),
         title: '이미지 분석',
-        desc: '인게임에서 Tab을 눌렀을 때 나오는 K/D/A 점수판 화면을 캡쳐해서 올리면\n전적을 분석해서 코칭해드려요.',
+        desc: '인게임에서 Tab을 눌렀을 때 나오는 K/D/A 스탯창 화면을 캡쳐해서 올리면\n전적을 분석해서 코칭해드려요.',
       },
       {
         target: () => $('saveChatBtn'),
