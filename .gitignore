@@ -228,3 +228,4 @@ source/
 logs/
 **/migrations/
 rag_test.py
+chat/hero_icons
