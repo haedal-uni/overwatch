@@ -18,11 +18,12 @@ from .models import ChatLog, ErrorChatLog, UnsatisfiedChatLog
 
 logger = logging.getLogger(__name__)
 
-# 점수판 디버그 이미지 파일명 화이트리스트. vision_stats._save_debug_images가
-# 만드는 파일명 규칙과 일치해야 하며, 여기 안 맞는 이름은 경로 조작 방지를
-# 위해 scoreboard_debug_image_view가 전부 거부한다.
+# 점수판 디버그 이미지 파일명 화이트리스트 — vision_stats._save_debug_images가
+# 만드는 파일명 규칙과 일치해야 한다. scoreboard_debug_image_view가 경로
+# 조작 방지를 위해 이 패턴에 안 맞는 이름은 전부 거부한다. 팀당 인원수(5/6)
+# 가 이미지마다 달라질 수 있어 행 번호는 \d+로 매칭한다.
 SCOREBOARD_DEBUG_FILENAME_RE = re.compile(
-    r"(?:ally|enemy)_row_[1-5]_(?:row|hero)_crop\.png|original\.png|coarse_crop\.png"
+    r"(?:ally|enemy)_row_\d+_(?:row|hero)_crop\.png|original\.png|coarse_crop\.png"
 )
 SCOREBOARD_DEBUG_TURN_ID_RE = re.compile(r"[A-Za-z0-9\-]+")
 
@@ -81,9 +82,8 @@ class ChatLogDisplayMixin:
         )
 
     def has_change_permission(self, request, obj=None):
-        # 로그는 읽기 전용이다 — readonly_fields만으로는 저장 버튼이 계속
-        # 노출돼 클릭할 때마다 실질적 변경 없이 LogEntry가 쌓이므로, False로
-        # 막아 저장 버튼 자체를 없앤다(목록/상세 조회는 별도 권한이라 가능).
+        # 로그는 읽기 전용이다 — 저장 버튼을 노출하면 클릭할 때마다 실질적
+        # 변경 없이 LogEntry만 쌓인다(목록/상세 조회는 별도 권한이라 가능).
         return False
 
     def history_view(self, request, object_id, extra_context=None):
@@ -378,6 +378,7 @@ class ChatLogDisplayMixin:
                 'pair_score: {} · x_fallback: {} · y_fallback: {} · '
                 'expected_row_height: {} · row_heights: {}<br>'
                 'layout 검증: {} ({})<br>'
+                '역할 순서(role_labels): {}<br>'
                 'pair 세부 점수: {}'
                 '</span>'
                 '</div>',
@@ -391,6 +392,7 @@ class ChatLogDisplayMixin:
                 data.get("expected_row_height"), data.get("row_heights") or "-",
                 "통과" if data.get("layout_validation_ok") else "실패",
                 data.get("layout_validation_reason") or "-",
+                ", ".join(data.get("role_labels") or []) or "-",
                 pair_details or "-",
             )
 
@@ -494,7 +496,7 @@ class ChatLogDisplayMixin:
         return format_html(
             '<div style="background:#111827; color:#e5e7eb; border:1px solid #374151; '
             'padding:14px; border-radius:8px; font-size:13px; line-height:1.6;">'
-            '<div><strong>우리팀 인식:</strong> 5명 중 {}명 · <strong>상대팀 인식:</strong> 5명 중 {}명</div>'
+            '<div><strong>우리팀 인식:</strong> {}명 중 {}명 · <strong>상대팀 인식:</strong> {}명 중 {}명</div>'
             '<div style="margin-top:6px;"><strong>본인 추정 행:</strong> {} · <strong>이유:</strong> {} · '
             '<strong>본인 영웅:</strong> {} · <strong>판별 실패:</strong> {}</div>'
             '<div style="margin-top:6px;"><strong>영웅 인식 방식:</strong> {}</div>'
@@ -509,7 +511,8 @@ class ChatLogDisplayMixin:
             '<div style="margin-top:10px;"><strong>개인 피드백 생성 여부:</strong> {} · '
             '<strong>상대 조합 분석 허용:</strong> {} · <strong>영웅 인식률 낮음:</strong> {}</div>'
             '</div>',
-            log.get("ally_detected_count"), log.get("enemy_detected_count"),
+            log.get("ally_roster_size") or 5, log.get("ally_detected_count"),
+            log.get("enemy_roster_size") or 5, log.get("enemy_detected_count"),
             log.get("self_row_index") or "확인 필요", log.get("self_reason") or "-",
             log.get("self_hero") or "-", "예" if log.get("self_determination_failed") else "아니오",
             log.get("hero_icon_method") or "-",
