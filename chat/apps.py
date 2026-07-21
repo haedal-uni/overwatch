@@ -22,7 +22,7 @@ class ChatConfig(AppConfig):
         ChatConfig._initialized = True
 
         try:
-            from .chatbot_service import initialize_chatbot
+            from chat.rag.components import initialize_chatbot
             initialize_chatbot()
             logger.info("ChatBot 초기화 완료")
         except Exception as exc:
