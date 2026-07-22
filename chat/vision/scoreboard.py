@@ -31,7 +31,8 @@ from chat.domain.prompts import stat_judgement_rules
 
 logger = logging.getLogger(__name__)
 
-# 인식 품질 문제 시 배포 없이 끄기 위한 킬 스위치(.env로 읽고 기본값은 켜짐).
+# 스탯창 분석 중 Gemini가 맡은 부분(숫자 인식 + 피드백 생성)만 켜고 끈다 —
+# 영웅/팀 인식(OpenCV)은 영향받지 않는다. .env로 읽고 기본값은 켜짐.
 # 꺼진 동안 수치 칸은 "확인 필요", 피드백은 고정 문구로 나간다.
 ENABLE_GEMINI_STATS_AND_FEEDBACK = os.getenv(
     "ENABLE_GEMINI_STATS_AND_FEEDBACK", "true"
@@ -2406,7 +2407,7 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
             team_feedback = team_future.result()
             personal_feedback = personal_future.result() if personal_future else None
     else:
-        # 킬 스위치가 꺼진 경우. 수치는 None으로 초기화돼 있어 표에는
+        # Gemini를 쓰지 않는 경우. 수치는 None으로 초기화돼 있어 표에는
         # "확인 필요"로 나간다.
         team_feedback = {
             "overview": "영웅 인식(OpenCV) 정확도 개선 작업 중이라 코치 피드백은 잠시 꺼둔 상태입니다.",

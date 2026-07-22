@@ -1274,11 +1274,16 @@
     }
 
     /* 어떤 질문에서 간단히/자세히가 실제로 갈리는지 안내 — 카드형 답변
-       (상성/추천 카드)은 목록이 같아서 스타일을 바꿔도 티가 안 난다. */
+       (상성/추천 카드)은 목록이 같아서 스타일을 바꿔도 티가 안 난다.
+       넓은 화면은 .full, 좁은 화면은 짧게 줄인 .compact를 보여준다. */
     .style-toggle-hint {
       font-size: 11.5px;
       color: var(--muted);
       line-height: 1.5;
+    }
+
+    .style-toggle-hint.compact {
+      display: none;
     }
 
     .style-toggle-label {
@@ -1644,8 +1649,18 @@
       }
 
       .style-toggle-label,
-      .style-toggle-hint {
+      .style-toggle-hint.full {
         display: none
+      }
+
+      /* 좁은 화면에서는 짧은 문구를 버튼 아래 줄에 전체 폭으로 보여준다
+         (.style-toggle이 flex-wrap: wrap). */
+      .style-toggle-hint.compact {
+        display: block;
+        flex-basis: 100%;
+        font-size: 11px;
+        line-height: 1.45;
+        margin-top: -2px;
       }
 
       .style-btn {
@@ -1848,7 +1863,8 @@
           <span class="style-toggle-label">답변 스타일</span>
           <button type="button" class="style-btn active" data-style="simple" title="인게임 중 빠르게 볼 핵심 요약">간단히</button>
           <button type="button" class="style-btn" data-style="detailed" title="복기·학습용 자세한 설명">자세히</button>
-          <span class="style-toggle-hint">영웅 플레이·스탯 피드백·맵 운영처럼 글로 답하는 질문에 적용돼요 (카운터·조합 추천 카드는 차이가 거의 없어요)</span>
+          <span class="style-toggle-hint full">영웅 플레이·스탯 피드백·맵 운영처럼 글로 답하는 질문에 적용돼요 (카운터·조합 추천 카드는 차이가 거의 없어요)</span>
+          <span class="style-toggle-hint compact">영웅 플레이·스탯 피드백·맵 운영에만 적용돼요</span>
         </div>
         <div class="input-box">
           <textarea id="userInput" rows="1" placeholder="질문을 입력하세요. Enter 전송, Shift+Enter 줄바꿈"></textarea>
