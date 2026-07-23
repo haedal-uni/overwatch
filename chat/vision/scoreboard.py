@@ -1,18 +1,42 @@
+"""오버워치2 TAB 점수판 스크린샷 분석 모듈.
+
+팀 패널 검출(coarse-to-fine 2단계, _compute_team_layout_with_coarse_crop)과
+영웅 아이콘 인식은 OpenCV로, 수치(K/D/A·피해량·치유량·경감량) 인식과 코치
+피드백 생성은 Gemini로 처리한다(ENABLE_GEMINI_STATS_AND_FEEDBACK로 후자만
+끌 수 있다).
+
+analyze_scoreboard_image()의 "report"는 사용자에게 보여줄 마크다운이고,
+"admin_log"는 인식 실패·좌표·유사도 점수 같은 진단 정보로 ChatLog.metadata
+에만 저장한다 — report에는 진단 정보를 절대 섞지 않는다. turn_id를 넘기면
+디버그 이미지를 logs/scoreboard_debug/{turn_id}/에 저장한다.
+
+한계: 원근 보정(perspective transform)은 하지 않는다. 아군(파랑) 초상화의
+붉은 계열 색이 상대팀 색 마스크에 섞여 검출이 실패하는 경우가 있다.
+hero_icons/ 템플릿은 일부 영웅만 실제 점수판 crop을 쓴다(공식 홍보 아트보다
+그레이스케일 비교 정확도가 높음 — 원본은 hero_icons_promo_backup/에 있다).
+"""
+
 import base64
 import glob
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
-from .chatbot_graph import ROLE_HEROES, call_llm_text, normalize_hero_name, safe_json_loads
-from .chatbot_service import get_chatbot_components
+from chat.rag import components as chatbot_service
+from chat.domain.heroes import ROLE_HEROES, normalize_hero_name
+from chat.rag.llm_utils import call_llm_text, safe_json_loads
+from chat.domain.prompts import stat_judgement_rules
 
 logger = logging.getLogger(__name__)
 
-# False면 숫자 인식/코치 피드백 생성을 건너뛴다(CV 인식 로직만 테스트할 때 사용).
+# 스탯창 분석 중 Gemini가 맡은 부분(숫자 인식 + 피드백 생성)만 켜고 끈다 —
+# 영웅/팀 인식(OpenCV)은 영향받지 않는다. .env로 읽고 기본값은 켜짐.
 # 꺼진 동안 수치 칸은 "확인 필요", 피드백은 고정 문구로 나간다.
-ENABLE_GEMINI_STATS_AND_FEEDBACK = True
+ENABLE_GEMINI_STATS_AND_FEEDBACK = os.getenv(
+    "ENABLE_GEMINI_STATS_AND_FEEDBACK", "true"
+).strip().lower() not in ("0", "false", "no", "off")
 
 HERO_ICON_DIR = os.path.join(os.path.dirname(__file__), "hero_icons")
 
@@ -24,11 +48,9 @@ SCOREBOARD_DEBUG_DIR_NAME = "scoreboard_debug"
 DEFAULT_PLAYERS_PER_TEAM = 5
 ROSTER_SIZE_CANDIDATES = (5, 6)
 
-# 행 순서는 위→아래 [탱커, 딜러, ..., 힐러, 힐러] 고정 — 힐러는 항상 마지막
-# 2행이다(5인: 탱1/딜2, 6인: 탱1~2/딜2~3). 5인은 배분이 고정이라 아래 상수를
-# 그대로 쓰고, 6인은 탱커 수가 판마다 달라질 수 있어 역할 문양으로 판별한다
-# (_resolve_roster_size). ROW_ROLES는 표시용 한글 라벨, ROW_ROLE_CODES는
-# 역할 코드(tank/damage/support, ROLE_HEROES/ROLE_LABELS와 동일 체계)다.
+# 행 순서는 위→아래 [탱커, 딜러, ..., 힐러, 힐러] 고정(힐러는 항상 마지막 2행).
+# 5인은 배분이 고정이고, 6인은 탱커 수가 달라 역할 문양으로 판별한다.
+# ROW_ROLES는 표시용 라벨, ROW_ROLE_CODES는 ROLE_HEROES와 같은 체계의 코드.
 ROW_ROLES = ["탱커", "딜러", "딜러", "힐러", "힐러"]
 ROW_ROLE_CODES = ["tank", "damage", "damage", "support", "support"]
 ROLE_CODE_TO_LABEL = {"tank": "탱커", "damage": "딜러", "support": "힐러"}
@@ -38,24 +60,19 @@ ROLE_CODE_TO_LABEL = {"tank": "탱커", "damage": "딜러", "support": "힐러"}
 # 힐러로 판정한다(_classify_role_icon).
 ROLE_ICON_FILE_TO_CODE = {"탱커": "tank", "딜러": "damage"}
 
-# 팀 패널의 세로 밝기 프로파일에서 정규화 자기상관(period correlation)으로
-# 인원수를 추정한다(_estimate_roster_size_for_team) — 실제 인원수와 맞는
-# 행 높이(period)로 신호를 밀어 비교할수록 행 경계가 그 주기로 반복돼 상관
-# 계수가 높아진다. 두 임계값 중 하나라도 못 미치면 판별을 포기하고 기본값
-# (5)으로 폴백한다.
+# 세로 밝기 프로파일의 정규화 자기상관으로 인원수를 추정한다
+# (_estimate_roster_size_for_team). 두 임계값 중 하나라도 못 미치면 기본값 폴백.
 ROSTER_SIZE_MIN_CORRELATION = 0.3
 ROSTER_SIZE_MIN_MARGIN = 0.15
 
-# 역할 문양은 Otsu 이진화 후 윤곽선 모양을 cv2.matchShapes(Hu 모멘트 기반,
-# 밝기/색과 무관)로 비교해 판별한다 — 그레이스케일 원본 비교는 팀 색 틴트
-# 때문에 탱커/딜러/힐러 문양이 잘 구분되지 않는다. 값이 작을수록 템플릿과
-# 모양이 비슷하다.
+# 역할 문양은 Otsu 이진화 후 cv2.matchShapes로 비교한다(팀 색 틴트 때문에
+# 그레이스케일 비교로는 잘 구분되지 않는다). 값이 작을수록 모양이 비슷하다.
 ROLE_ICON_TANK_MAX_SHAPE_DISTANCE = 0.08
 ROLE_ICON_DAMAGE_MAX_SHAPE_DISTANCE = 0.35
 
 HERO_ICON_METHOD_LABEL = "hero_icons 폴더 유사도 매칭 (OpenCV 템플릿 매칭, 역할별 후보 제한)"
 
-# 행의 고정 역할에 해당하는 영웅 이름 집합. chatbot_graph.py의 ROLE_HEROES를
+# 행의 고정 역할에 해당하는 영웅 이름 집합. chat/domain/heroes.py의 ROLE_HEROES를
 # 그대로 재사용해 영웅 별칭/표기 목록이 두 파일에서 어긋나지 않게 한다.
 ROLE_HERO_NAME_SETS: Dict[str, set] = {
     role: {normalize_hero_name(h) or h for h in heroes}
@@ -78,20 +95,16 @@ RED_TEAM_COLOR_MIN_VALUE = 60
 RELAXED_TEAM_COLOR_MIN_SATURATION = 25
 RELAXED_TEAM_COLOR_MIN_VALUE = 30
 
-# 두 팀의 expected_row_height는 정상적으로 비슷해야 한다. 본인 강조 행만
-# 명도 임계값을 통과해 team_box가 그 행 크기로 잘못 잡히는 경우를 감지하는
-# 기준 — 한쪽이 반대쪽보다 이 비율 이상 작으면 그 팀만 완화된 색 기준으로
-# 인접 위치를 재탐색한다(_relaxed_search_adjacent).
+# 두 팀의 expected_row_height는 비슷해야 한다. 한쪽이 이 비율 이상 작으면
+# 그 팀만 완화된 색 기준으로 재탐색한다(_relaxed_search_adjacent).
 ROW_HEIGHT_MISMATCH_RATIO = 0.4
 
-# 행 높이 불일치 재탐색 전용 명도 하한. RELAXED_TEAM_COLOR_MIN_VALUE보다
-# 높게 잡아, 강조 행+일반 행을 하나의 contour로 합치되 배경 UI까지 붙지는
-# 않게 한다.
+# 행 높이 불일치 재탐색 전용 명도 하한. 강조 행과 일반 행을 하나로 합치되
+# 배경 UI까지 붙지는 않을 만큼 높게 잡는다.
 BLUE_ROW_HEIGHT_RETRY_MIN_VALUE = 120
 
-# expected_row_height가 이미지 높이 대비 이 비율보다 작으면 "일부 행만
-# 잡힌" 것으로 보고 재탐색한다 — 반대 팀이 아예 검출되지 않아 교차 비교가
-# 불가능한 경우까지 다루는 절대 기준이다.
+# 이 비율보다 작으면 일부 행만 잡힌 것으로 보고 재탐색한다(교차 비교가
+# 불가능할 때 쓰는 절대 기준).
 EXPECTED_ROW_HEIGHT_MIN_TRUST_RATIO = 0.045
 
 # 상대팀(빨강)이 아예 검출되지 않을 때(team_box=None), 이미 확정된 아군
@@ -102,9 +115,8 @@ SOLID_ROW_COVERAGE_THRESHOLD = 0.5
 # 작은 조각 오인 방지).
 ENEMY_MASKED_RETRY_MIN_ROW_MULT = 3.0
 
-# 팀색 마스크의 morphology close 커널 크기(이미지 크기 비례) — 아이콘/글자,
-# 본인 강조 행 등으로 생기는 내부의 작은 구멍만 메운다. 너무 크면 배경
-# 노이즈까지 패널에 붙는다.
+# 팀색 마스크 close 커널 크기(이미지 비례). 내부의 작은 구멍만 메운다 —
+# 너무 크면 배경 노이즈까지 붙는다.
 TEAM_MASK_CLOSE_KERNEL_HEIGHT_RATIO = 0.01
 TEAM_MASK_CLOSE_KERNEL_WIDTH_RATIO = 0.01
 
@@ -116,11 +128,8 @@ CANDIDATE_MAX_AREA_RATIO = 0.5     # 화면 면적의 이 비율보다 크면 �
 CANDIDATE_MIN_ASPECT_RATIO = 2.0   # 폭/높이가 이보다 작으면 "가로로 긴 패널"이 아니다.
 
 # --- 1단계(coarse) 전용 상수 — 전체화면 캡처 대응 ---
-# 위 MIN_TEAM_BLOCK_*_RATIO/CANDIDATE_MAX_*_RATIO는 이미지 전체 크기 대비
-# 비율이라, 점수판이 화면 일부만 차지하는 전체화면 캡처는 통과하지 못한다.
-# 정밀 파이프라인(_compute_team_layout)은 그대로 두고, 그 앞에 완화된 색
-# 조건으로 점수판 위치만 대략 찾아 sub-image로 잘라내는 1단계를 둔다
-# (_compute_team_layout_with_coarse_crop).
+# 위 검증 기준은 이미지 전체 크기 대비 비율이라 점수판이 화면 일부만 차지하면
+# 통과하지 못한다. 완화된 색 조건으로 위치만 먼저 찾아 잘라낸다.
 COARSE_MIN_AREA_RATIO = 0.001  # 이보다 작은 연결 영역은 노이즈로 무시한다.
 # 완화된 색 조건으로 찾은 bounding box에 상하좌우로 붙이는 여유 마진 비율.
 COARSE_CROP_MARGIN_RATIO = 0.15
@@ -139,27 +148,22 @@ MIN_ROW_HEIGHT_RATIO = 0.015
 MAX_ROW_HEIGHT_RATIO = 0.25
 ROW_HEIGHT_TOLERANCE_PX = 2  # 등분 결과 행 높이 차이 허용 오차(반올림 수준).
 
-# 상대팀(빨강) 패널은 TAB 점수판 구조상 칼럼 제목을 반복하지 않아 헤더가
-# 없다고 고정한다. 아군(파랑) 패널은 헤더 포함 여부가 사진마다 달라 직접
-# 판별한다(_detect_ally_header_height).
+# 상대팀 패널은 칼럼 제목이 없어 헤더 0으로 고정한다. 아군 패널은 사진마다
+# 달라 직접 판별한다(_detect_ally_header_height).
 ENEMY_HEADER_HEIGHT_RATIO = 0.0
 
-# 헤더 존재 판별: team_box 맨 위 1행과 맨 아래 1행(항상 실제 플레이어 행)의
-# 평균 채도(HSV S)를 비교한다 — 헤더가 남아있으면 칼럼 제목 바가 일반 행
-# 배경보다 채도가 뚜렷하게 낮다.
+# 헤더 판별: 맨 위 행과 맨 아래 행의 평균 채도를 비교한다(헤더가 있으면
+# 칼럼 제목 바의 채도가 뚜렷하게 낮다).
 HEADER_DETECT_SATURATION_DIFF_THRESHOLD = 35
 # 채도를 샘플링할 밴드 높이(team_box_height 비율) — "행 하나 높이 정도"를
 # 표본으로 삼는다.
 HEADER_DETECT_SAMPLE_BAND_RATIO = 1 / 6
 
-# hero crop은 row_box 그대로 쓰지 않고 세로 중앙부만 쓴다 — 위/아래 경계는
-# 옆 행과의 정렬 오차에 가장 취약해, 일부 제외하면 옆 행 픽셀이 섞일 여지가
-# 줄어든다.
+# hero crop은 세로 중앙부만 쓴다 — 위/아래 경계는 옆 행 픽셀이 섞이기 쉽다.
 HERO_CROP_VERTICAL_TRIM = 0.08
 
-# 영웅 아이콘은 역할 아이콘 바로 다음(team_box 왼쪽 끝 근처)에 있다.
-# hero_crop_relative_x = (hero_crop_box.x0 - team_box.x0) / team_box_width가
-# 이 값보다 크면 좌표 계산 오류로 보고 매칭을 시도하지 않는다.
+# 영웅 아이콘은 team_box 왼쪽 끝 근처에 있다. 상대 x 위치가 이 값보다 크면
+# 좌표 계산 오류로 보고 매칭하지 않는다.
 HERO_CROP_MAX_RELATIVE_X = 0.2
 
 # 역할 아이콘 폭 대비 영웅 아이콘의 x 오프셋/크기 비율(행 높이 기준).
@@ -179,16 +183,11 @@ MIN_HERO_CROP_PIXELS = 6   # 가로/세로가 이보다 작으면 무의미한 c
 HERO_CROP_ASPECT_MIN = 0.4
 HERO_CROP_ASPECT_MAX = 2.5
 
-# hero_crop_box의 네이티브 크기가 작을 때(전체화면 캡처 등) 기본 보간
-# (INTER_LINEAR)은 확대 시 흐려지므로, 작은 쪽 변이 이 값 미만이면
-# cv2.INTER_CUBIC으로 먼저 업스케일한다.
+# crop이 작으면 기본 보간으로 확대 시 흐려지므로 INTER_CUBIC으로 먼저 키운다.
 MIN_ICON_CROP_FOR_UPSCALE = 40
 
-# 색상 히스토그램 1차 필터 — 역할로 좁힌 후보 중 색상이 가장 비슷한 상위
-# HISTOGRAM_PREFILTER_TOP_K명만 남긴다. hero_icons/ 템플릿은 팀 색 틴트가
-# 없는 원본이라, 틴트가 있는 실제 크롭과 색상 유사도가 낮게 나와 정답이
-# 걸러질 수 있다 — 기본은 비활성화하고 그레이스케일 순위(role_scores)만
-# 쓴다. 히스토그램 자체는 항상 계산해 admin_log 진단용으로 남긴다.
+# 색상 히스토그램 1차 필터. 템플릿에는 팀 색 틴트가 없어 정답이 걸러질 수
+# 있으므로 기본 비활성화이고, 히스토그램 자체는 진단용으로 항상 계산한다.
 ENABLE_COLOR_HISTOGRAM_PREFILTER = False
 HISTOGRAM_HUE_BINS = 30
 HISTOGRAM_SAT_BINS = 32
@@ -1362,10 +1361,8 @@ def _resolve_row_height_mismatch(
     if not anchor_candidate:
         return layout, diagnostics
 
-    # 작은 쪽이 파랑이면 빨강 위쪽에서, 작은 쪽이 빨강이면 파랑 아래쪽에서
-    # 다시 찾는다(_select_team_boxes의 단일 검출 폴백과 같은 방향). 파랑은
-    # RELAXED_TEAM_COLOR_MIN_VALUE까지 완화하면 배경까지 붙어버려
-    # BLUE_ROW_HEIGHT_RETRY_MIN_VALUE를 대신 쓴다.
+    # 작은 쪽 팀을 반대쪽 팀 기준 인접 위치에서 다시 찾는다. 파랑은 완화
+    # 기준을 그대로 쓰면 배경까지 붙어 전용 명도 하한을 쓴다.
     if small_team == "ally":
         relaxed = _relaxed_search_adjacent(
             cv2, np, image, [BLUE_HUE_RANGE], anchor_candidate["box"], "above",
@@ -1387,10 +1384,8 @@ def _resolve_row_height_mismatch(
 
 
 # ------------------------------------------------------------
-# 1단계(coarse): 전체화면 캡처 대응 — 점수판 대략적 위치만 찾아 sub-image로
-# 잘라낸다. 아래 두 함수는 정밀 검증(_contour_candidates의 크기/비율 기준)을
-# 하지 않는다 — "점수판이 대충 어디쯤 있는지"만 찾는 게 목적이며, 여기서 나온
-# 박스는 최종 team_box로 쓰이지 않는다.
+# 1단계(coarse): 점수판 대략적 위치만 찾아 sub-image로 잘라낸다. 정밀 검증은
+# 하지 않으며, 여기서 나온 박스는 최종 team_box로 쓰이지 않는다.
 # ------------------------------------------------------------
 
 def _largest_color_contour_bbox(cv2, np, mask, image_shape) -> Optional[Dict[str, int]]:
@@ -2106,36 +2101,7 @@ TEAM_FEEDBACK_PROMPT_TEMPLATE = """너는 오버워치2 코치다. 방금 TAB �
   톤으로 써라.
 - 확인되지 않은 정보를 사실처럼 단정하지 말고, 실제로 제공된 스탯 범위
   안에서만 판단해라. 승률/티어 같은 통계는 언급하지 마라.
-- 스탯 항목마다 그 영웅이 애초에 그 수치를 낼 수 있는 스킬을 가졌는지부터
-  너의 오버워치2 지식으로 판단해라. 힐 전담형 영웅의 낮은 피해량, 피해를
-  막거나 흡수하는 스킬(방벽·보호막·벽 등)이 없는 영웅의 경감량 0은 전부
-  구조적으로 정상인 수치이니 약점처럼 지적하지 마라. 특히 경감량은 실제로
-  그런 스킬을 쓴 결과로만 기록되는 값이므로, 그런 스킬이 없는 영웅에게
-  "경감량이 낮으니 어떤 스킬을 더 활용했어야 한다"처럼 확인되지 않은
-  스킬 운용을 지어내지 마라.
-- 치유량 대비 피해량 비율처럼 팀 내부 숫자만 보고 판단하지 말고, 상대팀에서
-  같은 역할 영웅의 실제 수치와 비교해서 상대적으로 높은지 낮은지를 근거로
-  삼아라. 상대 같은 역할보다 치유량과 피해량이 모두 앞선다면 그건 약점이
-  아니라 강점이니 아쉬운 점으로 지적하지 마라. 단, 이 비교 규칙은 두 힐러
-  모두 스스로 의미 있는 피해를 낼 수 있는 킷일 때만 적용해라. 메르시처럼
-  피해 증폭(우클릭) 말고는 사실상 자체 공격 수단이 없는 힐러는, 상대
-  힐러가 딜을 얼마나 냈든 상관없이 피해량 항목 자체를 비교·지적 대상에서
-  제외해라 — "상대 힐러는 공격적으로 운영했는데 이쪽은 피해 기여가 없다"
-  같은 문장도 메르시에게는 쓰지 마라. 단, 치유량은 예외가 아니다 — 이런
-  힐러도 치유량이 같은 역할 상대보다 유의미하게 낮으면 그건 정상적인 약점
-  지적 대상이다.
-- 경감량도 같은 원리로 판단해라: 방벽·보호막이나 디플렉트/매트릭스처럼
-  피해를 흡수·차단하는 스킬이 있는 탱커는 그런 스킬이 없는 탱커보다
-  경감량이 구조적으로 훨씬 높게 나온다. 아군과 상대 탱커의 킷이 다르면
-  경감량 차이만으로 어느 쪽이 못했다고 판단하지 마라.
-- 회복 자원을 소모해 채워야 하는 킷(자원이 바닥나면 다시 찰 때까지 치유를
-  못 하는 힐러 등)을 하는 영웅은, 치유량/피해량 총합만 보지 말고 두
-  수치를 그 영웅의 자원 관리 메커니즘에 맞게 배분했는지도 함께 판단해라.
-- 영웅의 고유 특성(예: 생존력이 높다, 기동성이 좋다)을 근거로 언급할 때,
-  그 특성 덕분에 나온 결과(예: 데스가 적음)를 "~인 영웅임에도" 처럼
-  특성과 결과가 서로 모순되는 것처럼 쓰지 마라. 특성이 원인이라면
-  "~답게", "~덕분에"처럼 인과관계가 맞는 표현만 써라(예: "생존력이 뛰어난
-  영웅답게 0데스를 유지하며..." O, "생존력이 뛰어난 영웅임에도 0데스" X).
+{stat_judgement_rules}
 - 마크다운 문법(**, #, - 등)은 쓰지 마라. 문단 서술로 작성해라.
 - 각 항목은 2~4문장 이내로 간결하게 작성해라.
 
@@ -2168,6 +2134,7 @@ def _generate_team_feedback(llm, my_team: List[Dict[str, Any]], enemy_team: List
     # 그대로 알려준다.
     my_team_role_order = ", ".join(e["role"] for e in my_team)
     prompt = TEAM_FEEDBACK_PROMPT_TEMPLATE.format(
+        stat_judgement_rules=stat_judgement_rules(),
         my_team_role_order=my_team_role_order,
         my_team_text=_format_team_for_feedback(my_team),
         enemy_team_text=_format_team_for_feedback(enemy_team) if enemy_ok else "인식 실패/정보 부족",
@@ -2203,31 +2170,9 @@ PERSONAL_FEEDBACK_PROMPT_TEMPLATE = """너는 오버워치2 코치다. 본인은
 정보를 단정하지 마라.
 
 판단 기준:
-- 스탯 항목마다 그 영웅이 애초에 그 수치를 낼 수 있는 스킬을 가졌는지부터
-  너의 오버워치2 지식으로 판단해라. 힐 전담형 영웅의 낮은 피해량, 피해를
-  막거나 흡수하는 스킬(방벽·보호막·벽 등)이 없는 영웅의 경감량 0은 전부
-  구조적으로 정상인 수치이니 약점으로 지적하지 마라. 특히 경감량은 실제로
-  그런 스킬을 쓴 결과로만 기록되는 값이므로, 그런 스킬이 없는 영웅에게
-  "경감량이 낮으니 어떤 스킬을 더 활용했어야 한다"처럼 확인되지 않은
-  스킬 운용을 지어내지 마라.
-- 위에 상대팀 같은 역할 스탯이 주어졌다면, 치유량 대비 피해량 같은 내부 비율
-  만으로 판단하지 말고 그 상대 수치와 비교해서 실제로 상대적으로 낮은지
-  판단해라. 상대보다 앞서는 수치를 약점처럼 지적하지 마라. 단, 본인이
-  메르시처럼 피해 증폭(우클릭) 말고는 사실상 자체 공격 수단이 없는
-  힐러라면, 상대 힐러가 딜을 얼마나 냈든 상관없이 피해량 항목은 비교·
-  지적 대상에서 제외해라(치유량은 예외가 아니다 — 상대보다 유의미하게
-  낮으면 그건 정상적인 약점 지적 대상이다).
-- 경감량도 같은 원리로 판단해라: 본인이나 상대가 방벽·보호막이나 디플렉트/
-  매트릭스처럼 피해를 흡수·차단하는 스킬을 쓰는 탱커라면, 그런 스킬이
-  없는 탱커보다 경감량이 구조적으로 훨씬 높게 나온다 — 킷이 다른 탱커와의
-  경감량 차이만으로 못했다고 판단하지 마라.
-- 본인이 회복 자원을 소모해 채워야 하는 킷(자원이 바닥나면 다시 찰 때까지
-  치유를 못 하는 힐러 등)이라면, 치유량/피해량 총합만 보지 말고 두
-  수치를 그 영웅의 자원 관리 메커니즘에 맞게 배분했는지도 함께 판단해라.
-- 영웅의 고유 특성(예: 생존력이 높다, 기동성이 좋다)을 근거로 언급할 때,
-  그 특성 덕분에 나온 결과(예: 데스가 적음)를 "~인 영웅임에도" 처럼
-  특성과 결과가 서로 모순되는 것처럼 쓰지 마라. 특성이 원인이라면
-  "~답게", "~덕분에"처럼 인과관계가 맞는 표현만 써라."""
+{stat_judgement_rules}
+- 위 비교 규칙은 "상대팀 같은 역할 스탯"이 함께 주어졌을 때만 적용한다.
+  주어지지 않았다면 본인 수치 안에서만 판단해라."""
 
 
 def _self_feedback_eligible(self_row_idx: Optional[int], my_team: List[Dict[str, Any]]) -> bool:
@@ -2265,6 +2210,7 @@ def _generate_personal_feedback(
             f"경감량 {_fmt_num(enemy_counterpart.get('mitigation'))}"
         )
     prompt = PERSONAL_FEEDBACK_PROMPT_TEMPLATE.format(
+        stat_judgement_rules=stat_judgement_rules(),
         role=self_entry["role"], hero=self_entry["hero"], stat_line=stat_line,
         enemy_counterpart_line=enemy_counterpart_line,
     )
@@ -2397,11 +2343,8 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
         role_codes=layout["enemy"]["role_codes"],
     )
 
-    # 양쪽 팀 다 파란/빨간 팀 패널을 하나도 못 찾았다면 점수판 캡처가 아닐
-    # 가능성이 높다 — 이 상태로 Gemini에 숫자 인식을 요청하면 관계없는
-    # 이미지에 대해 헛수치/헛피드백만 생성하게 되므로, 여기서 조기에
-    # 반려한다. chat_scoreboard_ocr의 ScoreboardAnalysisError 핸들러가
-    # "점수판 화면 캡처인지 확인해달라"는 안내를 사용자에게 보여준다.
+    # 양쪽 팀 패널을 하나도 못 찾으면 점수판 캡처가 아닐 가능성이 높다.
+    # Gemini를 부르기 전에 조기 반려한다(호출부가 안내 문구로 바꿔 보여준다).
     if ally_detected_count == 0 and enemy_detected_count == 0:
         raise ScoreboardAnalysisError("점수판 팀 패널을 전혀 찾지 못했습니다(점수판 캡처가 아닐 가능성).")
 
@@ -2425,7 +2368,7 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
 
     if ENABLE_GEMINI_STATS_AND_FEEDBACK:
         try:
-            _, _, llm = get_chatbot_components()
+            _, _, llm = chatbot_service.get_chatbot_components()
         except Exception as exc:
             raise ScoreboardAnalysisError(f"모델을 불러오지 못했습니다: {exc}") from exc
 
@@ -2436,29 +2379,35 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
             entry["healing"] = stat["healing"]
             entry["mitigation"] = stat["mitigation"]
 
-        team_feedback = _generate_team_feedback(llm, my_team, enemy_team, enemy_ok, low_hero_recognition)
-
         self_known = _self_feedback_eligible(self_row_idx, my_team)
         enemy_counterpart = None
         if self_known and enemy_ok:
-            # 5인은 행 순서가 고정이라 같은 행 인덱스가 곧 같은 역할이었지만,
-            # 6인은 아군/상대의 탱커·딜러 배분이 다를 수 있어(예: 아군 탱커
-            # 2명, 상대 탱커 1명) 행 인덱스로 맞추면 어긋난다 — role_code로
-            # 같은 역할군 상대를 직접 찾는다. 같은 역할이 여럿이면(딜러/힐러
-            # 등) 그중 먼저 인식된 한 명을 참고용 비교 대상으로 쓴다.
+            # 6인은 양 팀의 탱커·딜러 배분이 다를 수 있어 행 인덱스로 맞추면
+            # 어긋난다 — role_code로 같은 역할 상대를 찾고, 여럿이면 먼저
+            # 인식된 한 명을 쓴다.
             self_role_code = my_team[self_row_idx]["role_code"]
             for candidate in enemy_team:
                 if candidate["role_code"] == self_role_code and candidate["hero"] != "unknown":
                     enemy_counterpart = candidate
                     break
-        personal_feedback = (
-            _generate_personal_feedback(llm, my_team[self_row_idx], enemy_counterpart)
-            if self_known else None
-        )
+        # 팀 피드백과 개인 피드백은 서로를 참조하지 않고 둘 다 위에서 확정된
+        # 숫자에만 의존한다 — 직렬로 부르면 Gemini 왕복이 그대로 두 번 쌓여
+        # 스탯창 응답이 느려지므로 함께 실행한다(retrieve_docs_node와 같은 패턴).
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            team_future = executor.submit(
+                _generate_team_feedback, llm, my_team, enemy_team, enemy_ok, low_hero_recognition,
+            )
+            personal_future = (
+                executor.submit(
+                    _generate_personal_feedback, llm, my_team[self_row_idx], enemy_counterpart,
+                )
+                if self_known else None
+            )
+
+            team_feedback = team_future.result()
+            personal_feedback = personal_future.result() if personal_future else None
     else:
-        # ENABLE_GEMINI_STATS_AND_FEEDBACK=False — Gemini를 아예 호출하지
-        # 않는다. my_team/enemy_team의 kda/damage/healing/mitigation은
-        # 이미 None으로 초기화돼 있어(_build_team_rows) 표에는 그대로
+        # Gemini를 쓰지 않는 경우. 수치는 None으로 초기화돼 있어 표에는
         # "확인 필요"로 나간다.
         team_feedback = {
             "overview": "영웅 인식(OpenCV) 정확도 개선 작업 중이라 코치 피드백은 잠시 꺼둔 상태입니다.",

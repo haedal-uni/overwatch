@@ -24,9 +24,8 @@ class ChatLog(models.Model):
     is_unsatisfied = models.BooleanField("불만족 여부", default=False, db_index=True)
     feedback_reason = models.TextField("불만족 사유", null=True, blank=True)
 
-    # 관리자가 불만족 피드백을 검토하며 남기는 처리 상태. is_unsatisfied와 달리
-    # 관리자가 admin에서 직접 체크/작성하며, 처리 완료 표시와 별개로 메모만
-    # 남기고 나중에 다시 고칠 수도 있어야 해서 두 필드로 분리했다.
+    # 관리자가 admin에서 직접 쓰는 처리 상태. 완료 표시와 메모를 따로 남길 수
+    # 있어야 해서 두 필드로 분리했다.
     is_resolved = models.BooleanField("처리 완료", default=False, db_index=True)
     resolution_note = models.TextField("처리 메모", null=True, blank=True)
 
@@ -35,6 +34,15 @@ class ChatLog(models.Model):
     class Meta:
         verbose_name = "채팅 로그"
         verbose_name_plural = "채팅 로그"
+        # 기본 정렬이 없으면 페이지네이션 경고가 뜨고 순서가 흔들린다.
+        ordering = ("-created_at",)
+        indexes = [
+            # 세션 조회가 항상 (log_session_id, created_at) 조합으로 나간다.
+            models.Index(
+                fields=["log_session_id", "created_at"],
+                name="chatlog_session_created_idx",
+            ),
+        ]
 
     def __str__(self):
         return f"[{self.role}] {self.message[:30]}"

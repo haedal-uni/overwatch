@@ -8,13 +8,17 @@ from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
-from .chatbot_graph import ROLE_LABELS, run_chatbot_graph, try_canned_shortcut
-from .models import ChatLog
-from .vision_stats import analyze_scoreboard_image, ScoreboardAnalysisError
+from chat.graph.pipeline import role_filter_label, run_chatbot_graph, try_canned_shortcut
+from chat.models import ChatLog
+from chat.vision.scoreboard import analyze_scoreboard_image, ScoreboardAnalysisError
 
 logger = logging.getLogger(__name__)
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB
+
+# 입력 길이 상한. 없으면 수십 KB 문자열이 그대로 LLM 프롬프트에 실린다.
+MAX_MESSAGE_LENGTH = 500
+MAX_FEEDBACK_REASON_LENGTH = 1000
 
 # content_type은 클라이언트가 보내는 값이라 그대로 신뢰하지 않고 화이트리스트로 검증한다.
 ALLOWED_IMAGE_TYPES = {
@@ -67,6 +71,44 @@ def csrf_failure_debug(request, reason=""):
     from django.views.csrf import csrf_failure as django_csrf_failure
     return django_csrf_failure(request, reason=reason)
 
+def ensure_log_session_id(request):
+    """대화 묶음 추적용 UUID를 세션에 보장하고 그 값을 돌려준다.
+
+    Django 세션키는 로그인/세션 만료 등으로 바뀔 수 있어 로그 식별자로 쓰기에
+    적합하지 않아, 로그 전용 UUID를 따로 둔다.
+    """
+    if not request.session.get("log_session_id"):
+        request.session["log_session_id"] = str(uuid.uuid4())
+        request.session.modified = True
+
+    return request.session["log_session_id"]
+
+
+def save_error_log(request, exc, *, source=None, extra_metadata=None):
+    """예외를 ERROR 로그로 남긴다(관리자 페이지의 "오류 로그" 메뉴).
+
+    오류 처리 경로에서 또 예외가 나 사용자 응답까지 막는 일이 없도록 실패는
+    삼킨다 — 세 곳(chat_api / chat_scoreboard_ocr의 두 핸들러)에 같은 블록이
+    복사돼 있던 것을 하나로 합쳤다.
+    """
+    try:
+        metadata = {"traceback": traceback.format_exc()}
+        if source:
+            metadata["source"] = source
+        if extra_metadata:
+            metadata.update(extra_metadata)
+
+        save_chat_log(
+            log_session_id=ensure_log_session_id(request),
+            turn_id=str(uuid.uuid4()),
+            role="ERROR",
+            message=str(exc),
+            metadata=metadata,
+        )
+    except Exception:
+        logger.exception("ERROR 로그 저장 실패")
+
+
 def save_chat_log(
     *,
     log_session_id,
@@ -98,13 +140,18 @@ def chat_api(request):
 
         message = data.get("message", "").strip()
         role_filter = data.get("role_filter")
-        # "어떤 영웅 기준으로?" 되묻기에 사용자가 고른 영웅. role_filter 버튼과
-        # 동일하게 message=''와 함께 온다.
+        # 되묻기에 고른 영웅. role_filter 버튼과 동일하게 message=''와 함께 온다.
         focus_hero = (data.get("focus_hero") or "").strip() or None
+        # "5대5예요" 버튼. 인원수는 5/6만 유효하고 그 외 값은 무시한다.
+        try:
+            roster_size = int(data.get("roster_size"))
+        except (TypeError, ValueError):
+            roster_size = None
+        if roster_size not in (5, 6):
+            roster_size = None
         reset = bool(data.get("reset", False))
 
-        # 알 수 없는 값이면 None으로 넘겨 run_chatbot_graph가 세션에 남은 이전
-        # 선택(없으면 기본값 detailed)을 쓰도록 한다.
+        # 알 수 없는 값이면 None으로 넘겨 세션 값(없으면 detailed)을 쓰게 한다.
         answer_style = data.get("answer_style")
         if answer_style not in ("simple", "detailed"):
             answer_style = None
@@ -114,27 +161,25 @@ def chat_api(request):
             request.session.modified = True
             return JsonResponse({"ok": True})
 
-        if not message and not role_filter and not focus_hero:
+        if not message and not role_filter and not focus_hero and not roster_size:
             return JsonResponse(
                 {"error": "질문을 입력해주세요."},
                 status=400,
             )
 
-        # Django 세션키는 로그인/세션 만료 등으로 바뀔 수 있어 로그 식별자로
-        # 쓰기에 적합하지 않다. 로그 전용 UUID를 따로 저장해 대화 묶음을 추적한다.
-        if not request.session.get("log_session_id"):
-            request.session["log_session_id"] = str(uuid.uuid4())
-            request.session.modified = True
+        if len(message) > MAX_MESSAGE_LENGTH:
+            return JsonResponse(
+                {"error": f"질문이 너무 깁니다. {MAX_MESSAGE_LENGTH}자 이내로 입력해주세요."},
+                status=400,
+            )
 
-        log_session_id = request.session["log_session_id"]
+        log_session_id = ensure_log_session_id(request)
         turn_id = str(uuid.uuid4())
 
         conversation_context = request.session.get("coach_context", {})
         context_before = dict(conversation_context)
 
-        # 웰컴 화면 5개 버튼(과 비슷한 표현)은 그래프 전체를 실행하지 않고 미리
-        # 써둔 답을 즉시 돌려준다. 매칭되지 않으면 is_canned가 False로 남고
-        # 평소처럼 run_chatbot_graph를 호출한다.
+        # 웰컴 화면 버튼은 그래프 실행 없이 캐시 답변을 돌려준다.
         canned = try_canned_shortcut(message, role_filter, conversation_context, answer_style)
         if canned["context_updates"]:
             conversation_context.update(canned["context_updates"])
@@ -153,6 +198,7 @@ def chat_api(request):
                 role_filter=role_filter,
                 answer_style=answer_style,
                 focus_hero_pick=focus_hero,
+                roster_size=roster_size,
             )
 
         context_patch = result.get("context_patch", {})
@@ -168,10 +214,8 @@ def chat_api(request):
         target_enemy = context_patch.get("target_enemy") or conversation_context.get("target_enemy")
         intent = result.get("intent")
 
-        # 역할/영웅 선택 버튼을 클릭하면 message가 빈 문자열이고 role_filter/
-        # focus_hero만 채워져 온다. 이 경우에도 로그를 남기되, 어떤 버튼을
-        # 눌렀는지와 원래 질문(merge_context_node가 복원한 result["message"])을
-        # 함께 표시해 맥락을 알 수 있게 한다.
+        # 버튼 클릭 턴은 message가 비어 있다. 어떤 버튼을 눌렀는지와 복원된
+        # 원래 질문을 함께 로그에 남긴다.
         if message:
             user_log_message = message
         elif focus_hero:
@@ -181,8 +225,16 @@ def chat_api(request):
                 if original_question
                 else f"[영웅 선택: {focus_hero}]"
             )
+        elif roster_size and not role_filter:
+            original_question = result.get("message") or ""
+            user_log_message = (
+                f"[인원수 선택: {roster_size}대{roster_size}] {original_question}".strip()
+                if original_question
+                else f"[인원수 선택: {roster_size}대{roster_size}]"
+            )
         else:
-            role_label = ROLE_LABELS.get(role_filter, role_filter)
+            # "tank+damage"처럼 두 역할이 함께 선택될 수 있어 라벨 변환 함수를 쓴다.
+            role_label = role_filter_label(role_filter)
             original_question = result.get("message") or ""
             user_log_message = (
                 f"[역할 선택: {role_label}] {original_question}".strip()
@@ -200,13 +252,13 @@ def chat_api(request):
             target_enemy=target_enemy,
             metadata={
                 "role_filter": role_filter,
+                "roster_size": roster_size,
                 "context_before": context_before,
             },
         )
 
         if graph_error:
-            # run_chatbot_graph 내부 오류는 예외로 전파되지 않고 state["error"]로
-            # 반환되므로, 이 경우 ERROR 로그로 남겨 관리자 페이지에서 구분한다.
+            # 그래프 내부 오류는 예외가 아니라 state["error"]로 오므로 여기서 남긴다.
             save_chat_log(
                 log_session_id=log_session_id,
                 turn_id=turn_id,
@@ -247,8 +299,7 @@ def chat_api(request):
                 },
             )
 
-        # 프론트에서 "이 답변이 별로예요" 피드백을 보낼 때 어떤 AI 답변에 대한
-        # 피드백인지 알아야 하므로, 응답에 turn_id를 함께 내려준다.
+        # 피드백이 어떤 답변에 대한 것인지 알 수 있게 turn_id를 함께 내려준다.
         result["turn_id"] = turn_id
 
         return JsonResponse(result)
@@ -256,25 +307,9 @@ def chat_api(request):
     except Exception as e:
         logger.exception("chat_api 오류: %s", e)
 
-        try:
-            if not request.session.get("log_session_id"):
-                request.session["log_session_id"] = str(uuid.uuid4())
-                request.session.modified = True
+        save_error_log(request, e, source="chat_api")
 
-            save_chat_log(
-                log_session_id=request.session["log_session_id"],
-                turn_id=str(uuid.uuid4()),
-                role="ERROR",
-                message=str(e),
-                metadata={
-                    "traceback": traceback.format_exc(),
-                },
-            )
-        except Exception:
-            pass
-
-        # 사용자에게는 서버 내부 정보가 노출될 수 있는 원본 예외 메시지 대신
-        # 일반 메시지만 보여주고, 실제 원인은 관리자 페이지의 ERROR 로그에서 확인한다.
+        # 원본 예외 메시지는 노출하지 않고 ERROR 로그에만 남긴다.
         return JsonResponse(
             {"error": "요청을 처리하는 중 오류가 발생했습니다."},
             status=500,
@@ -293,6 +328,12 @@ def chat_feedback(request):
         if not turn_id or not reason:
             return JsonResponse(
                 {"error": "피드백 내용을 입력해주세요."},
+                status=400,
+            )
+
+        if len(reason) > MAX_FEEDBACK_REASON_LENGTH:
+            return JsonResponse(
+                {"error": f"피드백은 {MAX_FEEDBACK_REASON_LENGTH}자 이내로 입력해주세요."},
                 status=400,
             )
 
@@ -338,21 +379,15 @@ def chat_scoreboard_ocr(request):
                 status=400,
             )
 
-        # vision_stats가 디버그 이미지를 logs/scoreboard_debug/{turn_id}/에
-        # 저장하므로, 분석 호출 전에 만든 turn_id를 아래 ChatLog에도 그대로 써야
-        # 관리자 페이지에서 로그와 이미지를 연결할 수 있다.
+        # 디버그 이미지가 turn_id 폴더에 저장되므로 ChatLog도 같은 turn_id를 쓴다.
         turn_id = str(uuid.uuid4())
 
         image_bytes = image_file.read()
         result = analyze_scoreboard_image(image_bytes, mime_type=mime_type, turn_id=turn_id)
         admin_log = result.get("admin_log", {})
 
-        if not request.session.get("log_session_id"):
-            request.session["log_session_id"] = str(uuid.uuid4())
-            request.session.modified = True
-
         save_chat_log(
-            log_session_id=request.session["log_session_id"],
+            log_session_id=ensure_log_session_id(request),
             turn_id=turn_id,
             role="AI",
             message=result["report"],
@@ -364,9 +399,8 @@ def chat_scoreboard_ocr(request):
             },
         )
 
-        # 점수판에서 인식된 팀 조합을 coach_context에 남겨, 이어지는 채팅
-        # 질문이 다시 언급하지 않아도 이어받게 한다. current_hero는 매 턴
-        # 메시지에 직접 선언해야만 인정되는 값이라 여기서는 건드리지 않는다.
+        # 인식된 팀 조합을 세션에 남겨 후속 질문이 이어받게 한다. current_hero는
+        # 매 턴 직접 선언해야 하는 값이라 건드리지 않는다.
         hero_rows = admin_log.get("hero_rows", [])
         enemy_team = [
             r["hero"] for r in sorted(hero_rows, key=lambda r: r["row_index"])
@@ -376,10 +410,8 @@ def chat_scoreboard_ocr(request):
             r["hero"] for r in sorted(hero_rows, key=lambda r: r["row_index"])
             if r.get("team") == "ally" and r.get("hero") and r["hero"] != "unknown"
         ]
-        # 팀 조합 이름뿐 아니라 실제 K/D/A·피해량·치유량 수치도 함께 세션에
-        # 남긴다. my_stats(본인 1인 스탯)는 chatbot_graph.infer_current_hero()가
-        # current_hero 판단의 최우선 근거로 쓰므로, 여기서 채워두면 점수판
-        # 분석 직후 후속 질문에서 current_hero/역할이 자동으로 확정된다.
+        # 실제 수치도 함께 남긴다. my_stats는 infer_current_hero의 최우선 근거라,
+        # 채워두면 후속 질문에서 본인 영웅/역할이 자동으로 확정된다.
         my_team_stats = result.get("my_team_stats") or {}
         enemy_team_stats = result.get("enemy_team_stats") or {}
         my_stats = result.get("my_stats") or {}
@@ -395,10 +427,8 @@ def chat_scoreboard_ocr(request):
                 conversation_context["enemy_stats"] = enemy_team_stats
             if my_stats:
                 conversation_context["my_stats"] = my_stats
-            # merge_context_node는 마지막 채팅 메시지로부터 10분이 지나면
-            # coach_context를 초기화한다(SESSION_TIMEOUT_SECONDS). 점수판
-            # 분석은 별도 엔드포인트라 이 타임스탬프를 갱신하지 않으면, 방금
-            # patch한 값이 다음 채팅 질문에서 바로 삭제될 수 있다.
+            # 세션 타임아웃 기준 시각도 갱신한다. 안 하면 방금 patch한 값이
+            # 다음 채팅 질문에서 새 판으로 오인돼 삭제될 수 있다.
             conversation_context["last_message_ts"] = time.time()
             request.session["coach_context"] = conversation_context
             request.session.modified = True
@@ -413,22 +443,6 @@ def chat_scoreboard_ocr(request):
         logger.exception("chat_scoreboard_ocr 오류: %s", e)
 
         # 사용자에게는 일반 메시지만 보여주고, traceback은 ErrorChatLog에만 남긴다.
-        try:
-            if not request.session.get("log_session_id"):
-                request.session["log_session_id"] = str(uuid.uuid4())
-                request.session.modified = True
-
-            save_chat_log(
-                log_session_id=request.session["log_session_id"],
-                turn_id=str(uuid.uuid4()),
-                role="ERROR",
-                message=str(e),
-                metadata={
-                    "source": "chat_scoreboard_ocr",
-                    "traceback": traceback.format_exc(),
-                },
-            )
-        except Exception:
-            pass
+        save_error_log(request, e, source="chat_scoreboard_ocr")
 
         return JsonResponse({"error": "이미지 분석 중 오류가 발생했습니다."}, status=500)

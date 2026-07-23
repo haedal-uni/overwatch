@@ -2,56 +2,30 @@ import json
 import logging
 import os
 import re
-import shutil
 from urllib.parse import urlencode
 
 from django import forms
-from django.conf import settings
 from django.contrib import admin
 from django.http import FileResponse, Http404, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils.html import format_html, format_html_join
 
-from .chatbot_graph import ROLE_LABELS
-from .models import ChatLog, ErrorChatLog, UnsatisfiedChatLog
+from chat.graph.pipeline import ROLE_LABELS
+from chat.vision.debug_images import (
+    SCOREBOARD_DEBUG_TURN_ID_RE,
+    delete_scoreboard_debug_dirs as _delete_scoreboard_debug_dirs,
+    scoreboard_debug_root,
+)
+from chat.models import ChatLog, ErrorChatLog, UnsatisfiedChatLog
 
 logger = logging.getLogger(__name__)
 
-# 점수판 디버그 이미지 파일명 화이트리스트 — vision_stats._save_debug_images가
-# 만드는 파일명 규칙과 일치해야 한다. scoreboard_debug_image_view가 경로
-# 조작 방지를 위해 이 패턴에 안 맞는 이름은 전부 거부한다. 팀당 인원수(5/6)
-# 가 이미지마다 달라질 수 있어 행 번호는 \d+로 매칭한다.
+# 디버그 이미지 파일명 화이트리스트(경로 조작 방지). _save_debug_images의
+# 파일명 규칙과 일치해야 하며, 행 번호는 인원수가 달라질 수 있어 \d+로 받는다.
 SCOREBOARD_DEBUG_FILENAME_RE = re.compile(
     r"(?:ally|enemy)_row_\d+_(?:row|hero)_crop\.png|original\.png|coarse_crop\.png"
 )
-SCOREBOARD_DEBUG_TURN_ID_RE = re.compile(r"[A-Za-z0-9\-]+")
-
-
-def _delete_scoreboard_debug_dirs(turn_ids):
-    """ChatLog 삭제 시 그 turn_id의 logs/scoreboard_debug/{turn_id}/ 폴더
-    (디버그 이미지)도 함께 지운다. 대부분의 turn_id는 일반 채팅이라 폴더가
-    없으며 이 경우는 건너뛴다. 삭제 실패(주로 서버 파일 권한 문제) turn_id
-    목록을 반환해 호출자가 관리자에게 알릴 수 있게 한다."""
-    base_dir = str(getattr(settings, "BASE_DIR", os.getcwd()))
-    debug_root = os.path.normpath(os.path.join(base_dir, "logs", "scoreboard_debug"))
-    failed_turn_ids = []
-    for turn_id in turn_ids:
-        if not turn_id or not SCOREBOARD_DEBUG_TURN_ID_RE.fullmatch(turn_id):
-            continue
-        target = os.path.normpath(os.path.join(debug_root, turn_id))
-        if os.path.commonpath([debug_root, target]) != debug_root:
-            continue
-        if not os.path.exists(target):
-            continue
-        try:
-            shutil.rmtree(target)
-        except OSError:
-            logger.warning("[SCOREBOARD] 디버그 폴더 삭제 실패(권한 문제 의심): %s", target, exc_info=True)
-            failed_turn_ids.append(turn_id)
-    return failed_turn_ids
-
-
 ROLE_BADGE_STYLES = {
     "USER": ("#e0e7ff", "#3730a3", "사용자"),
     "AI": ("#dcfce7", "#166534", "AI 응답"),
@@ -73,9 +47,8 @@ class ChatLogDisplayMixin:
 
     @property
     def media(self):
-        # 표 컬럼 헤더 클릭 시 그 값으로 필터링하는 드롭다운을 추가한다.
-        # 서버 필터링 로직은 그대로 두고, 사이드바 필터 링크를 JS가 재사용해
-        # 팝업으로 보여준다(column_filter.js 참고).
+        # 컬럼 헤더 드롭다운 필터. 사이드바 필터 링크를 JS가 재사용하는
+        # 프론트 레이어라 서버 필터링 로직과는 무관하다.
         return super().media + forms.Media(
             css={"all": ("chat/admin/column_filter.css",)},
             js=("chat/admin/column_filter.js",),
@@ -682,8 +655,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         if not SCOREBOARD_DEBUG_TURN_ID_RE.fullmatch(turn_id) or not SCOREBOARD_DEBUG_FILENAME_RE.fullmatch(filename):
             raise Http404
 
-        base_dir = str(getattr(settings, "BASE_DIR", os.getcwd()))
-        debug_root = os.path.normpath(os.path.join(base_dir, "logs", "scoreboard_debug"))
+        debug_root = scoreboard_debug_root()
         file_path = os.path.normpath(os.path.join(debug_root, turn_id, filename))
         if os.path.commonpath([debug_root, file_path]) != debug_root or not os.path.isfile(file_path):
             raise Http404
@@ -796,9 +768,8 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
     ordering = ("-created_at",)
     list_per_page = 50
 
-    # is_resolved/resolution_note만 관리자가 직접 편집할 수 있어야 하므로,
-    # 이 admin에서만 has_change_permission을 True로 되돌린다(다른 로그
-    # admin은 ChatLogDisplayMixin의 기본값인 완전 읽기 전용을 유지).
+    # is_resolved/resolution_note만 편집 가능해야 해서 이 admin만 예외로 둔다
+    # (다른 로그 admin은 완전 읽기 전용).
     def has_change_permission(self, request, obj=None):
         return True
 
