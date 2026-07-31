@@ -134,6 +134,31 @@ COARSE_MIN_AREA_RATIO = 0.001  # 이보다 작은 연결 영역은 노이즈로 
 # 완화된 색 조건으로 찾은 bounding box에 상하좌우로 붙이는 여유 마진 비율.
 COARSE_CROP_MARGIN_RATIO = 0.15
 
+# --- 구조 기반 표 검출(색 무관) 전용 상수 ---
+# 경기 진행 중(in-game) 전체화면 캡처는 배경 자체가 붉은/파란 계열로 읽혀 색 기반
+# 팀 패널 검출이 무너진다(상대 패널이 배경과 뭉치거나, 탈채도된 본인 강조 행이
+# 빠져 아군 첫 행이 누락됨). 이럴 때 색이 아니라 "밝은 표 vs 어두운 배경"이라는
+# 구조로 표를 찾아 폴백한다. 색 검출이 잘 되는 캡처(경기 종료 화면 등)에서는
+# 폴백을 타지 않으므로 기존 동작에 영향이 없다.
+# 표는 항상 화면 가운데에 있으므로, 가운데 세로 띠(이 x비율 구간)의 행별 밝기로
+# 팀 패널(밝음)과 배경(어두움)을 가른다 — 우측 상단 배너 등은 이 띠 밖이라 무관.
+STRUCTURAL_CENTER_XBAND = (0.35, 0.65)
+# 밝기/컬럼 임계값 = lo + ratio*(hi-lo), lo/hi는 프로파일의 15/85 백분위수.
+STRUCTURAL_BRIGHT_PCT = (15, 85)
+STRUCTURAL_ROW_THR_RATIO = 0.45
+STRUCTURAL_COL_THR_RATIO = 0.40
+# 이 비율(이미지 높이 대비)보다 낮은 밝은 구간은 팀 패널로 보지 않는다(노이즈).
+STRUCTURAL_MIN_BAND_HEIGHT_RATIO = 0.06
+# x범위 판별에서 가운데 근처의 이 폭(이미지 대비) 이상인 밝은 구간만 표로 본다.
+STRUCTURAL_MIN_COL_RUN_RATIO = 0.15
+# 아군 밴드 상단 이 비율 구간 안에서 헤더(칼럼 제목 바)/첫 행 경계를 수평 에지
+# 최대점으로 찾는다.
+STRUCTURAL_HEADER_SEARCH_RATIO = 0.35
+# 색 team_box가 구조 박스와 이 IoU 미만으로 겹치면 색 검출이 깨진 것으로 보고
+# 구조 기반 박스로 교체한다. 0.75면 경기 종료 캡처(IoU 0.9+)는 색을 그대로 쓰고,
+# 경기 중 캡처(상대 IoU 0.3 수준)만 구조로 넘어간다.
+STRUCTURAL_FALLBACK_MIN_IOU = 0.75
+
 # 파란/빨간 후보 쌍 평가 기준 — 전부 실패하면 그 쌍은 후보에서 제외한다.
 PAIR_MIN_X_OVERLAP_RATIO = 0.5
 PAIR_MAX_WIDTH_DIFF_RATIO = 0.35
@@ -1540,12 +1565,143 @@ def _compute_team_layout_with_coarse_crop(cv2, np, image) -> Dict[str, Any]:
     return layout
 
 
+def _contiguous_true_runs(mask: List[bool]) -> List[Tuple[int, int]]:
+    """boolean 배열에서 True가 연속된 구간을 [start, end) 목록으로 반환한다."""
+    runs: List[Tuple[int, int]] = []
+    start: Optional[int] = None
+    for i, v in enumerate(mask):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            runs.append((start, i))
+            start = None
+    if start is not None:
+        runs.append((start, len(mask)))
+    return runs
+
+
+def _structural_bright_run_bounds(profile, np, lo_pct: int, hi_pct: int, thr_ratio: float, min_len: int):
+    """1차원 밝기 프로파일에서 "밝은(=표) 구간"의 연속 run들을 min_len 이상만
+    골라 반환한다. 임계값은 프로파일 자체의 백분위수 기반이라 절대 밝기에
+    의존하지 않는다(캡처마다 배경/패널 밝기가 달라도 상대적으로 가른다)."""
+    lo, hi = np.percentile(profile, lo_pct), np.percentile(profile, hi_pct)
+    thr = lo + thr_ratio * (hi - lo)
+    runs = [r for r in _contiguous_true_runs(list(profile > thr)) if (r[1] - r[0]) >= min_len]
+    return runs
+
+
+def _detect_structural_table_boxes(cv2, np, image) -> Optional[Tuple[Dict[str, int], Dict[str, int]]]:
+    """색(파랑/빨강)이 아니라 "밝은 표 vs 어두운 배경" 구조로 아군/상대 패널
+    박스를 찾는다. 표는 가운데에 있으므로 가운데 세로 띠의 행별 밝기에서 위쪽
+    밝은 구간=아군, 아래쪽 밝은 구간=상대로 본다(둘 사이 어두운 구간이 VS
+    구분선). 각 밴드의 x범위는 그 밴드 안 컬럼별 밝기로 좌우 경계를 잡는다.
+    우측 상단 배너(모드마다 색이 다름)는 가운데 띠 밖 + 밴드 y범위 밖이라 자연히
+    빠진다. 아군/상대 밴드를 못 찾으면 None(→ 호출부가 색 기반 결과를 유지)."""
+    h, w = image.shape[:2]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    cx0, cx1 = int(w * STRUCTURAL_CENTER_XBAND[0]), int(w * STRUCTURAL_CENTER_XBAND[1])
+    row_profile = cv2.GaussianBlur(gray[:, cx0:cx1].mean(axis=1).reshape(-1, 1), (1, 9), 0).ravel()
+    lo_pct, hi_pct = STRUCTURAL_BRIGHT_PCT
+    runs = _structural_bright_run_bounds(
+        row_profile, np, lo_pct, hi_pct, STRUCTURAL_ROW_THR_RATIO, int(h * STRUCTURAL_MIN_BAND_HEIGHT_RATIO),
+    )
+    if len(runs) < 2:
+        return None
+    runs.sort()
+    ally_y, enemy_y = runs[0], runs[-1]
+
+    def _x_extent(y0: int, y1: int) -> Tuple[int, int]:
+        col_profile = cv2.GaussianBlur(gray[y0:y1, :].mean(axis=0).reshape(-1, 1), (1, 9), 0).ravel()
+        col_runs = _structural_bright_run_bounds(
+            col_profile, np, lo_pct, hi_pct, STRUCTURAL_COL_THR_RATIO, int(w * STRUCTURAL_MIN_COL_RUN_RATIO),
+        )
+        if not col_runs:
+            return int(w * 0.28), int(w * 0.72)
+        col_runs.sort(key=lambda r: r[1] - r[0], reverse=True)
+        return col_runs[0]
+
+    ax0, ax1 = _x_extent(*ally_y)
+    ex0, ex1 = _x_extent(*enemy_y)
+    ally_box = {"x0": ax0, "y0": ally_y[0], "x1": ax1, "y1": ally_y[1]}
+    enemy_box = {"x0": ex0, "y0": enemy_y[0], "x1": ex1, "y1": enemy_y[1]}
+    return ally_box, enemy_box
+
+
+def _structural_ally_header_height(cv2, np, image, box: Dict[str, int]) -> int:
+    """구조 기반 아군 박스는 위쪽에 칼럼 제목 바(헤더)가 포함돼 있다. 헤더와 첫
+    플레이어 행의 경계는 밴드 상단부에서 수평 에지가 가장 강한 y다(색 무관).
+    그 y까지를 헤더 높이로 돌려준다."""
+    x0, x1, y0, y1 = box["x0"], box["x1"], box["y0"], box["y1"]
+    region = image[y0:y1, x0:x1]
+    if region.size == 0:
+        return 0
+    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    gy = np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)).mean(axis=1)
+    top = max(4, int((y1 - y0) * STRUCTURAL_HEADER_SEARCH_RATIO))
+    if top <= 4:
+        return 0
+    return int(np.argmax(gy[4:top])) + 4
+
+
+def _box_iou(a: Optional[Dict[str, int]], b: Optional[Dict[str, int]]) -> float:
+    """두 box의 IoU(교집합/합집합 면적). 색 team_box가 구조 박스와 얼마나
+    일치하는지로 색 검출이 깨졌는지 판단하는 데 쓴다."""
+    if not a or not b:
+        return 0.0
+    ix0, iy0 = max(a["x0"], b["x0"]), max(a["y0"], b["y0"])
+    ix1, iy1 = min(a["x1"], b["x1"]), min(a["y1"], b["y1"])
+    inter = max(0, ix1 - ix0) * max(0, iy1 - iy0)
+    union = (a["x1"] - a["x0"]) * (a["y1"] - a["y0"]) + (b["x1"] - b["x0"]) * (b["y1"] - b["y0"]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _maybe_replace_with_structural(cv2, np, image, layout: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """색 기반 검출 결과를 구조 기반 표 검출과 대조해, 색 team_box가 구조 박스와
+    충분히 안 겹치면(경기 중 캡처에서 배경이 패널 색과 겹쳐 색 검출이 무너진
+    경우) 구조 기반 박스로 layout을 교체한다. 둘이 잘 맞으면(경기 종료 캡처 등)
+    색 결과를 그대로 둬 기존 정밀도를 유지한다."""
+    diag: Dict[str, Any] = {"available": False, "used": False, "ally_iou": None, "enemy_iou": None}
+    structural = _detect_structural_table_boxes(cv2, np, image)
+    if structural is None:
+        return layout, diag
+    diag["available"] = True
+    struct_by_team = {"ally": structural[0], "enemy": structural[1]}
+
+    healthy = True
+    for team, sbox in struct_by_team.items():
+        entry = layout.get(team) or {}
+        cbox = entry.get("team_box") if entry.get("layout_validation_ok") else None
+        iou = _box_iou(cbox, sbox)
+        diag[f"{team}_iou"] = round(iou, 3)
+        if iou < STRUCTURAL_FALLBACK_MIN_IOU:
+            healthy = False
+    if healthy:
+        return layout, diag
+
+    diag["used"] = True
+    new_layout: Dict[str, Any] = {}
+    for team, box in struct_by_team.items():
+        header_h = _structural_ally_header_height(cv2, np, image, box) if team == "ally" else 0
+        (player_top, player_bottom), header_h = _compute_player_area((box["y0"], box["y1"]), header_h)
+        new_layout[team] = {
+            **_empty_team_layout([], "structural_table_detection"),
+            "team_box": box,
+            "header_height": header_h,
+            "player_area_box": {"x0": box["x0"], "y0": player_top, "x1": box["x1"], "y1": player_bottom},
+            "selected_candidate_box": box,
+            "layout_validation_ok": True,
+            "layout_validation_reason": None,
+        }
+    return new_layout, diag
+
+
 def _compute_team_layout(cv2, np, image) -> Dict[str, Any]:
     """우리팀(파란)/상대팀(빨간) 패널을 contour로 검출하고 쌍을 선택해 team_box
     를 확정한 뒤, 실제 인원수(5 또는 6)를 판별해(_resolve_roster_size)
     row_boxes/expected_row_height/role_codes를 그 인원수 기준으로 만든다.
-    반환값은 {"ally": {...}, "enemy": {...}, "_meta": {...}}이고, "_meta"는
-    사용자 화면과 무관한 진단 전용 값이다."""
+    색 기반 검출이 깨진 캡처(경기 진행 중 화면 등)는 구조 기반 표 검출로 폴백한다
+    (_maybe_replace_with_structural). 반환값은 {"ally": {...}, "enemy": {...},
+    "_meta": {...}}이고, "_meta"는 사용자 화면과 무관한 진단 전용 값이다."""
     width_img = image.shape[1]
     blue_candidates = _find_team_color_candidates(cv2, np, image, [BLUE_HUE_RANGE], BLUE_TEAM_COLOR_MIN_VALUE)
     red_candidates = _find_team_color_candidates(cv2, np, image, RED_HUE_RANGES, RED_TEAM_COLOR_MIN_VALUE)
@@ -1570,6 +1726,8 @@ def _compute_team_layout(cv2, np, image) -> Dict[str, Any]:
     layout, row_height_mismatch = _resolve_row_height_mismatch(
         cv2, np, image, layout, picked_by_team, candidates_by_team, width_img,
     )
+
+    layout, structural_diag = _maybe_replace_with_structural(cv2, np, image, layout)
 
     roster_size, roster_size_diag = _resolve_roster_size(cv2, np, image, layout)
     role_templates = _load_role_icon_templates(cv2, np) if roster_size != DEFAULT_PLAYERS_PER_TEAM else {}
@@ -1597,6 +1755,7 @@ def _compute_team_layout(cv2, np, image) -> Dict[str, Any]:
     layout["_meta"] = {
         "pair_evaluations": pair_evaluations, "row_height_mismatch": row_height_mismatch,
         "roster_size": roster_size, "roster_size_diag": roster_size_diag,
+        "structural_fallback": structural_diag,
     }
     return layout
 

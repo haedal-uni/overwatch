@@ -33,7 +33,8 @@ from chat.domain.heroes import (
 from chat.domain.intent_rules import (
     ENEMY_ROLE_FOCUS_LABELS,
     ROLE_NARROWING_MAX_AGE_SECONDS,
-    can_be_five_vs_five,
+    alternate_roster_size,
+    can_be_roster_size,
     detect_roster_size,
     detect_stat_input,
     extract_ally_team,
@@ -54,7 +55,9 @@ from chat.domain.intent_rules import (
     is_ellipsis_followup,
     is_performance_comparison_question,
     is_pure_role_correction,
+    resolve_roster_size,
     role_filter_from_text,
+    roster_size_button_label,
     wants_composition_recommendation,
 )
 from chat.rag.llm_utils import call_llm_text, safe_json_loads
@@ -799,18 +802,34 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     roster_size = declared_roster_size or (
         context.get("roster_size") if not context_was_reset else None
     )
+    # 사용자가 말한 값이 없으면 현재 메타(CURRENT_META_ROSTER_SIZE). roster_size는
+    # "사용자가 직접 밝힌 값"으로만 남겨 세션에 저장하고, 실제 답변 기준은 이 값을
+    # 쓴다 — 메타 기본값을 세션에 눌러 담으면 나중에 메타가 바뀌어도 옛 값이
+    # 계속 이겨버린다.
+    effective_roster_size = resolve_roster_size(roster_size)
     team_comp_analysis = (
-        analyze_team_comp(ally_team, roster_size)
+        analyze_team_comp(ally_team, effective_roster_size)
         if len(ally_team) >= 2 and ally_comp_fresh
         else None
     )
+    # 아군만으로 정원이 찬 조합이면 사용자가 채울 자리가 없다 — 역할을 좁힐
+    # 대상 자체가 없으므로 좁히지 않고, 아래에서 추천 카드 대신 조합 평가로 보낸다.
+    roster_is_full = bool(team_comp_analysis and team_comp_analysis["is_full_roster"])
     team_comp_role_candidates = (
-        list(team_comp_analysis["candidate_roles"]) if team_comp_analysis else []
+        list(team_comp_analysis["candidate_roles"])
+        if team_comp_analysis and not roster_is_full
+        else []
     )
     team_comp_inferred_role = (
         make_role_filter(team_comp_role_candidates) if team_comp_role_candidates else None
     )
-    if team_comp_analysis:
+    if team_comp_analysis and roster_is_full:
+        logger.info(
+            "[TEAM COMP FULL] %d인 정원이 아군 %s만으로 이미 찼음 — 사용자 자리가 없어 "
+            "역할 좁히기/추천 카드 없이 조합 평가로 답함",
+            team_comp_analysis["roster_size"], ally_team,
+        )
+    elif team_comp_analysis:
         logger.info(
             "[TEAM COMP ROLE] %d인 기준 아군 %s → 사용자 역할 후보 %s (마지막 자리=%s) "
             "→ role_filter=%s",
@@ -975,13 +994,22 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 {"label": ROLE_LABELS[role], "value": role, "type": "role_filter"}
                 for role in ordered_candidates
             )
-        # 5대5 버튼은 인원수를 못 들었고 5vs5로도 성립 가능할 때만.
-        if not roster_size and can_be_five_vs_five(ally_team):
-            answer_choice_buttons.append(
-                {"label": "5대5예요", "value": "5", "type": "roster_size"}
-            )
     elif ally_comp_stale and not explicit_role_filter and not current_hero_role:
         role_basis_note = "이전에 말씀하신 아군 조합 기준으로 답변드립니다."
+
+    # 인원수 정정 버튼. 조합을 기준으로 답한 턴에만 붙이고, 라벨은 지금 적용한
+    # 인원수의 반대쪽이다 — 6대6으로 답했으면 "5대5예요", 5대5로 답했으면
+    # "6대6이에요". 반대쪽 규격으로는 성립할 수 없는 조합이면 숨긴다.
+    # 역할 좁히기 여부와 무관하게(정원이 찬 조합·역할을 이미 아는 경우에도)
+    # 인원수는 답변 내용을 바꾸므로 항상 정정할 수 있게 둔다.
+    if team_comp_analysis:
+        other_roster_size = alternate_roster_size(effective_roster_size)
+        if can_be_roster_size(ally_team, other_roster_size):
+            answer_choice_buttons.append({
+                "label": roster_size_button_label(other_roster_size),
+                "value": str(other_roster_size),
+                "type": "roster_size",
+            })
 
     if intent in ["counter", "stay", "performance_improve"] and not target_enemy:
         previous_target_enemy = context.get("target_enemy")
@@ -1117,9 +1145,16 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
     # 추천 영웅 카드 모드. swap과 composition이 같은 카드 형식을 공유한다.
     # composition은 추천 요청 표현이 있을 때만 카드고, 평가 질문은 텍스트 답변이다
-    # (intent는 composition으로 유지한다).
+    # (intent는 composition으로 유지한다). 아군만으로 정원이 찬 조합은 사용자가
+    # 채울 자리가 없으므로 추천 요청 표현이 있어도 카드를 만들지 않는다 —
+    # 6대6에서 6명을 나열하고 "어때?"라고 묻는 건 개인 픽 추천이 아니라 팀 조합
+    # 전체에 대한 평가 요청이다.
     recommend_card_mode: Optional[str] = None
-    if (is_team_comp_question or composition_reask) and wants_composition_recommendation(effective_message):
+    if (
+        (is_team_comp_question or composition_reask)
+        and wants_composition_recommendation(effective_message)
+        and not roster_is_full
+    ):
         recommend_card_mode = "composition"
     elif intent == "swap" and current_hero and not current_hero_uncertain:
         # 이미 쓰는 영웅이 있는 교체 고민 — 같은 역할 안에서 대안을 추천한다.
@@ -1158,7 +1193,12 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         # 역할 후보와 그 조합이 최근 것인지(5분 규칙). fresh면 되묻지 않는다.
         "role_candidates": team_comp_role_candidates,
         "role_candidates_fresh": bool(team_comp_role_candidates),
+        # roster_size는 사용자가 직접 밝힌 값(없으면 None), roster_size_effective는
+        # 실제로 답변에 적용한 값(밝히지 않았으면 현재 메타). 답변 프롬프트는
+        # 후자를 쓴다.
         "roster_size": roster_size,
+        "roster_size_effective": effective_roster_size,
+        "roster_is_full": roster_is_full,
         # 판단 근거 한 줄과 정정 버튼. 버튼이 붙으면 추천 질문은 생략한다.
         "role_basis_note": role_basis_note,
         "choice_buttons": answer_choice_buttons,

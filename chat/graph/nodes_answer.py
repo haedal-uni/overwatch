@@ -35,6 +35,9 @@ from chat.domain.heroes import (
 )
 from chat.domain.intent_rules import (
     is_performance_comparison_question,
+    resolve_roster_size,
+    roster_role_quota_text,
+    roster_size_label,
 )
 from chat.rag.llm_utils import call_llm_text, call_llm_text_creative, safe_json_loads
 from chat.domain.prompts import (
@@ -429,12 +432,25 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         # 새지 않게 막는다(추천은 카드나 후속 질문 버튼의 몫).
         composition_evaluation_instruction = ""
         if state.get("intent") == "composition" and not state.get("recommend_card_mode"):
-            composition_evaluation_instruction = """
+            comp_roster_size = resolve_roster_size(state.get("roster_size_effective"))
+            roster_line = (
+                f"\n    이번 판은 {roster_size_label(comp_roster_size)}이고 역할 정원은 "
+                f"{roster_role_quota_text(comp_roster_size)}이다. 이 규격을 기준으로 "
+                "조합이 균형 잡혔는지 판단해라."
+            )
+            # 정원이 이미 찬 조합은 "내 자리"라는 개념 자체가 없다.
+            if state.get("roster_is_full"):
+                roster_line += (
+                    f"\n    아군 {comp_roster_size}명이 모두 정해진 완성된 조합이라 "
+                    "사용자가 채울 빈자리가 없다. 사용자 개인이 무엇을 골라야 할지는 "
+                    "다루지 말고, 팀 조합 전체가 어떤지를 평가해라."
+                )
+            composition_evaluation_instruction = f"""
 11. 사용자는 이미 정한 아군 조합(위 "아군 조합")이 어떤지 평가해달라고 묻고
     있다(무엇을 더 뽑을지 추천해달라는 질문이 아니다). 그 조합의 강점/약점과
     함께 쓸 때의 운영 방식을 답변의 중심 내용으로 다뤄라. 부족한 역할이나
     약점이 있다면 "이런 부분이 아쉽다" 정도로 짧게만 짚고, 그걸 보완할 구체적인
-    영웅을 여러 명 나열해서 추천하지는 마라 — 그건 이 답변이 할 일이 아니다."""
+    영웅을 여러 명 나열해서 추천하지는 마라 — 그건 이 답변이 할 일이 아니다.{roster_line}"""
 
         prompt = f"""
 너는 오버워치 코칭 RAG 챗봇이다. 사용자에게 한국어로 답변해라.
@@ -899,11 +915,17 @@ def generate_recommend_card_node(state: ChatbotGraphState) -> ChatbotGraphState:
             ally_display = ", ".join(
                 f"{h}({ROLE_LABELS.get(HERO_TO_ROLE.get(h), '?')})" for h in ally_team
             ) or "없음"
+            # 인원수는 판마다/패치마다 달라지므로 규격을 프롬프트에 명시한다.
+            roster_size = resolve_roster_size(state.get("roster_size_effective"))
+            open_slots = max(1, roster_size - len(ally_team))
             context_block = f"""
+이번 판은 {roster_size_label(roster_size)}이다(한 팀 {roster_size}명, 역할 정원은
+{roster_role_quota_text(roster_size)}).
 아군 조합(이미 정해진 인원): {ally_display}
 상대 조합: {', '.join(display_enemy_team) if display_enemy_team else '없음'}
-사용자는 아직 영웅을 고르지 않았고, 위 인원 외에 남은 한 자리를 채울 영웅을
-고르는 상황이다. 남은 역할은 이미 위 역할 제한에 반영돼 있다."""
+사용자를 포함해 아직 {open_slots}자리가 비어 있다. 사용자는 아직 영웅을 고르지
+않았고, 그중 자기 자리를 채울 영웅을 고르는 상황이다. 남은 역할은 이미 위 역할
+제한에 반영돼 있다."""
             task_instruction = """
 분석 순서:
 1. 상대팀에서 가장 위협적인 영웅 1~2명을 찾고, 왜 위협적인지 설명해라.

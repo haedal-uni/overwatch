@@ -64,10 +64,16 @@ class ChatbotGraphState(TypedDict, total=False):
     ally_team: List[str]
     llm_ally_team: List[str]
     # 아군 조합으로 좁힌 사용자 역할 후보와, 그 조합이 역할 좁히기에 쓸 만큼
-    # 최근인지(5분 규칙). roster_size는 사용자가 직접 알려준 팀 인원수(5/6).
+    # 최근인지(5분 규칙).
     role_candidates: List[str]
     role_candidates_fresh: bool
+    # roster_size = 사용자가 직접 알려준 팀 인원수(5/6, 안 알려줬으면 None).
+    # roster_size_effective = 실제로 답변에 적용한 인원수(안 알려줬으면 현재 메타
+    # CURRENT_META_ROSTER_SIZE). roster_is_full = 아군만으로 정원이 찼는지
+    # (사용자가 채울 자리가 없어 개인 픽 추천 대신 조합 평가로 답해야 하는 경우).
     roster_size: Optional[int]
+    roster_size_effective: int
+    roster_is_full: bool
     # 되묻지 않고 답할 때 답변 끝에 붙이는 판단 근거 한 줄.
     role_basis_note: str
     compared_heroes: List[str]
