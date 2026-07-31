@@ -17,6 +17,7 @@ from chat.domain.heroes import (
     HERO_ALIASES,
     HERO_TO_ROLE,
     ROLE_HEROES,
+    ROLE_LABELS,
     HEROES,
     MAPS,
     find_all_heroes,
@@ -258,9 +259,16 @@ ROSTER_ROLE_RANGES = {
     6: {"tank": (1, 2), "damage": (2, 3), "support": (2, 2)},
 }
 
-# 인원수를 못 들었을 때의 기본값. 현재 패치가 6vs6이라 6이며, 패치가 바뀌면
-# 이 값만 고치면 된다. 인원수는 추측하지 않고 사용자가 말할 때만 5로 본다.
-DEFAULT_ROSTER_SIZE = 6
+# ─────────────────────────────────────────────────────────────────────────
+# 현재 패치 메타의 팀 인원수. 5vs5 ↔ 6vs6를 바꾸는 **유일한 고정점**이다.
+# 패치가 바뀌면 이 값만 5 또는 6으로 고치면 역할 좁히기, 답변 프롬프트에
+# 들어가는 규격 설명, 답변 하단 정정 버튼("5대5예요"/"6대6이에요")이 전부
+# 따라 바뀐다. 다른 곳에 5나 6을 직접 쓰지 마라.
+#
+# 인원수는 추측하지 않는다 — 사용자가 직접 말하거나("5대5야") 답변 하단
+# 버튼을 누르기 전까지는 항상 이 값을 쓴다.
+# ─────────────────────────────────────────────────────────────────────────
+CURRENT_META_ROSTER_SIZE = 5
 
 # 아군 조합을 역할 좁히기에 쓸 수 있는 유효 기간. 이보다 오래되면 답변 참고
 # 자료로만 쓴다.
@@ -282,6 +290,44 @@ def detect_roster_size(text: str) -> Optional[int]:
     if not match or match.group(1) != match.group(2):
         return None
     return int(match.group(1))
+
+
+def resolve_roster_size(declared: Optional[int]) -> int:
+    """이번 답변에 실제로 적용할 인원수. 사용자가 밝힌 값이 있으면 그 값,
+    없으면 현재 메타(CURRENT_META_ROSTER_SIZE)."""
+    if declared in ROSTER_ROLE_RANGES:
+        return declared
+    return CURRENT_META_ROSTER_SIZE
+
+
+def alternate_roster_size(roster_size: Optional[int] = None) -> int:
+    """지금 적용 중인 인원수의 반대쪽(5↔6). 답변 하단 정정 버튼용 —
+    6대6으로 답했으면 "5대5예요", 5대5로 답했으면 "6대6이에요"가 붙는다."""
+    return 5 if resolve_roster_size(roster_size) == 6 else 6
+
+
+def roster_size_label(roster_size: int) -> str:
+    """5 → "5대5"."""
+    return f"{roster_size}대{roster_size}"
+
+
+def roster_size_button_label(roster_size: int) -> str:
+    """정정 버튼 라벨. 받침 유무에 따라 조사가 달라진다
+    (5="오"→"5대5예요", 6="육"→"6대6이에요")."""
+    suffix = "예요" if roster_size == 5 else "이에요"
+    return f"{roster_size_label(roster_size)}{suffix}"
+
+
+def roster_role_quota_text(roster_size: int) -> str:
+    """프롬프트에 넣는 역할 정원 설명. 예: "탱커 1명, 딜러 2명, 힐러 2명"
+    (6인은 "탱커 1~2명, 딜러 2~3명, 힐러 2명")."""
+    ranges = ROSTER_ROLE_RANGES.get(roster_size) or ROSTER_ROLE_RANGES[CURRENT_META_ROSTER_SIZE]
+    parts = []
+    for role in ROLE_HEROES:
+        low, high = ranges[role]
+        count = f"{low}명" if low == high else f"{low}~{high}명"
+        parts.append(f"{ROLE_LABELS[role]} {count}")
+    return ", ".join(parts)
 
 # 예전 이름(표준 구성 쿼터). 5vs5 기준 값이라 그대로 두되, 새 코드는
 # ROSTER_ROLE_RANGES를 쓴다.
@@ -329,15 +375,19 @@ def analyze_team_comp(
         known_count      역할을 알아낸 아군 수
         candidate_roles  사용자가 맡을 수 있는 역할 목록(좁히지 못하면 3개 전부)
         is_last_slot     사용자 자리가 마지막 한 자리인지(미지의 팀원이 없음)
+        is_full_roster   말한 아군만으로 이미 정원이 찬 조합인지(사용자 자리 없음)
 
     인원수는 추측하지 않는다 — 사용자가 직접 알려준 값(roster_size 인자)이
-    없으면 항상 DEFAULT_ROSTER_SIZE(6vs6)로 본다.
+    없으면 항상 현재 메타(CURRENT_META_ROSTER_SIZE)로 본다.
     """
     counts = count_roles(ally_heroes)
     known_count = sum(counts.values())
 
-    if roster_size not in ROSTER_ROLE_RANGES:
-        roster_size = DEFAULT_ROSTER_SIZE
+    roster_size = resolve_roster_size(roster_size)
+
+    # 말한 아군만으로 정원이 다 찼으면 사용자가 채울 자리가 없다 — "내가 뭘
+    # 고를까"가 아니라 완성된 팀 조합 자체를 평가해달라는 질문이다.
+    full_roster = len(ally_heroes or []) >= roster_size
 
     # 사용자 자신을 뺀 나머지 자리 중 아직 정체를 모르는 팀원 수.
     unknown_teammates = roster_size - 1 - known_count
@@ -362,21 +412,24 @@ def analyze_team_comp(
         "known_count": known_count,
         "candidate_roles": candidate_roles,
         "is_last_slot": unknown_teammates <= 0,
+        "is_full_roster": full_roster,
     }
 
 
-def can_be_five_vs_five(ally_heroes: List[str]) -> bool:
-    """지금까지 말한 아군 조합이 5vs5(탱1/딜2/힐2)로도 성립할 수 있는가.
+def can_be_roster_size(ally_heroes: List[str], roster_size: int) -> bool:
+    """지금까지 말한 아군 조합이 그 인원수 규격으로도 성립할 수 있는가.
 
-    5대5 버튼을 보여줄지 결정하는 데 쓴다 — 아군을 5명 이상 말했거나(5vs5면
-    사용자 자리까지 6명이 되어 불가능), 탱커가 2명 이상이거나, 딜러가 3명
-    이상이면 이미 5vs5 정원을 넘었으므로 버튼을 숨긴다. 힐러는 5vs5·6vs6 모두
-    2명이라 판별에 쓰이지 않는다.
+    인원수 정정 버튼("5대5예요"/"6대6이에요")을 보여줄지 결정하는 데 쓴다 —
+    사용자 자리를 포함해 정원을 이미 넘었거나(아군을 roster_size명 이상 말함),
+    어느 역할이든 그 규격의 상한을 넘었으면(5vs5인데 탱커 2명/딜러 3명 등)
+    그 인원수로는 성립할 수 없으므로 버튼을 숨긴다. 힐러는 두 규격 모두 2명
+    이라 판별에 쓰이지 않는다.
     """
-    counts = count_roles(ally_heroes)
-    if len(ally_heroes or []) >= 5:
+    if roster_size not in ROSTER_ROLE_RANGES:
         return False
-    return _fits_roster(counts, 5)
+    if len(ally_heroes or []) >= roster_size:
+        return False
+    return _fits_roster(count_roles(ally_heroes), roster_size)
 
 
 def infer_missing_role_from_team_comp(ally_heroes: List[str]) -> Optional[str]:
