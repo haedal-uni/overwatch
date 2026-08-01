@@ -414,6 +414,12 @@ def _build_canned_composition(message: str, answer_style: str) -> Dict[str, Any]
     context_patch = {
         **_canned_base_context_patch(message, answer_style, "composition"),
         "enemy_team": list(CANNED_COMPOSITION_ENEMY_LIST),
+        # 아군 조합도 상대 조합과 똑같이 세션에 남긴다 — 실제 파이프라인이
+        # merge_context_node에서 하는 일이다(ally_team/ally_team_ts). 이게 빠져
+        # 있으면 "우리 조합 운영법 알려줘" 같은 후속 질문에서 아군만 비어 있어,
+        # 세션에 남은 상대 조합이나 옛 값이 아군 자리로 흘러든다(2026-07-31).
+        "ally_team": list(CANNED_COMPOSITION_ALLY_LIST),
+        "ally_team_ts": time.time(),
         "focus_heroes": [h["hero"] for h in CANNED_COMPOSITION_HEROES],
     }
     recommend_card = {"mode": "composition", "heroes": CANNED_COMPOSITION_HEROES}

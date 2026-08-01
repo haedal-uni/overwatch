@@ -517,17 +517,33 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
         return {}
 
 
+# 마지막 메시지로부터 이만큼 지나면 새 판으로 보고 coach_context를 통째로 비운다.
+SESSION_TIMEOUT_SECONDS = 10 * 60
+
+
+def is_session_timed_out(context: Dict[str, Any], now_ts: Optional[float] = None) -> bool:
+    """마지막 메시지로부터 SESSION_TIMEOUT_SECONDS가 지났는가.
+
+    merge_context_node 안에 지역 변수로 있던 판단을 함수로 뺐다 — 웰컴 버튼
+    캐시 응답(canned)은 그래프를 타지 않아 이 검사를 건너뛰면서 세션의
+    `last_message_ts`만 지금 시각으로 갱신한다. 그러면 며칠 전 대화가 담긴
+    세션이 "방금까지 대화 중"으로 보여 그대로 살아남고, 캐시 다음의 첫 실제
+    질문이 옛 `current_hero`/`ally_team`을 물고 답하는 사고가 난다(2026-07-31).
+    그래서 `chat_api`도 캐시를 부르기 전에 같은 판단을 쓴다.
+    """
+    last_message_ts = context.get("last_message_ts")
+    if not last_message_ts:
+        return False
+    return ((now_ts if now_ts is not None else time.time()) - last_message_ts) > SESSION_TIMEOUT_SECONDS
+
+
 def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     message = state.get("message", "").strip()
     context = state.get("conversation_context", {}) or {}
 
-    # 10분 이상 메시지가 없으면 새 판으로 보고 컨텍스트를 초기화한다.
-    SESSION_TIMEOUT_SECONDS = 10 * 60
     now_ts = time.time()
     last_message_ts = context.get("last_message_ts")
-    session_timed_out = bool(
-        last_message_ts and (now_ts - last_message_ts) > SESSION_TIMEOUT_SECONDS
-    )
+    session_timed_out = is_session_timed_out(context, now_ts)
     if session_timed_out:
         logger.info(
             "[SESSION TIMEOUT] 마지막 메시지로부터 %.0f초 경과 — 컨텍스트 초기화 (새 게임으로 간주)",
