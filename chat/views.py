@@ -8,7 +8,12 @@ from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
-from chat.graph.pipeline import role_filter_label, run_chatbot_graph, try_canned_shortcut
+from chat.graph.pipeline import (
+    is_session_timed_out,
+    role_filter_label,
+    run_chatbot_graph,
+    try_canned_shortcut,
+)
 from chat.models import ChatLog
 from chat.vision.scoreboard import analyze_scoreboard_image, ScoreboardAnalysisError
 
@@ -177,6 +182,19 @@ def chat_api(request):
         turn_id = str(uuid.uuid4())
 
         conversation_context = request.session.get("coach_context", {})
+
+        # 세션 타임아웃(10분) 검사는 원래 그래프 안(merge_context_node)에만 있었다.
+        # 그런데 캐시 응답은 그래프를 타지 않으면서 last_message_ts만 지금 시각으로
+        # 갱신하므로, 캐시로 시작한 대화는 며칠 전 세션을 그대로 물고 간다. 그래서
+        # 두 경로가 갈리기 전인 여기서 먼저 본다(그래프 쪽 검사는 그대로 남아 있고,
+        # 여기서 비우면 그쪽은 자연히 통과한다).
+        if is_session_timed_out(conversation_context):
+            logger.info(
+                "[SESSION TIMEOUT] 마지막 메시지로부터 %.0f초 경과 — 컨텍스트 초기화 (새 게임으로 간주)",
+                time.time() - conversation_context.get("last_message_ts", 0),
+            )
+            conversation_context = {}
+
         context_before = dict(conversation_context)
 
         # 웰컴 화면 버튼은 그래프 실행 없이 캐시 답변을 돌려준다.
