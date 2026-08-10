@@ -515,9 +515,25 @@ def detect_situation(text: str) -> bool:
 _SWAP_TRIGGER_PATTERN = re.compile(r"말고|다른\s*영웅|바꾸|바꿀|바꿔|교체|변경|픽\s*추천")
 
 # 영웅 이름을 생략한 후속 질문("E 스킬은?"). 이런 질문만 이전
-# intent/focus_heroes를 이어받는다.
-_ELLIPSIS_FOLLOWUP_WORDS = ["플레이", "운영", "스킬", "포지션", "타이밍", "궁", "굴리", "굴려"]
+# intent/focus_heroes를 이어받는다. "특전 추천해줘"도 앞 대화의 영웅을 그대로
+# 두고 묻는 후속 질문이라 여기 포함한다.
+_ELLIPSIS_FOLLOWUP_WORDS = [
+    "플레이", "운영", "스킬", "포지션", "타이밍", "궁", "굴리", "굴려", "특전", "퍼크",
+]
 _ELLIPSIS_FOLLOWUP_MAP_PATTERN = re.compile(r"어떤\s*맵|맵에서")
+
+
+# 특전(퍼크)을 묻는 질문. "특전 추천해줘"의 "추천"이 영웅 추천 요청으로 읽혀
+# 추천 영웅 카드가 나가던 문제를 막고, 답변 프롬프트에 특전 전용 지시를 붙이는
+# 데 쓴다. 특전/퍼크는 오버워치에서 이 뜻으로만 쓰이는 단어라 단어 등장만으로
+# 판단해도 오탐이 없다.
+_PERK_QUESTION_PATTERN = re.compile(r"특전|퍼크|perk", re.IGNORECASE)
+
+
+def is_perk_question(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_PERK_QUESTION_PATTERN.search(message))
 
 
 def is_ellipsis_followup(text: str) -> bool:

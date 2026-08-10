@@ -20,6 +20,7 @@ from chat.domain.heroes import (
     ROLE_HEROES,
     ROLE_LABELS,
 )
+from chat.rag.doc_sections import get_hero_perk_section
 from chat.rag.llm_utils import (
     call_llm_text,
     document_to_dict,
@@ -65,6 +66,12 @@ def off_topic_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
             "has_stats": False,
         },
     }
+
+
+def resolve_perk_hero(state: ChatbotGraphState) -> Any:
+    """특전 질문이 다루는 영웅. 자기 영웅이 있으면 그 영웅, 아니면 주제 영웅."""
+    focus_heroes = state.get("focus_heroes") or []
+    return state.get("current_hero") or (focus_heroes[0] if focus_heroes else None)
 
 
 def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
@@ -138,6 +145,14 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
         else:
             queries.append(f"{current_hero or ''} 위기 상황 대처법 생존 운영")
 
+    # 특전 질문은 그 영웅의 특전 절이 반드시 있어야 답을 만들 수 있다. 실제
+    # 절 원문은 retrieve_docs_node가 문서에서 직접 꺼내 얹지만(perk_hero_section),
+    # 특전과 함께 볼 운영 맥락을 위해 검색도 같이 한다.
+    if state.get("is_perk_question"):
+        perk_hero = resolve_perk_hero(state)
+        if perk_hero:
+            queries.append(f"{perk_hero} 특전 보조 특전 주요 특전")
+
     unique_queries = [q.strip() for q in dict.fromkeys(queries) if q.strip()]
     logger.info("[RAG 검색 쿼리] %s", unique_queries)
     return {"retrieval_queries": unique_queries}
@@ -183,6 +198,25 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 seen_contents.add(content_key)
                 doc_dict["query"] = query
                 all_docs.append(doc_dict)
+
+        # 특전 질문에는 그 영웅의 특전 절을 문서에서 직접 꺼내 맨 앞에 얹는다.
+        # 벡터 검색만으로는 이 절이 상위 k에 못 드는 일이 흔하다 — 절 본문에
+        # 영웅 이름이 없고 51명의 특전 절이 서로 거의 같은 문장이라 다른 영웅의
+        # 특전이나 같은 영웅의 다른 절에 밀린다(실측: "오리사 특전"은 상위 10개
+        # 안에 오리사 특전 절이 없었다). 그 결과 "특전 데이터가 없는 영웅"이라는
+        # 엉뚱한 답이 나갔다.
+        if state.get("is_perk_question"):
+            perk_hero = resolve_perk_hero(state)
+            perk_section = get_hero_perk_section(perk_hero)
+            if perk_section:
+                all_docs.insert(0, {
+                    "content": f"## {perk_hero}\n{perk_section}",
+                    "metadata": {"H2": perk_hero, "H3": "특전 데이터"},
+                    "query": f"{perk_hero} 특전 데이터(원문 직접 조회)",
+                })
+                logger.info("[PERK SECTION] %s 특전 절을 검색 결과 맨 앞에 추가", perk_hero)
+            else:
+                logger.info("[PERK SECTION] %s의 특전 절이 문서에 없음", perk_hero)
 
         all_docs = all_docs[:12]
         numbered_docs = [{**doc, "doc_id": idx} for idx, doc in enumerate(all_docs, start=1)]

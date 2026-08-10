@@ -28,6 +28,7 @@ from chat.domain.intent_rules import (
     extract_enemy_team,
     find_enemy_mentioned_hero,
     hero_mentioned_as_current_hero,
+    is_perk_question,
 )
 from chat.graph.nodes_context import clarify_role_filter_node
 
@@ -262,6 +263,12 @@ def match_canned_topic(message: str) -> Optional[str]:
     가리키는지 판단한다. 대상이 다르면 None을 반환해 평소처럼 그래프를 태운다."""
     text = (message or "").strip()
     if not text:
+        return None
+
+    # 캐시된 5개 답변에는 특전 얘기가 없다. "나 솔저76 킬 4 데스 8 딜 6000인데
+    # 특전 추천해줘"처럼 캐시 조건(영웅+수치)을 만족하면서 다른 것을 묻는 질문에
+    # 캐시가 나가면, 특전은 한 글자도 없는 스탯 개선 답변이 그대로 돌아간다.
+    if is_perk_question(text):
         return None
 
     # 영웅 유지(리퍼 유지 + 상대 아나) — 두 조건이 모두 맞을 때만 인정한다.

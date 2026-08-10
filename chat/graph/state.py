@@ -61,6 +61,9 @@ class ChatbotGraphState(TypedDict, total=False):
     matchup_card: Optional[Dict[str, Any]]
     recommend_card_mode: Optional[str]
     recommend_card: Optional[Dict[str, Any]]
+    # 특전(퍼크) 질문인지. 답변 프롬프트에 특전 전용 지시를 붙이고, "추천"이라는
+    # 단어 때문에 추천 영웅 카드가 나가는 것을 막는 데 쓴다.
+    is_perk_question: bool
     ally_team: List[str]
     llm_ally_team: List[str]
     # 아군 조합으로 좁힌 사용자 역할 후보와, 그 조합이 역할 좁히기에 쓸 만큼
