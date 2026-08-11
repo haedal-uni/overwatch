@@ -878,9 +878,8 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         # LLM이 비교 질문을 composition으로 분류해오는 경우의 안전장치.
         intent = "performance_improve"
 
-    # "특전 추천해줘"의 "추천"은 영웅 추천 요청이 아니다 — 그대로 두면 swap/
-    # composition으로 분류돼 특전 대신 다른 영웅을 추천하는 카드가 나간다.
-    # 특전은 지금 영웅을 계속 쓰면서 무엇을 고를지 묻는 질문이라 개선 질문으로 본다.
+    # 특전 질문의 "추천"은 영웅 추천 요청이 아니다. 지금 영웅을 계속 쓰면서
+    # 무엇을 고를지 묻는 질문이라 개선 질문으로 본다.
     perk_question = is_perk_question(effective_message)
     if perk_question and intent not in ("off_topic", "performance_improve"):
         logger.info(
@@ -1178,8 +1177,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     # 채울 자리가 없으므로 추천 요청 표현이 있어도 카드를 만들지 않는다 —
     # 6대6에서 6명을 나열하고 "어때?"라고 묻는 건 개인 픽 추천이 아니라 팀 조합
     # 전체에 대한 평가 요청이다.
-    # 특전 질문은 조합을 함께 말했더라도("우리팀 라인 아나인데 특전 뭐 들어?")
-    # 영웅 추천이 아니라 특전 설명을 원하는 질문이라 카드를 만들지 않는다.
+    # 특전 질문은 조합을 함께 말했더라도 영웅 추천을 원하는 게 아니라 카드가 없다.
     recommend_card_mode: Optional[str] = None
     if (
         (is_team_comp_question or composition_reask)

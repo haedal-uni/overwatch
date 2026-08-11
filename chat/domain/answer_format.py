@@ -52,7 +52,12 @@ def sanitize_answer_for_user(answer: str, keep_dash_bullets: bool = False) -> st
     else:
         sanitized = re.sub(r"^\s*[\*\-]\s+", "", sanitized, flags=re.MULTILINE)
 
-    sanitized = re.sub(r"[ \t]+", " ", sanitized)
+    # 줄 앞 들여쓰기는 중첩 목록의 깊이라 건드리지 않는다.
+    sanitized = re.sub(
+        r"(?m)^([ \t]*)(.*)$",
+        lambda m: m.group(1) + re.sub(r"[ \t]+", " ", m.group(2)),
+        sanitized,
+    )
     sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
     return sanitized.strip()
 
@@ -61,13 +66,9 @@ _DASH_LINE_RE = re.compile(r"^\s*-\s+\S")
 
 
 def tighten_bullet_blocks(answer: str) -> str:
-    """설명 줄("- ")이 자기 제목 줄에서 빈 줄로 떨어지는 것을 붙여준다.
+    """목록 항목을 앞 줄에 붙여 한 묶음으로 읽히게 한다.
 
-    프롬프트로 "같은 항목 안에는 빈 줄을 넣지 마라"고 지시해도 LLM이 항목마다
-    빈 줄을 끼워 넣어, 한 묶음이어야 할 제목+설명이 서로 다른 문단처럼 벌어지는
-    일이 잦다. 빈 줄 다음에 오는 첫 내용 줄이 "- "로 시작하면 그 빈 줄을 지운다
-    — 목록 항목은 앞 줄에 붙어 있어야 한 묶음으로 읽힌다. 새 묶음은 항상 제목
-    줄로 시작하므로 묶음 사이의 빈 줄은 그대로 남는다.
+    묶음은 항상 제목 줄로 시작하므로 묶음 사이 빈 줄은 유지된다.
     """
     if not answer:
         return answer
@@ -85,13 +86,15 @@ def tighten_bullet_blocks(answer: str) -> str:
     return "\n".join(kept)
 
 
-# 특전 답변의 운용 조합 제목 줄:
-#   "기본 운용 (나선 추진(보조 특전, 좌클) + 전속력(주요 특전, 좌클))"
-# 괄호가 중첩돼 있어 마지막 ")"까지 통째로 잡는다.
-_PERK_TITLE_RE = re.compile(r"^\s*([^:：(]*운용)\s*[:：]?\s*(\(.+\))\s*(?:추천\s*⭐?)?\s*$")
-# "추천 운용: 안정 운용" — 답변 끝에 따로 나오는 추천 문단.
-_PERK_RECOMMEND_RE = re.compile(r"^\s*\**\s*추천\s*운용\s*[:：]\s*(.+?)\s*\**\s*$")
-# 조합 목록이 끝났다는 신호(마무리 섹션/번호 목록).
+# 조합 이름 뒤 구분자와 괄호 유무가 LLM 출력마다 달라 느슨하게 잡고,
+# "+ 와 괄호가 있는 나머지"인지로 제목 줄 여부를 가른다.
+_PERK_TITLE_RE = re.compile(
+    r"^\s*(?:-\s+)?([^:：(]*운용)\s*[:：]?\s*(.+?)\s*(?:추천\s*⭐?)?\s*$"
+)
+# 답변의 줄바꿈이 화면에 그대로 보이므로 한 줄이 이보다 길면 나눈다.
+_PERK_LINE_LIMIT = 60
+_PERK_RECOMMEND_RE = re.compile(r"^\s*(?:-\s+)?\**\s*추천\s*운용\s*[:：]\s*(.+?)\s*\**\s*$")
+# 조합 목록이 끝나는 지점(마무리 섹션/번호 목록).
 _PERK_SECTION_BREAK_RE = re.compile(
     r"^\s*(?:바로\s*할\s*것|바로\s*적용할\s*것|추천\s*영웅|운영\s*핵심|운영\s*개선|\d+\.\s)"
 )
@@ -112,29 +115,115 @@ def _same_combo_name(left: str, right: str) -> bool:
     return left_key in right_key or right_key in left_key
 
 
+def _strip_outer_parens(text: str) -> str:
+    """조합 전체를 감싼 괄호만 벗긴다(특전 이름 안의 괄호는 남긴다)."""
+    if not (text.startswith("(") and text.endswith(")")):
+        return text
+
+    depth = 0
+    for idx, char in enumerate(text):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                # 첫 "("의 짝이 마지막 문자여야 전체를 감싼 괄호다.
+                return text[1:-1].strip() if idx == len(text) - 1 else text
+    return text
+
+
+def _perk_title_parts(line: str) -> Optional[Dict[str, Any]]:
+    """운용 조합 제목 줄이면 {이름, 조합, 추천 여부}로 돌려주고 아니면 None."""
+    match = _PERK_TITLE_RE.match(line)
+    if not match:
+        return None
+    combo = _strip_outer_parens(match.group(2).strip())
+    if "+" not in combo or "(" not in combo:
+        return None
+    return {
+        "name": match.group(1).strip(),
+        "combo": combo,
+        # 조립된 답변을 다시 넣어도 결과가 같아야 한다(멱등).
+        "recommended": "추천" in line[match.end(2):],
+    }
+
+
+def _wrap_sentences(text: str) -> List[str]:
+    """긴 문단을 문장 경계에서, 그래도 길면 쉼표에서 나눈다."""
+    lines: List[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) <= _PERK_LINE_LIMIT:
+            lines.append(sentence)
+            continue
+
+        current = ""
+        for chunk in re.findall(r"[^,]+,?\s*", sentence):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            if current and len(current) + 1 + len(chunk) > _PERK_LINE_LIMIT:
+                lines.append(current)
+                current = chunk
+            else:
+                current = f"{current} {chunk}".strip()
+        if current:
+            lines.append(current)
+    return lines
+
+
+# "간단히" 스타일의 격식체 종결을 짧은 구로 바꾼다. 프롬프트로 여러 번 지시해도
+# LLM이 "~합니다"로 되돌아가, 스타일 차이가 형식에만 남고 문장에는 안 남았다.
+_POLITE_ENDING_RULES = [
+    (re.compile(r"([가-힣]+)세요\.?$"), r"\1기"),
+    (re.compile(r"([가-힣]+)십시오\.?$"), r"\1기"),
+    (re.compile(r"있습니다\.?$"), "있음"),
+    (re.compile(r"없습니다\.?$"), "없음"),
+    (re.compile(r"좋습니다\.?$"), "좋음"),
+    (re.compile(r"됩니다\.?$"), "됨"),
+    (re.compile(r"[가-힣]*합니다\.?$"), lambda m: m.group(0).replace("합니다", "").rstrip(".")),
+    # 명사 뒤 "입니다"만 뗀다. 앞이 한 글자면 "높입니다"류 동사라 건드리면 깨진다.
+    (re.compile(r"([가-힣]{2,})입니다\.?$"), r"\1"),
+]
+
+
+def shorten_polite_endings(answer: str) -> str:
+    """줄 끝의 격식체 종결을 짧은 구로 줄인다.
+
+    추천 이유("*" 줄)는 판단을 설명하는 자리라 문장 그대로 둔다.
+    """
+    if not answer:
+        return answer
+
+    shortened: List[str] = []
+    for line in answer.split("\n"):
+        body = line.strip()
+        if not body or body.startswith("*"):
+            shortened.append(line)
+            continue
+        for pattern, replacement in _POLITE_ENDING_RULES:
+            new_line, count = pattern.subn(replacement, line)
+            if count:
+                line = new_line.rstrip()
+                break
+        shortened.append(line)
+    return "\n".join(shortened)
+
+
 def format_perk_answer(answer: str) -> str:
     """특전 답변의 운용 조합 부분을 정해진 모양으로 다시 조립한다.
 
-    프롬프트로 형식을 지시해도 LLM이 매번 다르게 쓴다(설명 줄의 "- "를 빼거나,
-    항목마다 빈 줄을 끼우거나, 추천 이유를 맨 아래 따로 떼어 놓는다). 구조가
-    "제목 줄 + 설명 줄"로 뚜렷하니 여기서 확정적으로 맞춘다:
-
-        기본 운용 : (나선 추진(보조 특전, 좌클) + 전속력(주요 특전, 좌클))
-        - 설명 줄
-        - 설명 줄
-
-        안정 운용 : (전술 일제사격(보조 특전, 우클) + 전속력(주요 특전, 좌클)) 추천⭐
-        - 설명 줄
-        *추천 이유
-
-    조합 제목을 하나도 못 찾으면 손대지 않고 빈 줄만 정리한다.
+    형식은 프롬프트로 지시해도 LLM 출력이 매번 달라 여기서 확정한다. 조합 제목을
+    하나도 못 찾으면 손대지 않는다 — 특전과 무관한 답변을 망가뜨리지 않기 위함.
     """
     if not answer:
         return answer
 
     lines = [line.rstrip() for line in answer.split("\n")]
 
-    # 1) 맨 아래 "추천 운용: OO" 문단을 떼어낸다 — 해당 조합 블록 안으로 옮긴다.
+    # 1) 따로 떨어진 추천 문단을 떼어낸다(해당 조합 블록 안으로 옮기려고).
     recommended: Optional[str] = None
     reason_lines: List[str] = []
     rest: List[str] = []
@@ -150,10 +239,11 @@ def format_perk_answer(answer: str) -> str:
         idx += 1
         while idx < len(lines):
             following = lines[idx]
-            if _PERK_SECTION_BREAK_RE.match(following) or _PERK_TITLE_RE.match(following):
+            if _PERK_SECTION_BREAK_RE.match(following) or _perk_title_parts(following):
                 break
             if following.strip():
-                reason_lines.append(following.strip().lstrip("*").strip())
+                # 앞머리 기호는 LLM 출력마다 달라 떼고 아래에서 "*"로 통일한다.
+                reason_lines.append(following.strip().lstrip("*-").strip())
             idx += 1
 
     # 2) 조합 블록으로 나눈다.
@@ -162,9 +252,9 @@ def format_perk_answer(answer: str) -> str:
     trailing: List[str] = []
     current: Optional[Dict[str, Any]] = None
     for line in rest:
-        title = _PERK_TITLE_RE.match(line)
+        title = _perk_title_parts(line)
         if title:
-            current = {"name": title.group(1).strip(), "combo": title.group(2).strip(), "desc": []}
+            current = {**title, "desc": [], "reason": [], "in_reason": False}
             blocks.append(current)
             continue
         if _PERK_SECTION_BREAK_RE.match(line):
@@ -172,8 +262,21 @@ def format_perk_answer(answer: str) -> str:
             trailing.append(line)
             continue
         if current is not None:
-            if line.strip():
-                current["desc"].append(line.strip())
+            body = line.strip()
+            if not body:
+                continue
+            bullet = body.startswith("-")
+            content = body.lstrip("-").strip() if bullet else body
+            # "*" 줄은 설명이 아니라 그 조합을 고른 이유이고, 줄바꿈으로 이어진
+            # 뒷줄도 같은 이유다.
+            if content.startswith("*"):
+                current["in_reason"] = True
+                current["reason"].append(content.lstrip("*").strip())
+            elif current["in_reason"] and not bullet:
+                current["reason"].append(content)
+            else:
+                current["in_reason"] = False
+                current["desc"].append(content)
             continue
         (trailing if blocks else preamble).append(line)
 
@@ -181,23 +284,30 @@ def format_perk_answer(answer: str) -> str:
         return tighten_bullet_blocks(answer)
 
     # 3) 다시 조립한다.
-    rendered: List[str] = _strip_blank_edges(preamble)
+    rendered: List[str] = []
+    for line in _strip_blank_edges(preamble):
+        rendered.extend(_wrap_sentences(line) if line.strip() else [line])
     reason_used = False
     for block in blocks:
         if rendered:
             rendered.append("")
-        header = f"{block['name']} : {block['combo']}"
-        is_recommended = bool(recommended and _same_combo_name(block["name"], recommended))
+        matches_recommendation = bool(
+            recommended and _same_combo_name(block["name"], recommended)
+        )
+        is_recommended = matches_recommendation or block["recommended"]
+        header = f"- {block['name']} : {block['combo']}"
         if is_recommended:
             header += " 추천⭐"
         rendered.append(header)
         for desc in block["desc"]:
-            body = desc.lstrip("-").strip() if desc.startswith("-") else desc
-            rendered.append(f"- {body}")
-        if is_recommended and reason_lines:
-            rendered.append(f"*{reason_lines[0]}")
-            rendered.extend(reason_lines[1:])
-            reason_used = True
+            rendered.append(f"  - {desc}")
+
+        reason = reason_lines if matches_recommendation else block["reason"]
+        if is_recommended and reason:
+            # 추천 이유는 조합의 특징이 아니라 이번 판단이라 목록에 넣지 않는다.
+            rendered.append(f"*{' '.join(reason)}")
+            if matches_recommendation:
+                reason_used = True
 
     # 추천 조합 이름이 어느 블록과도 안 맞으면 정보를 잃지 않게 따로 남긴다.
     if recommended and not reason_used:

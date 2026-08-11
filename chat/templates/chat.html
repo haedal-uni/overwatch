@@ -1739,8 +1739,14 @@
        항목 사이가 부자연스럽게 벌어진다. */
     .msg.ai .bubble ul,
     .msg.ai .bubble ol {
-      margin: 4px 0 6px;
+      margin: 4px 0 14px;
       padding-left: 22px;
+    }
+
+    /* 중첩 목록은 부모 항목에 붙어 한 묶음으로 읽혀야 해서 아래 여백을 두지 않는다. */
+    .msg.ai .bubble li>ul,
+    .msg.ai .bubble li>ol {
+      margin: 2px 0 0;
     }
 
     /* AI 답변 목록 항목 간격 — line-height는 문단(1.75)을 그대로 물려받으면
@@ -1982,14 +1988,44 @@
       }
       return out.join('\n');
     }
+    function convertMarkdownLists(text) {
+      // 목록 블록을 통째로 한 줄짜리 HTML로 만든다. 줄바꿈을 남기면 뒤에서 <br>로
+      // 바뀌어 항목마다 빈 줄이 생긴다. 들여쓴 "- "는 한 단계 아래 목록으로 넣는다.
+      const lines = text.split('\n');
+      const out = [];
+      let i = 0;
+      while (i < lines.length) {
+        if (!/^\s*- \S/.test(lines[i])) { out.push(lines[i]); i++; continue; }
+        let html = '<ul>';
+        let nested = false;
+        while (i < lines.length) {
+          const m = lines[i].match(/^(\s*)- (.*)$/);
+          if (!m) break;
+          const isNested = m[1].replace(/\t/g, '  ').length >= 1;
+          if (isNested && !nested) {
+            html = html.replace(/<\/li>$/, '') + '<ul>';
+            nested = true;
+          } else if (!isNested && nested) {
+            html += '</ul></li>';
+            nested = false;
+          }
+          html += '<li>' + m[2] + '</li>';
+          i++;
+        }
+        if (nested) html += '</ul></li>';
+        out.push(html + '</ul>');
+      }
+      return out.join('\n');
+    }
     function simpleMarkdown(text) {
       let s = escapeHtml(text || '');
       s = convertMarkdownTables(s);
       s = s.replace(/^### (.*)$/gm, '<h3>$1</h3>').replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/^# (.*)$/gm, '<h1>$1</h1>');
       s = s.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-      s = s.replace(/^- (.*)$/gm, '<li>$1</li>');
-      s = s.replace(/(<li>.*?<\/li>\n?)+/gs, m => '<ul>' + m + '</ul>');
+      s = convertMarkdownLists(s);
       s = s.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
+      // <ul>은 블록 요소라 앞뒤 <br>은 빈 줄만 만든다.
+      s = s.replace(/<br>\s*<ul>/g, '<ul>').replace(/<\/ul>\s*<br>/g, '</ul>');
       if (!/^<h|^<ul|^<p|^<table/.test(s)) s = '<p>' + s + '</p>';
       return s;
     }

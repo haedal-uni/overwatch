@@ -145,9 +145,8 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
         else:
             queries.append(f"{current_hero or ''} 위기 상황 대처법 생존 운영")
 
-    # 특전 질문은 그 영웅의 특전 절이 반드시 있어야 답을 만들 수 있다. 실제
-    # 절 원문은 retrieve_docs_node가 문서에서 직접 꺼내 얹지만(perk_hero_section),
-    # 특전과 함께 볼 운영 맥락을 위해 검색도 같이 한다.
+    # 특전 절 자체는 retrieve_docs_node가 문서에서 직접 꺼내고, 이 검색은 함께
+    # 볼 운영 맥락을 모으는 용도다.
     if state.get("is_perk_question"):
         perk_hero = resolve_perk_hero(state)
         if perk_hero:
@@ -199,12 +198,8 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 doc_dict["query"] = query
                 all_docs.append(doc_dict)
 
-        # 특전 질문에는 그 영웅의 특전 절을 문서에서 직접 꺼내 맨 앞에 얹는다.
-        # 벡터 검색만으로는 이 절이 상위 k에 못 드는 일이 흔하다 — 절 본문에
-        # 영웅 이름이 없고 51명의 특전 절이 서로 거의 같은 문장이라 다른 영웅의
-        # 특전이나 같은 영웅의 다른 절에 밀린다(실측: "오리사 특전"은 상위 10개
-        # 안에 오리사 특전 절이 없었다). 그 결과 "특전 데이터가 없는 영웅"이라는
-        # 엉뚱한 답이 나갔다.
+        # 특전 절끼리 문장이 거의 같아 검색이 영웅을 구분 못 함 → 이름으로 직접
+        # 꺼내 맨 앞에 얹는다.
         if state.get("is_perk_question"):
             perk_hero = resolve_perk_hero(state)
             perk_section = get_hero_perk_section(perk_hero)

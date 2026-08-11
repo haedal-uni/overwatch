@@ -19,6 +19,7 @@ from chat.domain.answer_format import (
     extract_inline_suggested_questions,
     format_perk_answer,
     sanitize_answer_for_user,
+    shorten_polite_endings,
 )
 from chat.rag import components as chatbot_service
 from chat.graph.state import ChatbotGraphState
@@ -458,17 +459,10 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
     약점이 있다면 "이런 부분이 아쉽다" 정도로 짧게만 짚고, 그걸 보완할 구체적인
     영웅을 여러 명 나열해서 추천하지는 마라 — 그건 이 답변이 할 일이 아니다.{roster_line}"""
 
-        # 특전 질문 전용 지시. 세 가지를 한꺼번에 막는다 — (1) 같은 칸의 특전 두
-        # 개를 한 조합으로 묶어 게임에서 불가능한 선택을 알려주는 것(실제로 주요
-        # 특전인 "전투자극제 + 전속력"을 묶어 답한 사례가 있었다), (2) 상황 정보도
-        # 없이 하나가 정답인 것처럼 단정하는 것, (3) 특전 이름과 설명을 " - "로 한
-        # 줄에 붙여 설명 속 기본 스킬 이름이 또 하나의 특전처럼 읽히는 것.
-        # 간단히/자세히 두 스타일에 같은 형식을 쓰려고 style_rules 밖에 따로 둔다.
+        # 간단히/자세히 두 스타일에 같은 형식을 적용하려고 style_rules 밖에 둔다.
         perk_instruction = ""
         if state.get("is_perk_question"):
-            # 스탯·상대 조합·맵처럼 판단 근거가 이미 있으면 선택지만 늘어놓고
-            # 끝내지 않는다 — 앞에서 "데스가 많다"까지 분석해놓고 "상황 보고
-            # 고르세요"로 끝나면 분석과 답이 따로 논다.
+            # 판단 근거가 이미 있는데 고르라고만 하면 분석과 답이 따로 논다.
             perk_situation_known = bool(
                 has_stats
                 or (state.get("enemy_team") and enemy_named_this_turn)
@@ -488,6 +482,16 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                     "  어느 하나를 정답처럼 단정하지 말고 조합마다 \"언제 고르는지\"만 적어\n"
                     "  사용자가 상황을 보고 고르게 해라."
                 )
+            # 간단히는 자세히보다 확실히 짧아야 하는데 특전 답변은 항목이 많아
+            # 그냥 두면 두 스타일이 비슷해진다.
+            perk_brevity_rule = ""
+            if is_simple_style:
+                perk_brevity_rule = (
+                    "\n- 도입부는 스탯을 짚는 한 줄 뒤에 짧은 진단 줄 1~2개만 붙여라"
+                    "(목록 기호 없이 줄만 나눈다).\n  조합 설명 줄은 격식체"
+                    "(~입니다/~합니다) 대신 \"~보완\", \"~때 적합\"처럼 짧은 구로 "
+                    "끝내라.\n  추천 이유(\"*\" 줄) 하나만 문장으로 써도 된다."
+                )
             perk_instruction = f"""
 
 특전(퍼크) 답변 규칙:
@@ -500,9 +504,8 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
 - 문서에 운용 조합(기본 운용/안정 운용/공격 운용 등)이 있으면 그 조합들을 각각
   언제 고르는지 판단 기준과 함께 제시해라.
 {perk_choice_rule}
-- 조합 하나는 정확히 아래 형식으로 적어라. "- "로 시작하는 설명 줄은 이 블록에
-  한해 허용한다.
-  기본 운용 : (나선 추진(보조 특전, 좌클) + 전속력(주요 특전, 좌클))
+- 조합 하나는 정확히 아래 형식으로 적어라(설명 줄은 두 칸 들여쓴 "- "로 시작).
+- 기본 운용 : 나선 추진(보조 특전, 좌클) + 전속력(주요 특전, 좌클)
   - 맵과 상대 조합이 불확실할 때 가장 안정적인 선택입니다.
   - 나선 로켓(우클릭)의 명중률을 높여 킬 결정력을 보완합니다.
 - 첫 줄에는 조합 이름과 특전 두 개까지만 적고 설명은 반드시 다음 줄부터 적어라.
@@ -510,7 +513,7 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
   특전이 강화하는 기본 스킬 이름(예: 나선 로켓(우클릭))이 나오는데, 특전 이름과
   한 줄에 붙으면 특전을 두 개 고르는 것처럼 읽힌다.
 - 같은 조합 안(제목 줄과 설명 줄들 사이, 설명 줄들끼리)에는 빈 줄을 넣지 말고
-  줄을 붙여 써라. 빈 줄은 조합과 조합 사이에만 하나 넣는다."""
+  줄을 붙여 써라. 빈 줄은 조합과 조합 사이에만 하나 넣는다.{perk_brevity_rule}"""
 
         prompt = f"""
 너는 오버워치 코칭 RAG 챗봇이다. 사용자에게 한국어로 답변해라.
@@ -608,15 +611,16 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
             used_doc_ids = []
         used_doc_ids = [int(d) for d in used_doc_ids if str(d).isdigit()]
 
-        # 특전 답변의 운용 조합 부분은 형식을 LLM에 맡기지 않고 여기서 확정한다
-        # (제목 줄 + "- " 설명 줄, 블록 안 빈 줄 없음, 추천 조합은 제목에 표시).
-        # sanitize가 "- "를 지우므로(자세히 스타일) 그 뒤에 다시 붙인다.
+        # 특전 답변의 "- "는 형식의 일부라 스타일과 무관하게 보존하고, sanitize가
+        # 지운 뒤에 형식을 다시 맞춘다.
         is_perk_answer = bool(state.get("is_perk_question"))
         answer = sanitize_answer_for_user(
             raw_answer, keep_dash_bullets=is_simple_style or is_perk_answer
         )
         if is_perk_answer:
             answer = format_perk_answer(answer)
+        if is_simple_style:
+            answer = shorten_polite_endings(answer)
 
         if answer_allowed_hero_set is not None:
             # 사용자가 원문에서 언급한 영웅은 추천이 아니라 인용이므로 제외한다.
@@ -1241,8 +1245,7 @@ def format_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
         return {"result": {"error": state["error"]}}
 
     answer_style = state.get("answer_style") or "detailed"
-    # 특전 답변은 "- " 설명 줄이 형식의 일부라 스타일과 무관하게 보존한다
-    # (generate_answer_node의 format_perk_answer가 붙여둔 줄이다).
+    # 특전 답변의 "- "는 format_perk_answer가 붙인 형식이라 여기서도 보존한다.
     answer = sanitize_answer_for_user(
         state.get("answer", ""),
         keep_dash_bullets=answer_style == "simple" or bool(state.get("is_perk_question")),

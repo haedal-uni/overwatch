@@ -265,9 +265,8 @@ def match_canned_topic(message: str) -> Optional[str]:
     if not text:
         return None
 
-    # 캐시된 5개 답변에는 특전 얘기가 없다. "나 솔저76 킬 4 데스 8 딜 6000인데
-    # 특전 추천해줘"처럼 캐시 조건(영웅+수치)을 만족하면서 다른 것을 묻는 질문에
-    # 캐시가 나가면, 특전은 한 글자도 없는 스탯 개선 답변이 그대로 돌아간다.
+    # 캐시 판정은 "무엇을 묻는지"가 아니라 대상만 보므로, 캐시에 없는 주제를
+    # 물으면 여기서 먼저 걸러야 한다.
     if is_perk_question(text):
         return None
 
