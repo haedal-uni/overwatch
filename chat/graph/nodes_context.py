@@ -54,6 +54,7 @@ from chat.domain.intent_rules import (
     is_composition_reask,
     is_ellipsis_followup,
     is_performance_comparison_question,
+    is_perk_question,
     is_pure_role_correction,
     resolve_roster_size,
     role_filter_from_text,
@@ -877,6 +878,17 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         # LLM이 비교 질문을 composition으로 분류해오는 경우의 안전장치.
         intent = "performance_improve"
 
+    # 특전 질문의 "추천"은 영웅 추천 요청이 아니다. 지금 영웅을 계속 쓰면서
+    # 무엇을 고를지 묻는 질문이라 개선 질문으로 본다.
+    perk_question = is_perk_question(effective_message)
+    if perk_question and intent not in ("off_topic", "performance_improve"):
+        logger.info(
+            "[PERK QUESTION] '%s'는 특전 질문이라 intent %s → performance_improve로 교정 "
+            "(영웅 추천 질문이 아님)",
+            effective_message, intent,
+        )
+        intent = "performance_improve"
+
     context_for_enemy = {**context, "current_hero": current_hero, "ally_team_this_turn": ally_team_this_turn}
     rule_based_target_enemy = infer_target_enemy(effective_message, context_for_enemy, intent)
     target_enemy = llm_target_enemy or rule_based_target_enemy
@@ -1165,11 +1177,13 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     # 채울 자리가 없으므로 추천 요청 표현이 있어도 카드를 만들지 않는다 —
     # 6대6에서 6명을 나열하고 "어때?"라고 묻는 건 개인 픽 추천이 아니라 팀 조합
     # 전체에 대한 평가 요청이다.
+    # 특전 질문은 조합을 함께 말했더라도 영웅 추천을 원하는 게 아니라 카드가 없다.
     recommend_card_mode: Optional[str] = None
     if (
         (is_team_comp_question or composition_reask)
         and wants_composition_recommendation(effective_message)
         and not roster_is_full
+        and not perk_question
     ):
         recommend_card_mode = "composition"
     elif intent == "swap" and current_hero and not current_hero_uncertain:
@@ -1203,6 +1217,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "matchup_subject": matchup_subject,
         "matchup_subject_is_enemy": matchup_subject_is_enemy,
         "recommend_card_mode": recommend_card_mode,
+        "is_perk_question": perk_question,
         "ally_team": ally_team,
         "compared_heroes": compared_heroes,
         "is_team_comp_question": is_team_comp_question,

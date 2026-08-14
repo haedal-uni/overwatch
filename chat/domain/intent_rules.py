@@ -516,8 +516,20 @@ _SWAP_TRIGGER_PATTERN = re.compile(r"말고|다른\s*영웅|바꾸|바꿀|바꿔
 
 # 영웅 이름을 생략한 후속 질문("E 스킬은?"). 이런 질문만 이전
 # intent/focus_heroes를 이어받는다.
-_ELLIPSIS_FOLLOWUP_WORDS = ["플레이", "운영", "스킬", "포지션", "타이밍", "궁", "굴리", "굴려"]
+_ELLIPSIS_FOLLOWUP_WORDS = [
+    "플레이", "운영", "스킬", "포지션", "타이밍", "궁", "굴리", "굴려", "특전", "퍼크",
+]
 _ELLIPSIS_FOLLOWUP_MAP_PATTERN = re.compile(r"어떤\s*맵|맵에서")
+
+
+# 특전/퍼크는 오버워치에서 이 뜻으로만 쓰이는 단어라 등장만으로 판단해도 된다.
+_PERK_QUESTION_PATTERN = re.compile(r"특전|퍼크|perk", re.IGNORECASE)
+
+
+def is_perk_question(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_PERK_QUESTION_PATTERN.search(message))
 
 
 def is_ellipsis_followup(text: str) -> bool:

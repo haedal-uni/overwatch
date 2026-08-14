@@ -28,6 +28,7 @@ from chat.domain.intent_rules import (
     extract_enemy_team,
     find_enemy_mentioned_hero,
     hero_mentioned_as_current_hero,
+    is_perk_question,
 )
 from chat.graph.nodes_context import clarify_role_filter_node
 
@@ -262,6 +263,11 @@ def match_canned_topic(message: str) -> Optional[str]:
     가리키는지 판단한다. 대상이 다르면 None을 반환해 평소처럼 그래프를 태운다."""
     text = (message or "").strip()
     if not text:
+        return None
+
+    # 캐시 판정은 "무엇을 묻는지"가 아니라 대상만 보므로, 캐시에 없는 주제를
+    # 물으면 여기서 먼저 걸러야 한다.
+    if is_perk_question(text):
         return None
 
     # 영웅 유지(리퍼 유지 + 상대 아나) — 두 조건이 모두 맞을 때만 인정한다.

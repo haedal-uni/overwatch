@@ -61,6 +61,7 @@ class ChatbotGraphState(TypedDict, total=False):
     matchup_card: Optional[Dict[str, Any]]
     recommend_card_mode: Optional[str]
     recommend_card: Optional[Dict[str, Any]]
+    is_perk_question: bool
     ally_team: List[str]
     llm_ally_team: List[str]
     # 아군 조합으로 좁힌 사용자 역할 후보와, 그 조합이 역할 좁히기에 쓸 만큼
