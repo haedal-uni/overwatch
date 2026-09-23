@@ -1,15 +1,12 @@
 /* column_filter.js가 만드는 컬럼 헤더 드롭다운 필터의 스타일.
-   Django 관리자 기본 CSS 변수(--body-bg 등)를 그대로 써서 라이트/다크
-   테마가 바뀌어도 자동으로 맞춰진다. */
+   Django 관리자 기본 CSS 변수를 그대로 써서 테마를 따라간다. */
 
 th.col-filter-th {
   position: relative;
 }
 
 .col-filter-toggle {
-  /* 헤더 배경이 어두운 마스트헤드가 아니라 밝은 표 헤더라, --header-link-color
-     (마스트헤드용 흰색)를 쓰면 흰 배경에 흰 글자가 되어 안 보이는 문제가
-     있었다 — body-quiet-color(회색)로 항상 보이는 칩 형태로 바꿨다. */
+  /* 표 헤더 배경이 밝아 마스트헤드용 색 대신 body-quiet-color를 쓴다. */
   display: inline-flex;
   align-items: center;
   justify-content: center;

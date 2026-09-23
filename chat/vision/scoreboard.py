@@ -1,19 +1,8 @@
-"""오버워치2 TAB 점수판 스크린샷 분석 모듈.
+"""오버워치2 TAB 스탯창 스크린샷 분석 모듈.
 
-팀 패널 검출(coarse-to-fine 2단계, _compute_team_layout_with_coarse_crop)과
-영웅 아이콘 인식은 OpenCV로, 수치(K/D/A·피해량·치유량·경감량) 인식과 코치
-피드백 생성은 Gemini로 처리한다(ENABLE_GEMINI_STATS_AND_FEEDBACK로 후자만
-끌 수 있다).
-
-analyze_scoreboard_image()의 "report"는 사용자에게 보여줄 마크다운이고,
-"admin_log"는 인식 실패·좌표·유사도 점수 같은 진단 정보로 ChatLog.metadata
-에만 저장한다 — report에는 진단 정보를 절대 섞지 않는다. turn_id를 넘기면
-디버그 이미지를 logs/scoreboard_debug/{turn_id}/에 저장한다.
-
-한계: 원근 보정(perspective transform)은 하지 않는다. 아군(파랑) 초상화의
-붉은 계열 색이 상대팀 색 마스크에 섞여 검출이 실패하는 경우가 있다.
-hero_icons/ 템플릿은 일부 영웅만 실제 점수판 crop을 쓴다(공식 홍보 아트보다
-그레이스케일 비교 정확도가 높음 — 원본은 hero_icons_promo_backup/에 있다).
+팀/역할/영웅 인식은 OpenCV, 수치 인식과 코치 피드백 생성은 Gemini가 맡는다.
+report는 사용자에게 보여줄 마크다운, admin_log는 진단 정보다(섞지 않는다).
+검출 단계와 알려진 한계는 chat_모듈_구조.md 참고.
 """
 
 import base64
@@ -31,9 +20,7 @@ from chat.domain.prompts import stat_judgement_rules
 
 logger = logging.getLogger(__name__)
 
-# 스탯창 분석 중 Gemini가 맡은 부분(숫자 인식 + 피드백 생성)만 켜고 끈다 —
-# 영웅/팀 인식(OpenCV)은 영향받지 않는다. .env로 읽고 기본값은 켜짐.
-# 꺼진 동안 수치 칸은 "확인 필요", 피드백은 고정 문구로 나간다.
+# Gemini가 맡은 부분(숫자 인식 + 피드백 생성)만 켜고 끈다. .env로 읽는다.
 ENABLE_GEMINI_STATS_AND_FEEDBACK = os.getenv(
     "ENABLE_GEMINI_STATS_AND_FEEDBACK", "true"
 ).strip().lower() not in ("0", "false", "no", "off")
@@ -42,46 +29,37 @@ HERO_ICON_DIR = os.path.join(os.path.dirname(__file__), "hero_icons")
 
 SCOREBOARD_DEBUG_DIR_NAME = "scoreboard_debug"
 
-# 팀당 인원수(5/6)는 고정값이 아니라 이미지마다 판별한다(_resolve_roster_size).
-# DEFAULT_PLAYERS_PER_TEAM은 인원수 확정 전 임시 분할값이자, 판별에 실패했을
-# 때의 폴백값이다.
+# 인원수는 이미지마다 판별하고, 이 값은 판별 전/실패 시의 폴백이다.
 DEFAULT_PLAYERS_PER_TEAM = 5
 ROSTER_SIZE_CANDIDATES = (5, 6)
 
-# 행 순서는 위→아래 [탱커, 딜러, ..., 힐러, 힐러] 고정(힐러는 항상 마지막 2행).
-# 5인은 배분이 고정이고, 6인은 탱커 수가 달라 역할 문양으로 판별한다.
-# ROW_ROLES는 표시용 라벨, ROW_ROLE_CODES는 ROLE_HEROES와 같은 체계의 코드.
+# 행 순서는 위→아래 [탱커, 딜러, ..., 힐러, 힐러](힐러는 항상 마지막 2행).
+# ROW_ROLES는 표시용 라벨, ROW_ROLE_CODES는 내부 역할 코드.
 ROW_ROLES = ["탱커", "딜러", "딜러", "힐러", "힐러"]
 ROW_ROLE_CODES = ["tank", "damage", "damage", "support", "support"]
 ROLE_CODE_TO_LABEL = {"tank": "탱커", "damage": "딜러", "support": "힐러"}
 
-# hero_icons/의 역할 문양(방패=탱커, 탄창=딜러) 참조 이미지 파일명 -> role_code.
-# 힐러 문양은 템플릿이 없어, 탱커/딜러 둘 다 확신 있게 매칭되지 않는 행은
-# 힐러로 판정한다(_classify_role_icon).
+# 역할 문양 참조 이미지 파일명 -> role_code. 힐러 템플릿은 없다
+# (탱커/딜러 어느 쪽도 아니면 힐러로 본다).
 ROLE_ICON_FILE_TO_CODE = {"탱커": "tank", "딜러": "damage"}
 
-# 세로 밝기 프로파일의 정규화 자기상관으로 인원수를 추정한다
-# (_estimate_roster_size_for_team). 두 임계값 중 하나라도 못 미치면 기본값 폴백.
+# 인원수 추정(자기상관) 임계값. 하나라도 못 미치면 기본값으로 폴백한다.
 ROSTER_SIZE_MIN_CORRELATION = 0.3
 ROSTER_SIZE_MIN_MARGIN = 0.15
 
-# 역할 문양은 Otsu 이진화 후 cv2.matchShapes로 비교한다(팀 색 틴트 때문에
-# 그레이스케일 비교로는 잘 구분되지 않는다). 값이 작을수록 모양이 비슷하다.
+# 역할 문양 모양 비교(cv2.matchShapes) 기준. 값이 작을수록 비슷하다.
 ROLE_ICON_TANK_MAX_SHAPE_DISTANCE = 0.08
 ROLE_ICON_DAMAGE_MAX_SHAPE_DISTANCE = 0.35
 
 HERO_ICON_METHOD_LABEL = "hero_icons 폴더 유사도 매칭 (OpenCV 템플릿 매칭, 역할별 후보 제한)"
 
-# 행의 고정 역할에 해당하는 영웅 이름 집합. chat/domain/heroes.py의 ROLE_HEROES를
-# 그대로 재사용해 영웅 별칭/표기 목록이 두 파일에서 어긋나지 않게 한다.
+# 역할별 영웅 이름 집합(chat/domain/heroes.py의 ROLE_HEROES를 재사용한다).
 ROLE_HERO_NAME_SETS: Dict[str, set] = {
     role: {normalize_hero_name(h) or h for h in heroes}
     for role, heroes in ROLE_HEROES.items()
 }
 
 # --- HSV 기준 팀 배경색 판정 (OpenCV의 H는 0~179 스케일) ---
-# 카메라 사진은 상대팀(빨강)이 마젠타·크림슨 쪽으로 치우칠 수 있어
-# RED_HUE_RANGES 하한을 낮게 잡았다.
 BLUE_HUE_RANGE = (95, 135)
 RED_HUE_RANGES = [(0, 10), (115, 179)]
 TEAM_COLOR_MIN_SATURATION = 60
@@ -90,33 +68,25 @@ TEAM_COLOR_MIN_SATURATION = 60
 BLUE_TEAM_COLOR_MIN_VALUE = 160
 RED_TEAM_COLOR_MIN_VALUE = 60
 
-# 한쪽 팀만 검출됐거나 두 팀 행 높이가 크게 다를 때, 반대/작은 쪽 팀을 인접
-# 위치에서 재탐색할 때만 쓰는 완화 기준값.
+# 인접 위치 재탐색에만 쓰는 완화 기준값.
 RELAXED_TEAM_COLOR_MIN_SATURATION = 25
 RELAXED_TEAM_COLOR_MIN_VALUE = 30
 
-# 두 팀의 expected_row_height는 비슷해야 한다. 한쪽이 이 비율 이상 작으면
-# 그 팀만 완화된 색 기준으로 재탐색한다(_relaxed_search_adjacent).
+# 두 팀의 행 높이가 이 비율 이상 차이 나면 작은 쪽만 재탐색한다.
 ROW_HEIGHT_MISMATCH_RATIO = 0.4
 
-# 행 높이 불일치 재탐색 전용 명도 하한. 강조 행과 일반 행을 하나로 합치되
-# 배경 UI까지 붙지는 않을 만큼 높게 잡는다.
+# 행 높이 불일치 재탐색 전용 명도 하한.
 BLUE_ROW_HEIGHT_RETRY_MIN_VALUE = 120
 
-# 이 비율보다 작으면 일부 행만 잡힌 것으로 보고 재탐색한다(교차 비교가
-# 불가능할 때 쓰는 절대 기준).
+# 교차 비교가 불가능할 때 "일부 행만 잡혔다"고 보는 절대 기준.
 EXPECTED_ROW_HEIGHT_MIN_TRUST_RATIO = 0.045
 
-# 상대팀(빨강)이 아예 검출되지 않을 때(team_box=None), 이미 확정된 아군
-# team_box의 x범위 안에서 아군 바로 아래부터 마스크 커버리지가 이 threshold
-# 이상으로 이어지는 가장 긴 구간을 상대팀 패널로 본다.
+# 상대팀을 아군 기준으로 재탐색할 때의 행별 마스크 커버리지 하한.
 SOLID_ROW_COVERAGE_THRESHOLD = 0.5
-# 찾은 구간이 아군 행 높이의 이 배수 이상이어야 팀 패널로 인정한다(우연한
-# 작은 조각 오인 방지).
+# 찾은 구간이 아군 행 높이의 이 배수 이상이어야 팀 패널로 인정한다.
 ENEMY_MASKED_RETRY_MIN_ROW_MULT = 3.0
 
-# 팀색 마스크 close 커널 크기(이미지 비례). 내부의 작은 구멍만 메운다 —
-# 너무 크면 배경 노이즈까지 붙는다.
+# 팀색 마스크 close 커널 크기(이미지 비례). 내부의 작은 구멍만 메운다.
 TEAM_MASK_CLOSE_KERNEL_HEIGHT_RATIO = 0.01
 TEAM_MASK_CLOSE_KERNEL_WIDTH_RATIO = 0.01
 
@@ -128,20 +98,14 @@ CANDIDATE_MAX_AREA_RATIO = 0.5     # 화면 면적의 이 비율보다 크면 �
 CANDIDATE_MIN_ASPECT_RATIO = 2.0   # 폭/높이가 이보다 작으면 "가로로 긴 패널"이 아니다.
 
 # --- 1단계(coarse) 전용 상수 — 전체화면 캡처 대응 ---
-# 위 검증 기준은 이미지 전체 크기 대비 비율이라 점수판이 화면 일부만 차지하면
-# 통과하지 못한다. 완화된 색 조건으로 위치만 먼저 찾아 잘라낸다.
+# 완화된 색 조건으로 스탯창 위치만 먼저 찾아 잘라낸다.
 COARSE_MIN_AREA_RATIO = 0.001  # 이보다 작은 연결 영역은 노이즈로 무시한다.
 # 완화된 색 조건으로 찾은 bounding box에 상하좌우로 붙이는 여유 마진 비율.
 COARSE_CROP_MARGIN_RATIO = 0.15
 
 # --- 구조 기반 표 검출(색 무관) 전용 상수 ---
-# 경기 진행 중(in-game) 전체화면 캡처는 배경 자체가 붉은/파란 계열로 읽혀 색 기반
-# 팀 패널 검출이 무너진다(상대 패널이 배경과 뭉치거나, 탈채도된 본인 강조 행이
-# 빠져 아군 첫 행이 누락됨). 이럴 때 색이 아니라 "밝은 표 vs 어두운 배경"이라는
-# 구조로 표를 찾아 폴백한다. 색 검출이 잘 되는 캡처(경기 종료 화면 등)에서는
-# 폴백을 타지 않으므로 기존 동작에 영향이 없다.
-# 표는 항상 화면 가운데에 있으므로, 가운데 세로 띠(이 x비율 구간)의 행별 밝기로
-# 팀 패널(밝음)과 배경(어두움)을 가른다 — 우측 상단 배너 등은 이 띠 밖이라 무관.
+# 색 기반 검출이 무너지는 캡처에서 "밝은 표 vs 어두운 배경" 구조로 폴백한다.
+# 표는 항상 화면 가운데에 있어 가운데 세로 띠(이 x비율 구간)의 밝기를 본다.
 STRUCTURAL_CENTER_XBAND = (0.35, 0.65)
 # 밝기/컬럼 임계값 = lo + ratio*(hi-lo), lo/hi는 프로파일의 15/85 백분위수.
 STRUCTURAL_BRIGHT_PCT = (15, 85)
@@ -151,12 +115,9 @@ STRUCTURAL_COL_THR_RATIO = 0.40
 STRUCTURAL_MIN_BAND_HEIGHT_RATIO = 0.06
 # x범위 판별에서 가운데 근처의 이 폭(이미지 대비) 이상인 밝은 구간만 표로 본다.
 STRUCTURAL_MIN_COL_RUN_RATIO = 0.15
-# 아군 밴드 상단 이 비율 구간 안에서 헤더(칼럼 제목 바)/첫 행 경계를 수평 에지
-# 최대점으로 찾는다.
+# 아군 밴드 상단 이 구간에서 헤더/첫 행 경계를 찾는다.
 STRUCTURAL_HEADER_SEARCH_RATIO = 0.35
-# 색 team_box가 구조 박스와 이 IoU 미만으로 겹치면 색 검출이 깨진 것으로 보고
-# 구조 기반 박스로 교체한다. 0.75면 경기 종료 캡처(IoU 0.9+)는 색을 그대로 쓰고,
-# 경기 중 캡처(상대 IoU 0.3 수준)만 구조로 넘어간다.
+# 색 team_box가 구조 박스와 이 IoU 미만으로 겹치면 구조 박스로 교체한다.
 STRUCTURAL_FALLBACK_MIN_IOU = 0.75
 
 # 파란/빨간 후보 쌍 평가 기준 — 전부 실패하면 그 쌍은 후보에서 제외한다.
@@ -173,22 +134,18 @@ MIN_ROW_HEIGHT_RATIO = 0.015
 MAX_ROW_HEIGHT_RATIO = 0.25
 ROW_HEIGHT_TOLERANCE_PX = 2  # 등분 결과 행 높이 차이 허용 오차(반올림 수준).
 
-# 상대팀 패널은 칼럼 제목이 없어 헤더 0으로 고정한다. 아군 패널은 사진마다
-# 달라 직접 판별한다(_detect_ally_header_height).
+# 상대팀 패널에는 칼럼 제목이 없다(아군은 이미지마다 직접 판별한다).
 ENEMY_HEADER_HEIGHT_RATIO = 0.0
 
-# 헤더 판별: 맨 위 행과 맨 아래 행의 평균 채도를 비교한다(헤더가 있으면
-# 칼럼 제목 바의 채도가 뚜렷하게 낮다).
+# 헤더 판별: 맨 위 행과 맨 아래 행의 평균 채도 차이.
 HEADER_DETECT_SATURATION_DIFF_THRESHOLD = 35
-# 채도를 샘플링할 밴드 높이(team_box_height 비율) — "행 하나 높이 정도"를
-# 표본으로 삼는다.
+# 채도를 샘플링할 밴드 높이(team_box 높이 대비, 행 하나 정도).
 HEADER_DETECT_SAMPLE_BAND_RATIO = 1 / 6
 
 # hero crop은 세로 중앙부만 쓴다 — 위/아래 경계는 옆 행 픽셀이 섞이기 쉽다.
 HERO_CROP_VERTICAL_TRIM = 0.08
 
-# 영웅 아이콘은 team_box 왼쪽 끝 근처에 있다. 상대 x 위치가 이 값보다 크면
-# 좌표 계산 오류로 보고 매칭하지 않는다.
+# 영웅 아이콘의 상대 x 위치가 이 값보다 크면 좌표 계산 오류로 본다.
 HERO_CROP_MAX_RELATIVE_X = 0.2
 
 # 역할 아이콘 폭 대비 영웅 아이콘의 x 오프셋/크기 비율(행 높이 기준).
@@ -211,15 +168,13 @@ HERO_CROP_ASPECT_MAX = 2.5
 # crop이 작으면 기본 보간으로 확대 시 흐려지므로 INTER_CUBIC으로 먼저 키운다.
 MIN_ICON_CROP_FOR_UPSCALE = 40
 
-# 색상 히스토그램 1차 필터. 템플릿에는 팀 색 틴트가 없어 정답이 걸러질 수
-# 있으므로 기본 비활성화이고, 히스토그램 자체는 진단용으로 항상 계산한다.
+# 색상 히스토그램 1차 필터(기본 비활성화, 히스토그램은 진단용으로 계산한다).
 ENABLE_COLOR_HISTOGRAM_PREFILTER = False
 HISTOGRAM_HUE_BINS = 30
 HISTOGRAM_SAT_BINS = 32
 HISTOGRAM_PREFILTER_TOP_K = 8
 
-# 영웅 인식 확정 기준 — best_score뿐 아니라 1위/2위 격차도 함께 본다.
-# 역할 제한 여부와 무관하게 항상 적용된다.
+# 영웅 인식 확정 기준(점수와 1·2위 격차를 함께 본다).
 BEST_SCORE_MIN_THRESHOLD = 0.65
 MIN_SCORE_GAP = 0.08
 HIGH_CONFIDENCE_THRESHOLD = 0.78
@@ -290,9 +245,7 @@ def _save_debug_images(
     ally_row_crops: List[Optional[Any]], ally_hero_crops: List[Optional[Any]],
     enemy_row_crops: List[Optional[Any]], enemy_hero_crops: List[Optional[Any]],
 ) -> Dict[str, str]:
-    """turn_id별 디버그 폴더에 행별 row crop/hero crop만 저장한다(원본 이미지는
-    저장하지 않아 디스크 사용량과 개인정보 보관 범위를 줄인다). 저장 실패는
-    예외를 삼켜 분석 자체가 죽지 않게 한다."""
+    """turn_id별 폴더에 행별 row crop/hero crop만 저장한다(실패는 삼킨다)."""
     debug_dir = _scoreboard_debug_dir(turn_id)
     try:
         os.makedirs(debug_dir, exist_ok=True)
@@ -341,9 +294,7 @@ def _upscale_icon_if_small(cv2, np, icon_region_bgr) -> Tuple[Any, bool, Optiona
 
 
 def _preprocess_icon_variants(cv2, gray_img) -> Dict[str, Any]:
-    """템플릿과 crop이 동일하게 거치는 전처리 3종(raw/blurred/clahe)을 만든다
-    — 각각 유사도를 비교해 최댓값을 최종 점수로 쓴다(_match_hero_icon). edge는
-    최종 점수에는 쓰지 않고 진단용으로만 별도 계산한다."""
+    """템플릿과 crop이 함께 거치는 전처리 3종(raw/blurred/clahe)을 만든다."""
     resized = cv2.resize(gray_img, ICON_TEMPLATE_SIZE)
     blurred = cv2.GaussianBlur(resized, PREPROCESS_BLUR_KERNEL, 0)
     clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILE_GRID_SIZE)
@@ -362,11 +313,10 @@ def _hsv_hist(cv2, bgr_img):
 
 
 def _load_hero_icon_templates(cv2, np) -> Dict[str, List[Dict[str, Any]]]:
-    """hero_icons/ 폴더를 영웅 이름 -> 전처리된 참조 이미지 리스트로 불러온다.
-    파일명이 "{영웅명}.png" 또는 "{영웅명}__아무개.png" 형태면 같은 영웅의
-    참조 이미지로 모아, 매칭 시(_match_hero_icon) 그중 최고 점수를 채택한다.
-    ROLE_ICON_FILE_TO_CODE에 있는 역할 문양 파일("탱커.png" 등)은 영웅이
-    아니므로 제외한다(_load_role_icon_templates가 별도로 불러온다)."""
+    """hero_icons/를 영웅 이름 -> 전처리된 참조 이미지 리스트로 불러온다.
+
+    같은 영웅의 여러 참조 이미지를 한 묶음으로 모은다(역할 문양 파일은 제외).
+    """
     grouped_paths: Dict[str, List[str]] = {}
     for path in glob.glob(os.path.join(HERO_ICON_DIR, "*")):
         if not os.path.isfile(path):
@@ -426,11 +376,7 @@ def _empty_hero_result(role_code: Optional[str], reason: Optional[str] = None) -
 def _match_hero_icon(
     cv2, np, search_region_bgr, templates: Dict[str, List[Dict[str, Any]]], role_code: Optional[str],
 ) -> Dict[str, Any]:
-    """search_region_bgr을 role_code에 해당하는 영웅 템플릿만 후보로 삼아
-    인식한다. 순위는 best_score/1·2위 차이로 확정한다(각 템플릿의
-    raw/blurred/clahe 유사도 중 최댓값). 색상 히스토그램은 항상 계산해
-    color_shortlist로 반환하지만, ENABLE_COLOR_HISTOGRAM_PREFILTER가 True일
-    때만 실제 후보 축소에 쓴다."""
+    """해당 역할의 영웅 템플릿만 후보로 삼아 아이콘을 인식한다."""
     empty = _empty_hero_result(role_code)
 
     if not templates:
@@ -487,8 +433,7 @@ def _match_hero_icon(
     role_scores = [t for t in scores if t[0] in role_name_set]
 
     if not role_scores:
-        # 해당 역할 템플릿이 없으면 전체 후보로 폴백하지 않고 unknown 처리한다
-        # (탱커 행이 힐러/딜러로 확정되는 것을 방지).
+        # 역할 템플릿이 없으면 전체 후보로 폴백하지 않고 unknown 처리한다.
         return {
             **empty,
             "reason": "해당 역할의 hero_icons 템플릿 없음",
@@ -515,8 +460,7 @@ def _match_hero_icon(
     color_shortlist_names = {n for n, _ in color_sims[:HISTOGRAM_PREFILTER_TOP_K]}
     color_shortlist = [{"hero": n, "color_similarity": round(s, 3)} for n, s in color_sims[:HISTOGRAM_PREFILTER_TOP_K]]
 
-    # 플래그가 꺼져 있으면(기본값) 색상 히스토그램은 순위에 반영하지 않고
-    # role_scores(이미 final_score 내림차순)를 그대로 쓴다.
+    # 플래그가 꺼져 있으면 색상 히스토그램은 순위에 반영하지 않는다.
     if ENABLE_COLOR_HISTOGRAM_PREFILTER:
         final_candidate_scores = [t for t in role_scores if t[0] in color_shortlist_names] or role_scores
         color_prefilter_applied = True
@@ -551,8 +495,7 @@ def _match_hero_icon(
         "raw_gray_score": round(best_raw, 3), "blurred_gray_score": round(best_blurred, 3),
         "clahe_gray_score": round(best_clahe, 3), "edge_score": round(best_edge, 3),
         "baseline_score": round(best_baseline, 3), "final_score": round(best_score, 3),
-        # unknown이면 None으로 둔다 — 확정되지 않은 최상위 후보가 실제로
-        # 쓰인 것처럼 보이지 않게 하기 위함.
+        # unknown이면 최상위 후보가 쓰인 것처럼 보이지 않게 None으로 둔다.
         "template_path": best_source if hero != "unknown" else None,
         "crop_size_before": [region_w, region_h],
         "crop_size_after": list(ICON_TEMPLATE_SIZE),
@@ -563,12 +506,7 @@ def _match_hero_icon(
 
 
 def _load_role_icon_templates(cv2, np) -> Dict[str, List[Any]]:
-    """hero_icons/ 폴더 중 역할 문양 참조 이미지(ROLE_ICON_FILE_TO_CODE의
-    "탱커"/"딜러", 또는 "탱커__아무개.png"처럼 여러 참조 이미지)만
-    role_code(tank/damage) -> 참조 이미지의 최대 윤곽선(contour) 리스트로
-    불러온다. 힐러 문양 템플릿은 따로 두지 않는다(_classify_role_icon
-    참고). 그레이스케일 원본이 아니라 윤곽선을 저장해두는 이유도
-    _classify_role_icon 참고."""
+    """역할 문양 참조 이미지를 role_code -> 최대 윤곽선 목록으로 불러온다."""
     grouped_paths: Dict[str, List[str]] = {}
     for path in glob.glob(os.path.join(HERO_ICON_DIR, "*")):
         if not os.path.isfile(path):
@@ -602,9 +540,7 @@ def _load_role_icon_templates(cv2, np) -> Dict[str, List[Any]]:
 
 
 def _icon_binary_mask(cv2, region_bgr):
-    """아이콘 crop을 이진화한다 — 문양은 단색 배경 위의 흰색 실루엣이라
-    Otsu 임계값으로 깨끗하게 분리된다. Otsu가 배경(다수 픽셀)을 흰색으로
-    분류했으면(즉 문양이 소수 픽셀), 문양이 항상 흰색이 되도록 반전한다."""
+    """아이콘 crop을 Otsu 이진화하고, 문양이 항상 흰색이 되도록 맞춘다."""
     gray = cv2.cvtColor(region_bgr, cv2.COLOR_BGR2GRAY)
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     if binary.mean() > 127:
@@ -613,9 +549,7 @@ def _icon_binary_mask(cv2, region_bgr):
 
 
 def _icon_largest_contour(cv2, binary):
-    """이진화된 아이콘에서 가장 큰 연결 영역의 윤곽선을 반환한다(문양이
-    여러 조각으로 나뉘어도 대표 윤곽선 하나만 쓴다 — 딜러 문양의 탄창
-    3개 중 하나처럼). 없으면 None."""
+    """이진화된 아이콘에서 가장 큰 연결 영역의 윤곽선. 없으면 None."""
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
@@ -623,10 +557,7 @@ def _icon_largest_contour(cv2, binary):
 
 
 def _classify_role_icon(cv2, np, icon_region_bgr, role_templates: Dict[str, List[Any]]) -> Dict[str, Any]:
-    """행 왼쪽 role 문양 crop을 탱커/딜러 템플릿과 윤곽선 모양(cv2.matchShapes)
-    으로 비교한다. 힐러 문양 템플릿은 없으므로 탱커/딜러 어느 쪽 임계값도
-    통과하지 못하면 role_code=None(힐러라는 뜻, _resolve_role_codes_for_team이
-    해석)을 반환한다."""
+    """역할 문양을 탱커/딜러 템플릿과 모양으로 비교한다(둘 다 아니면 None)."""
     empty = {"role_code": None, "tank_distance": None, "damage_distance": None}
     if not role_templates or icon_region_bgr is None or icon_region_bgr.size == 0:
         return empty
@@ -658,10 +589,7 @@ def _classify_role_icon(cv2, np, icon_region_bgr, role_templates: Dict[str, List
 
 
 def _role_icon_crop_box(row_y: Tuple[int, int], x0: int, x1: int) -> Tuple[int, int, int, int]:
-    """행의 y범위(row_y)와 팀 패널의 x범위(x0,x1)로 role 문양이 있는 왼쪽
-    컬럼 영역을 계산한다. hero crop과 동일하게 세로 중앙부만 쓰고
-    (HERO_CROP_VERTICAL_TRIM), 가로는 team_box 왼쪽 끝부터 영웅 아이콘이
-    시작하기 전까지(ROLE_ICON_WIDTH_RATIO)만 쓴다."""
+    """행에서 역할 문양이 있는 왼쪽 컬럼 영역을 계산한다."""
     row_h_full = row_y[1] - row_y[0]
     trim_px = int(round(row_h_full * HERO_CROP_VERTICAL_TRIM))
     y0, y1 = row_y[0] + trim_px, row_y[1] - trim_px
@@ -673,11 +601,10 @@ def _role_icon_crop_box(row_y: Tuple[int, int], x0: int, x1: int) -> Tuple[int, 
 
 
 def _row_period_correlation(row_mean: "np.ndarray", period: float) -> float:
-    """row_mean(팀 패널의 세로 1px당 밝기 평균 신호)을 자기 자신과 period
-    만큼 밀어서 비교하는 정규화 자기상관(피어슨 상관계수, -1~1)이다. 실제
-    인원수와 맞는 period로 밀면 행 경계(닉네임 줄 사이 어두운 구분선 등)가
-    그 주기로 반복돼 상관계수가 높게 나오고, 틀린 period로 밀면 행 중간과
-    경계가 뒤섞여 상관계수가 낮아진다."""
+    """세로 밝기 신호를 period만큼 밀어 비교한 정규화 자기상관(-1~1).
+
+    실제 인원수와 맞는 period일수록 행 경계가 그 주기로 반복돼 값이 높다.
+    """
     n = len(row_mean)
     lag = int(round(period))
     if lag <= 0 or lag >= n:
@@ -691,9 +618,7 @@ def _row_period_correlation(row_mean: "np.ndarray", period: float) -> float:
 
 
 def _estimate_roster_size_for_team(cv2, np, image, player_area_box: Dict[str, int]) -> Dict[int, float]:
-    """player_area_box(헤더 제외된 플레이어 영역 전체)의 세로 밝기
-    프로파일에서, ROSTER_SIZE_CANDIDATES 각각을 인원수로 가정했을 때의
-    예상 행 높이(period)로 _row_period_correlation 점수를 계산한다."""
+    """인원수 후보마다 예상 행 높이로 자기상관 점수를 계산한다."""
     x0, y0, x1, y1 = player_area_box["x0"], player_area_box["y0"], player_area_box["x1"], player_area_box["y1"]
     region = image[y0:y1, x0:x1]
     if region.size == 0:
@@ -705,12 +630,11 @@ def _estimate_roster_size_for_team(cv2, np, image, player_area_box: Dict[str, in
 
 
 def _resolve_roster_size(cv2, np, image, layout: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
-    """ally/enemy 패널의 밝기 프로파일에서 실제 인원수(5 또는 6)를 판별한다
-    (_estimate_roster_size_for_team). 상대팀(빨강)이 본인 강조 행 같은
-    노이즈가 없는 아군(파랑)보다 신호가 더 뚜렷한 경향이 있어 상대팀을
-    먼저 신뢰하고, 실패하거나 결론이 애매하면 아군으로 보완한다. 후보
-    인원수 사이 우열이 불명확하면(ROSTER_SIZE_MIN_CORRELATION/MIN_MARGIN)
-    DEFAULT_PLAYERS_PER_TEAM(5)으로 폴백한다."""
+    """팀 패널의 밝기 프로파일로 실제 인원수(5 또는 6)를 판별한다.
+
+    노이즈가 적은 상대팀을 먼저 신뢰하고, 애매하면 아군으로 보완한 뒤
+    그래도 모호하면 기본값으로 폴백한다.
+    """
     diag: Dict[str, Any] = {"enemy": None, "ally": None, "resolved_n": DEFAULT_PLAYERS_PER_TEAM, "resolved_by": "default"}
 
     def _pick(scores: Dict[int, float]) -> Optional[int]:
@@ -742,10 +666,7 @@ def _resolve_roster_size(cv2, np, image, layout: Dict[str, Any]) -> Tuple[int, D
 
 
 def _score_roster_hypothesis(role_labels: List[str]) -> Tuple[bool, str]:
-    """role_labels(위→아래 tank/damage/support 판정)가 실제 오버워치2 구성
-    규칙과 맞는지 검증한다 — 힐러는 항상 마지막 2행이고, 그 앞은 전부
-    tank/damage(support가 섞이면 안 됨)여야 하며, 탱커 수는 5인이면 정확히
-    1명, 6인이면 1~2명이어야 한다."""
+    """판정된 역할 순서가 구성 규칙(힐러는 마지막 2행, 탱커 수 범위)과 맞는지."""
     n = len(role_labels)
     support_expected = 2
     combat_labels = role_labels[: n - support_expected]
@@ -763,9 +684,7 @@ def _score_roster_hypothesis(role_labels: List[str]) -> Tuple[bool, str]:
 
 
 def _force_valid_role_labels(matches: List[Dict[str, Any]], n: int) -> List[str]:
-    """_score_roster_hypothesis를 통과하지 못했을 때 쓰는 최후 보정 — 힐러는
-    항상 마지막 2행으로 강제하고, 그 앞 행은 확신 기준과 무관하게
-    tank_distance/damage_distance 중 더 작은 쪽으로 채운다."""
+    """구성 규칙을 통과하지 못했을 때의 최후 보정(힐러는 마지막 2행 강제)."""
     combat_count = n - 2
     labels = []
     for m in matches[:combat_count]:
@@ -781,11 +700,10 @@ def _force_valid_role_labels(matches: List[Dict[str, Any]], n: int) -> List[str]
 def _resolve_role_codes_for_team(
     cv2, np, image, player_area_box: Dict[str, int], n: int, role_templates: Dict[str, List[Any]],
 ) -> List[str]:
-    """확정된 인원수(n)로 나눈 행마다 role 문양을 대조해 tank/damage/support
-    순서를 만든다. 5인은 배분이 고정([탱커,딜러,딜러,힐러,힐러])이라 문양
-    인식 없이 바로 확정하고, 6인만 탱커/딜러 배분(1+3 또는 2+2)을 문양으로
-    판별한다. 결과가 구성 규칙(_score_roster_hypothesis)에 안 맞으면
-    _force_valid_role_labels로 보정한다."""
+    """확정된 인원수로 나눈 행마다 역할 순서를 만든다.
+
+    5인은 배분이 고정이라 바로 확정하고, 6인만 문양으로 탱커/딜러를 가른다.
+    """
     if n == DEFAULT_PLAYERS_PER_TEAM:
         return list(ROW_ROLE_CODES)
 
@@ -878,11 +796,10 @@ def _relaxed_search_adjacent(
     min_saturation: int = RELAXED_TEAM_COLOR_MIN_SATURATION,
     min_value: int = RELAXED_TEAM_COLOR_MIN_VALUE,
 ) -> Optional[Dict[str, Any]]:
-    """완화된 색 조건으로 known_box의 위(side="above")/아래(side="below")에서만
-    다시 찾는다. known_box와 x범위가 충분히 겹치는 후보만 채택해 임의 위치에
-    team_box를 만들지 않는다. min_saturation/min_value 기본값은 "한 팀이
-    아예 검출되지 않았을 때" 쓰는 완화 기준이며, 호출부가 다른 시나리오(예:
-    행 높이 불일치 재탐색)에 맞는 값을 넘길 수 있다."""
+    """완화된 색 조건으로 known_box의 위/아래에서만 team_box 후보를 다시 찾는다.
+
+    known_box와 x범위가 충분히 겹치는 후보만 채택한다.
+    """
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     mask = _pixel_team_color_mask(cv2, np, hsv, hue_ranges, min_saturation, min_value)
     if side == "below":
@@ -913,9 +830,7 @@ def _relaxed_search_adjacent(
 
 
 def _evaluate_pair(blue_box, red_box, image_shape) -> Tuple[bool, float, Dict[str, Any], List[str]]:
-    """파란/빨간 후보 쌍이 "같은 점수판의 두 팀"으로 자연스러운지 평가한다.
-    하나라도 기준을 벗어나면 이 쌍은 탈락시키고, 통과한 쌍끼리는
-    pair_score(작을수록 좋음)로 순위를 매긴다."""
+    """후보 쌍이 같은 스탯창의 두 팀으로 자연스러운지 평가한다(점수가 작을수록 좋음)."""
     h = image_shape[0]
     blue_w, blue_h = blue_box["x1"] - blue_box["x0"], blue_box["y1"] - blue_box["y0"]
     red_w, red_h = red_box["x1"] - red_box["x0"], red_box["y1"] - red_box["y0"]
@@ -961,10 +876,10 @@ def _evaluate_pair(blue_box, red_box, image_shape) -> Tuple[bool, float, Dict[st
 
 
 def _select_team_boxes(cv2, np, image, blue_candidates, red_candidates):
-    """파란/빨간 후보를 각각 독립적으로 하나씩 뽑지 않고, 가능한 쌍을 전부
-    평가해 통과하는 쌍 중 pair_score가 최소인 쌍을 선택한다. 유효한 쌍이
-    없으면 각 색상의 최선 후보를 독립적으로 쓰거나(둘 다 후보가 있을 때),
-    한쪽만 후보가 있으면 반대쪽은 인접 위치에서 완화 탐색한다."""
+    """가능한 후보 쌍을 전부 평가해 가장 자연스러운 쌍을 고른다.
+
+    유효한 쌍이 없으면 각 색상의 최선 후보를 쓰거나 인접 위치를 완화 탐색한다.
+    """
     valid_blue = [c for c in blue_candidates if c["valid"]]
     valid_red = [c for c in red_candidates if c["valid"]]
 
@@ -992,8 +907,7 @@ def _select_team_boxes(cv2, np, image, blue_candidates, red_candidates):
         selected_by["ally"] = selected_by["enemy"] = "pair"
         pair_score, pair_details = score, details
     elif valid_blue and valid_red:
-        # 후보는 둘 다 있지만 자연스러운 쌍이 없다 — 임의로 결합하는 대신
-        # 각 색상에서 가장 면적이 큰(=패널일 가능성이 높은) 후보를 독립적으로 쓴다.
+        # 자연스러운 쌍이 없으면 각 색상의 최대 면적 후보를 독립적으로 쓴다.
         ally_candidate, enemy_candidate = valid_blue[0], valid_red[0]
         selected_by["ally"] = selected_by["enemy"] = "single_best_no_valid_pair"
     elif valid_blue:
@@ -1018,9 +932,7 @@ def _select_team_boxes(cv2, np, image, blue_candidates, red_candidates):
 
 
 def _resolve_x_range(own_box, paired_box, image_width: int) -> Tuple[Optional[Tuple[int, int]], str]:
-    """team_box의 x범위 결정 우선순위: 1) 자기 자신의 contour bounding
-    box, 2) 같은 쌍으로 선택된 반대 팀 박스의 x범위, 3) 두 박스의 평균 x범위.
-    셋 다 유효하지 않으면 None을 반환한다 — 이미지 전체 폭 폴백은 쓰지 않는다."""
+    """team_box의 x범위를 자기 contour → 반대 팀 → 평균 순으로 정한다."""
     def _valid(b) -> bool:
         return bool(b) and (b["x1"] - b["x0"]) >= image_width * MIN_TEAM_BLOCK_WIDTH_RATIO
 
@@ -1061,10 +973,7 @@ def _compute_player_area(y_range: Tuple[int, int], header_height: int) -> Tuple[
 
 
 def _detect_ally_header_height(cv2, np, image, team_box: Dict[str, int]) -> Dict[str, Any]:
-    """아군 team_box 안에 실제로 헤더(칼럼 제목 바)가 남아있는지 직접 판별한다.
-    team_box 맨 위 1행과 맨 아래 1행(항상 실제 플레이어 행)의 평균 채도(HSV S)
-    를 비교해, 차이가 크면(칼럼 제목 바는 일반 행보다 채도가 낮음) 헤더가
-    남아있다고 보고 1행 높이만큼 제외한다."""
+    """아군 team_box에 헤더가 남아있는지 맨 위·아래 행의 채도 차이로 판별한다."""
     x0, x1, y0, y1 = team_box["x0"], team_box["x1"], team_box["y0"], team_box["y1"]
     total_height = y1 - y0
     band_h = max(1, int(round(total_height * HEADER_DETECT_SAMPLE_BAND_RATIO)))
@@ -1094,9 +1003,7 @@ def _detect_ally_header_height(cv2, np, image, team_box: Dict[str, int]) -> Dict
 
 
 def _resolve_header_height(cv2, np, image, team: str, team_box: Dict[str, int]) -> Dict[str, Any]:
-    """팀별 header_height를 결정한다. 상대팀은 항상 0(TAB 점수판은 상대팀
-    패널 위에 칼럼 제목을 반복하지 않음). 아군은 _detect_ally_header_height()
-    로 실제 이미지에서 판별한다."""
+    """팀별 header_height를 정한다(상대팀은 항상 0, 아군은 이미지에서 판별)."""
     if team == "enemy":
         return {
             "sample_band_px": 0, "top_mean_saturation": None, "bottom_mean_saturation": None,
@@ -1112,10 +1019,10 @@ def _resolve_header_height(cv2, np, image, team: str, team_box: Dict[str, int]) 
 def _validate_team_box(
     box: Dict[str, int], image_shape: Tuple[int, int], header_height: int,
 ) -> Tuple[bool, Optional[str], Optional[float], List[int]]:
-    """team_box를 행으로 나누기 전에 검증한다 — 잘못 검출된 team_box가 그대로
-    row_boxes로 이어지면 hero crop이 엉뚱한 영역을 가리키게 된다. 실패하면
-    (False, 사유, None/예상 행 높이, [])를 반환해 호출부가 row_boxes를 전부
-    None으로 두게 한다."""
+    """team_box를 행으로 나누기 전에 검증한다.
+
+    실패하면 (False, 사유, 예상 행 높이, [])를 돌려준다.
+    """
     h, w = image_shape[:2]
     width, height = box["x1"] - box["x0"], box["y1"] - box["y0"]
     if width <= 0 or height <= 0:
@@ -1172,9 +1079,7 @@ def _build_team_layout_entry(
     pair_score: Optional[float], pair_details: Optional[Dict[str, Any]],
     y_fallback_used: bool, width_img: int,
 ) -> Dict[str, Any]:
-    """색 후보 하나(candidate)로부터 이 팀의 team_box/header/row_boxes를
-    조립한다. _compute_team_layout의 1차 검출 결과뿐 아니라, 행 높이 불일치로
-    재탐색한 완화 후보에도 동일한 방식으로 재사용한다."""
+    """색 후보 하나로부터 그 팀의 team_box/header/row_boxes를 조립한다."""
     if not candidate:
         return _empty_team_layout(mask_candidates, selected_by_label)
 
@@ -1252,10 +1157,7 @@ def _retry_enemy_masked_by_ally(
     cv2, np, image, layout: Dict[str, Any], candidates_by_team: Dict[str, List[Dict[str, Any]]],
     width_img: int, diagnostics: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """상대팀(빨강)이 완전히 검출 실패했을 때(team_box=None), 이미 확정된
-    아군 team_box의 x범위 안에서 행별 마스크 커버리지가 threshold 이상으로
-    견고하게 이어지는 가장 긴 연속 구간을 상대팀 패널로 본다. 아군 바로
-    아래부터 탐색하므로 배경 노이즈나 아군 x범위 밖의 오염과는 무관하다."""
+    """상대팀 검출이 실패했을 때 아군 x범위 안에서 아래쪽 연속 구간을 찾는다."""
     ally_entry = layout["ally"]
     ally_box = ally_entry.get("team_box")
     ally_row_h = ally_entry.get("expected_row_height")
@@ -1290,15 +1192,10 @@ def _self_relaxed_retry_no_cross_team(
     cv2, np, image, layout: Dict[str, Any], picked_by_team: Dict[str, Optional[Dict[str, Any]]],
     candidates_by_team: Dict[str, List[Dict[str, Any]]], width_img: int, diagnostics: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """반대 팀이 아예 검출되지 않아 _resolve_row_height_mismatch의 교차 비교가
-    불가능할 때 쓰는 대체 경로. candidate는 있지만(완전 실패가 아님)
-    expected_row_height가 이미지 높이 대비 비정상적으로 작은 팀만, 완화된 값
-    임계값으로 전체 이미지에서 다시 색 후보를 찾아(방향 anchor 없이) 기존
-    candidate와 x범위가 겹치면서 더 큰 후보로 교체를 시도한다. 아군(파랑)만
-    지원한다 — 상대팀(빨강)이 "candidate는 있는데 비정상적으로 작은" 경우는
-    이 함수가 다루지 않는다(원인이 다를 수 있음). 상대팀이 아예 완전히
-    실패한 경우(team_box=None)는 이 함수 끝에서 _retry_enemy_masked_by_ally로
-    별도 처리한다."""
+    """교차 비교가 불가능할 때 행 높이가 비정상적으로 작은 팀만 다시 찾는다.
+
+    아군만 지원하고, 상대팀이 완전히 실패한 경우는 끝에서 따로 처리한다.
+    """
     img_h = image.shape[0]
     for team in ("ally", "enemy"):
         h = layout[team].get("expected_row_height")
@@ -1357,12 +1254,7 @@ def _resolve_row_height_mismatch(
     cv2, np, image, layout: Dict[str, Any], picked_by_team: Dict[str, Optional[Dict[str, Any]]],
     candidates_by_team: Dict[str, List[Dict[str, Any]]], width_img: int,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """두 팀의 expected_row_height가 크게 다르면(ROW_HEIGHT_MISMATCH_RATIO
-    이상) 작은 쪽만 완화된 색 기준으로 인접 위치를 재탐색한다 — 본인 강조
-    행만 명도 임계값을 통과해 team_box가 그 행 1개 크기로 잘못 잡히는
-    경우를 구제한다. 교차 비교가 불가능하면(한쪽 검출 실패) 이미지 높이
-    대비 절대 비율로 자체 재탐색하되(_self_relaxed_retry_no_cross_team),
-    candidate 자체가 없는 팀은 원인이 다를 수 있어 대상에서 제외한다."""
+    """두 팀의 행 높이가 크게 다르면 작은 쪽만 완화된 기준으로 재탐색한다."""
     ally_h = layout["ally"].get("expected_row_height")
     enemy_h = layout["enemy"].get("expected_row_height")
     diagnostics = {
@@ -1386,8 +1278,7 @@ def _resolve_row_height_mismatch(
     if not anchor_candidate:
         return layout, diagnostics
 
-    # 작은 쪽 팀을 반대쪽 팀 기준 인접 위치에서 다시 찾는다. 파랑은 완화
-    # 기준을 그대로 쓰면 배경까지 붙어 전용 명도 하한을 쓴다.
+    # 작은 쪽 팀을 반대쪽 팀 기준 인접 위치에서 다시 찾는다.
     if small_team == "ally":
         relaxed = _relaxed_search_adjacent(
             cv2, np, image, [BLUE_HUE_RANGE], anchor_candidate["box"], "above",
@@ -1409,16 +1300,11 @@ def _resolve_row_height_mismatch(
 
 
 # ------------------------------------------------------------
-# 1단계(coarse): 점수판 대략적 위치만 찾아 sub-image로 잘라낸다. 정밀 검증은
-# 하지 않으며, 여기서 나온 박스는 최종 team_box로 쓰이지 않는다.
+# 1단계(coarse): 스탯창 대략적 위치만 찾아 sub-image로 잘라낸다.
 # ------------------------------------------------------------
 
 def _largest_color_contour_bbox(cv2, np, mask, image_shape) -> Optional[Dict[str, int]]:
-    """mask에 morphology close를 적용한 뒤 연결된 영역 중 면적이 가장 큰
-    것의 bounding box만 반환한다. _contour_candidates()와 달리 크기/비율
-    검증(MIN_TEAM_BLOCK_*_RATIO 등)은 하지 않는다 — 그 검증은 sub-image로
-    좁힌 뒤 2단계(_compute_team_layout)가 그대로 수행한다. 노이즈로 생기는
-    아주 작은 연결 영역만 COARSE_MIN_AREA_RATIO로 걸러낸다."""
+    """마스크에서 면적이 가장 큰 연결 영역의 bounding box(크기 검증은 하지 않는다)."""
     h, w = image_shape[:2]
     kernel_h = max(1, int(round(h * TEAM_MASK_CLOSE_KERNEL_HEIGHT_RATIO)))
     kernel_w = max(1, int(round(w * TEAM_MASK_CLOSE_KERNEL_WIDTH_RATIO)))
@@ -1446,11 +1332,10 @@ def _largest_color_contour_bbox(cv2, np, mask, image_shape) -> Optional[Dict[str
 
 
 def _detect_coarse_scoreboard_box(cv2, np, image) -> Tuple[Optional[Dict[str, int]], Optional[str]]:
-    """완화된 색 조건(RELAXED_TEAM_COLOR_MIN_SATURATION/VALUE)으로 파란/빨간
-    영역의 대략적인 위치만 찾는다 — 여기서 나온 박스는 최종 team_box로
-    쓰지 않는다. 파란/빨간 후보를 합쳐 여유 마진(COARSE_CROP_MARGIN_RATIO)을
-    포함한 사각 영역을 원본 이미지 기준 좌표로 반환한다. 후보가 전혀 없으면
-    (None, 실패 사유)를 반환해 호출부가 크롭 없이 원본 이미지를 쓰게 한다."""
+    """완화된 색 조건으로 스탯창의 대략적 위치만 찾는다.
+
+    후보가 없으면 (None, 실패 사유)를 돌려준다.
+    """
     h, w = image.shape[:2]
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     blue_mask = _pixel_team_color_mask(
@@ -1495,11 +1380,7 @@ def _translate_box(box: Optional[Dict[str, int]], offset_x: int, offset_y: int) 
 
 
 def _translate_layout_coordinates(layout: Dict[str, Any], offset_x: int, offset_y: int) -> Dict[str, Any]:
-    """_compute_team_layout()이 sub-image 기준으로 계산한 모든 좌표를 원본
-    이미지 기준 절대 좌표로 옮긴다 — 누락되면 이후 image[y0:y1, x0:x1] 픽셀
-    접근이 sub-image가 아닌 원본 기준으로 이뤄져 크롭 위치가 어긋난다.
-    offset이 (0,0)이면 그대로 반환한다. 좌표가 아닌 값(비율·통계 등)은
-    건드리지 않는다."""
+    """sub-image 기준 좌표를 원본 이미지 기준 절대 좌표로 옮긴다."""
     if offset_x == 0 and offset_y == 0:
         return layout
 
@@ -1530,14 +1411,11 @@ def _translate_layout_coordinates(layout: Dict[str, Any], offset_x: int, offset_
 
 
 def _compute_team_layout_with_coarse_crop(cv2, np, image) -> Dict[str, Any]:
-    """coarse-to-fine 2단계 검출의 진입점. 1단계(_detect_coarse_scoreboard_box)
-    로 점수판 대략적 위치를 찾아 sub-image로 자르고, 2단계는 그 sub-image에
-    정밀 파이프라인(_compute_team_layout)을 그대로 재실행한다 — 정밀
-    파이프라인의 크기/비율 임계값이 이미지 전체 대비라서, 전체화면 캡처처럼
-    점수판이 일부만 차지하는 경우 sub-image로 좁혀야 통과한다. 2단계 결과
-    좌표는 원본 이미지 기준으로 변환한다(_translate_layout_coordinates).
-    반환값은 _compute_team_layout()과 동일한 구조에 "_meta.coarse_crop"
-    정보만 추가한 것이다."""
+    """coarse-to-fine 2단계 검출의 진입점.
+
+    대략적 위치로 자른 sub-image에 정밀 파이프라인을 다시 돌리고, 결과
+    좌표는 원본 이미지 기준으로 되돌린다.
+    """
     coarse_box, coarse_reason = _detect_coarse_scoreboard_box(cv2, np, image)
 
     sub_image = None
@@ -1581,9 +1459,7 @@ def _contiguous_true_runs(mask: List[bool]) -> List[Tuple[int, int]]:
 
 
 def _structural_bright_run_bounds(profile, np, lo_pct: int, hi_pct: int, thr_ratio: float, min_len: int):
-    """1차원 밝기 프로파일에서 "밝은(=표) 구간"의 연속 run들을 min_len 이상만
-    골라 반환한다. 임계값은 프로파일 자체의 백분위수 기반이라 절대 밝기에
-    의존하지 않는다(캡처마다 배경/패널 밝기가 달라도 상대적으로 가른다)."""
+    """밝기 프로파일에서 밝은 구간의 연속 run을 min_len 이상만 골라 반환한다."""
     lo, hi = np.percentile(profile, lo_pct), np.percentile(profile, hi_pct)
     thr = lo + thr_ratio * (hi - lo)
     runs = [r for r in _contiguous_true_runs(list(profile > thr)) if (r[1] - r[0]) >= min_len]
@@ -1591,12 +1467,11 @@ def _structural_bright_run_bounds(profile, np, lo_pct: int, hi_pct: int, thr_rat
 
 
 def _detect_structural_table_boxes(cv2, np, image) -> Optional[Tuple[Dict[str, int], Dict[str, int]]]:
-    """색(파랑/빨강)이 아니라 "밝은 표 vs 어두운 배경" 구조로 아군/상대 패널
-    박스를 찾는다. 표는 가운데에 있으므로 가운데 세로 띠의 행별 밝기에서 위쪽
-    밝은 구간=아군, 아래쪽 밝은 구간=상대로 본다(둘 사이 어두운 구간이 VS
-    구분선). 각 밴드의 x범위는 그 밴드 안 컬럼별 밝기로 좌우 경계를 잡는다.
-    우측 상단 배너(모드마다 색이 다름)는 가운데 띠 밖 + 밴드 y범위 밖이라 자연히
-    빠진다. 아군/상대 밴드를 못 찾으면 None(→ 호출부가 색 기반 결과를 유지)."""
+    """색이 아니라 "밝은 표 vs 어두운 배경" 구조로 아군/상대 패널 박스를 찾는다.
+
+    가운데 세로 띠의 밝기에서 위쪽 구간을 아군, 아래쪽을 상대로 본다.
+    못 찾으면 None을 돌려준다.
+    """
     h, w = image.shape[:2]
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
     cx0, cx1 = int(w * STRUCTURAL_CENTER_XBAND[0]), int(w * STRUCTURAL_CENTER_XBAND[1])
@@ -1628,9 +1503,7 @@ def _detect_structural_table_boxes(cv2, np, image) -> Optional[Tuple[Dict[str, i
 
 
 def _structural_ally_header_height(cv2, np, image, box: Dict[str, int]) -> int:
-    """구조 기반 아군 박스는 위쪽에 칼럼 제목 바(헤더)가 포함돼 있다. 헤더와 첫
-    플레이어 행의 경계는 밴드 상단부에서 수평 에지가 가장 강한 y다(색 무관).
-    그 y까지를 헤더 높이로 돌려준다."""
+    """구조 기반 아군 박스의 헤더 높이(수평 에지가 가장 강한 y까지)."""
     x0, x1, y0, y1 = box["x0"], box["x1"], box["y0"], box["y1"]
     region = image[y0:y1, x0:x1]
     if region.size == 0:
@@ -1656,10 +1529,7 @@ def _box_iou(a: Optional[Dict[str, int]], b: Optional[Dict[str, int]]) -> float:
 
 
 def _maybe_replace_with_structural(cv2, np, image, layout: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """색 기반 검출 결과를 구조 기반 표 검출과 대조해, 색 team_box가 구조 박스와
-    충분히 안 겹치면(경기 중 캡처에서 배경이 패널 색과 겹쳐 색 검출이 무너진
-    경우) 구조 기반 박스로 layout을 교체한다. 둘이 잘 맞으면(경기 종료 캡처 등)
-    색 결과를 그대로 둬 기존 정밀도를 유지한다."""
+    """색 team_box가 구조 박스와 충분히 안 겹치면 구조 기반 박스로 교체한다."""
     diag: Dict[str, Any] = {"available": False, "used": False, "ally_iou": None, "enemy_iou": None}
     structural = _detect_structural_table_boxes(cv2, np, image)
     if structural is None:
@@ -1696,12 +1566,10 @@ def _maybe_replace_with_structural(cv2, np, image, layout: Dict[str, Any]) -> Tu
 
 
 def _compute_team_layout(cv2, np, image) -> Dict[str, Any]:
-    """우리팀(파란)/상대팀(빨간) 패널을 contour로 검출하고 쌍을 선택해 team_box
-    를 확정한 뒤, 실제 인원수(5 또는 6)를 판별해(_resolve_roster_size)
-    row_boxes/expected_row_height/role_codes를 그 인원수 기준으로 만든다.
-    색 기반 검출이 깨진 캡처(경기 진행 중 화면 등)는 구조 기반 표 검출로 폴백한다
-    (_maybe_replace_with_structural). 반환값은 {"ally": {...}, "enemy": {...},
-    "_meta": {...}}이고, "_meta"는 사용자 화면과 무관한 진단 전용 값이다."""
+    """팀 패널을 검출해 team_box를 확정하고, 판별한 인원수로 행을 나눈다.
+
+    반환은 {"ally": ..., "enemy": ..., "_meta": ...}이고 "_meta"는 진단 전용이다.
+    """
     width_img = image.shape[1]
     blue_candidates = _find_team_color_candidates(cv2, np, image, [BLUE_HUE_RANGE], BLUE_TEAM_COLOR_MIN_VALUE)
     red_candidates = _find_team_color_candidates(cv2, np, image, RED_HUE_RANGES, RED_TEAM_COLOR_MIN_VALUE)
@@ -1784,11 +1652,10 @@ def _highlight_border_score(cv2, np, row_bgr) -> float:
 
 
 def _determine_self_row(cv2, np, row_images: List[Optional[Any]]) -> Tuple[Optional[int], str, List[Any], List[Optional[str]]]:
-    """우리팀 행(5인/6인 모두) 중 본인 행을 우선순위대로 판별한다. 애매하면 억지로 하나를
-    고르지 않고 None(개인 피드백 생략)을 반환한다.
-    1순위: 배경이 가장 밝게 강조된 행 (2등과의 밝기 차이가 충분히 클 때만 확정)
-    2순위: 닉네임/테두리 하이라이트가 뚜렷한 행
-    3순위: 그래도 불확실하면 "확인 필요" — 절대 첫 번째 행으로 단정하지 않는다."""
+    """우리팀 행 중 본인 행을 판별한다(강조 배경 → 하이라이트 순).
+
+    애매하면 억지로 고르지 않고 None을 돌려준다.
+    """
     valid_indices = [i for i, img in enumerate(row_images) if img is not None]
     is_me_values: List[Any] = [False] * len(row_images)
     is_me_reasons: List[Optional[str]] = [None] * len(row_images)
@@ -1835,13 +1702,10 @@ def _build_team_rows(
     cv2, np, image, row_boxes: List[Optional[Dict[str, int]]], templates, team: str, team_box: Optional[Dict[str, int]],
     role_codes: List[str],
 ) -> Tuple[List[Dict[str, Any]], int, Optional[int], str, List[Optional[Any]], List[Optional[Any]]]:
-    """row_boxes(헤더 제외된 실제 플레이어 행 경계)로 len(row_boxes)개 슬롯을
-    만든다. 역할은 호출부가 넘긴 role_codes 그대로 배정해 영웅 아이콘 비교
-    후보를 그 역할로 제한한다. row crop은 row_box의 x0:x1 안에서, hero crop은
-    그 안의 세로 중앙부 + 행 높이 기준 정사각형으로 좁힌다.
+    """row_boxes로 행 슬롯을 만들고 각 행의 row crop / hero crop을 잘라낸다.
 
-    hero_crop_relative_x가 team_box 대비 지나치게 오른쪽이거나 clamp 후 폭이
-    거의 사라지면 좌표 계산 오류로 보고 매칭을 건너뛴다."""
+    영웅 후보는 넘겨받은 role_codes의 역할로 제한한다.
+    """
     row_images = [
         image[rb["y0"]:rb["y1"], rb["x0"]:rb["x1"]] if rb else None
         for rb in row_boxes
@@ -1877,8 +1741,7 @@ def _build_team_rows(
         icon_x1 = max(icon_x0, min(requested_x1, row_w))
 
         icon_region = row_center[:, icon_x0:icon_x1]
-        # hero crop의 원본(리사이즈 전) 픽셀 크기 — 템플릿(64x64)보다 훨씬
-        # 작으면 확대 과정에서 정보가 부족해 유사도가 떨어질 수 있다.
+        # hero crop의 원본 픽셀 크기(템플릿보다 많이 작으면 유사도가 떨어진다).
         logger.info(
             "[SCOREBOARD DIAG] icon crop native size team=%s row=%d role=%s size(w,h)=(%d,%d)",
             team, i + 1, role_code, icon_x1 - icon_x0, y1_local - y0_local,
@@ -2100,10 +1963,7 @@ def _build_admin_log(
     original_image_shape: Optional[Tuple[int, int]] = None,
     roster_size_diag: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """사용자 응답에는 포함하지 않고 ChatLog.metadata에만 저장하는 진단
-    정보를 만든다. team_layout에는 팀 패널 후보/쌍 선택/검증 결과를,
-    hero_rows에는 행별 역할 제한 전/후 후보와 각 전처리 단계 점수를 담는다.
-    좌표는 coarse crop 적용 여부와 무관하게 항상 원본 이미지 기준이다."""
+    """ChatLog.metadata에만 저장하는 진단 정보를 만든다(좌표는 항상 원본 기준)."""
     self_entry = my_team[self_row_idx] if self_row_idx is not None else None
 
     team_layout = {}
@@ -2288,9 +2148,7 @@ def _generate_team_feedback(llm, my_team: List[Dict[str, Any]], enemy_team: List
         "비교를 중심으로 분석해라."
         if low_hero_recognition else ""
     )
-    # 5인은 항상 [탱커,딜러,딜러,힐러,힐러]지만 6인은 탱커/딜러 배분이 판마다
-    # 달라질 수 있어(_resolve_roster_size), 고정 문구 대신 실제 행 순서를
-    # 그대로 알려준다.
+    # 인원수에 따라 배분이 달라지므로 실제 행 순서를 그대로 알려준다.
     my_team_role_order = ", ".join(e["role"] for e in my_team)
     prompt = TEAM_FEEDBACK_PROMPT_TEMPLATE.format(
         stat_judgement_rules=stat_judgement_rules(),
@@ -2399,9 +2257,7 @@ def _team_table(entries: List[Dict[str, Any]]) -> str:
 
 
 def _build_stat_dict(team: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """chatbot_graph의 my_team_stats/enemy_stats 포맷(영웅명 -> kills/assists/
-    deaths/damage/healing)으로 변환한다. 영웅 인식 실패(unknown)나 숫자 인식
-    실패 행은 제외한다."""
+    """그래프의 my_team_stats/enemy_stats 포맷으로 변환한다(인식 실패 행은 제외)."""
     result: Dict[str, Any] = {}
     for e in team:
         if e["hero"] == "unknown":
@@ -2423,9 +2279,7 @@ def build_scoreboard_report(
     my_team: List[Dict[str, Any]], enemy_team: List[Dict[str, Any]],
     team_feedback: Dict[str, str], personal_feedback: Optional[str],
 ) -> str:
-    """사용자에게 그대로 보여줄 마크다운. 인식 실패 목록/본인 판별 근거/
-    영웅 인식 방식 같은 진단 문구는 절대 포함하지 않는다 — 그런 정보는
-    admin_log에만 담긴다."""
+    """사용자에게 그대로 보여줄 마크다운(진단 문구는 넣지 않는다)."""
     lines = [
         "### 우리팀",
         _team_table(my_team),
@@ -2457,10 +2311,10 @@ def build_scoreboard_report(
 # ============================================================
 
 def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", turn_id: Optional[str] = None) -> Dict[str, Any]:
-    """TAB 점수판 스크린샷(bytes)을 분석해 "report"(사용자에게 보여줄 표+
-    피드백 마크다운)와 "admin_log"(관리자 전용 진단 정보) dict를 반환한다.
-    turn_id를 넘기면 행별 row/hero crop을 logs/scoreboard_debug/{turn_id}/에
-    저장하고 경로를 admin_log에 담는다."""
+    """스탯창 스크린샷을 분석해 report(사용자용)와 admin_log(진단용)를 반환한다.
+
+    turn_id를 넘기면 행별 crop을 디버그 폴더에 저장한다.
+    """
     cv2, np = _cv2_np()
 
     array = np.frombuffer(image_bytes, dtype=np.uint8)
@@ -2482,17 +2336,14 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
     coarse_crop_used = bool(coarse_crop_meta.get("coarse_crop_used"))
     coarse_crop_reason = coarse_crop_meta.get("coarse_crop_reason")
     coarse_crop_image = coarse_crop_meta.get("sub_image")
-    # 1단계(coarse) 검출 결과를 남겨, sub_image가 원본 대비 얼마나 좁혀졌는지
-    # 인식 실패 시 참고할 수 있게 한다.
+    # 인식 실패를 조사할 때 참고하도록 1단계 검출 결과를 남긴다.
     logger.info(
         "[SCOREBOARD DIAG] coarse_crop_used=%s coarse_crop_box=%s coarse_crop_reason=%s sub_image_shape=%s",
         coarse_crop_used, coarse_crop_box, coarse_crop_reason,
         coarse_crop_image.shape if coarse_crop_image is not None else None,
     )
 
-    # layout["ally"/"enemy"]의 team_box/row_boxes는 이미 원본 이미지 기준
-    # 절대 좌표로 변환돼 있으므로(_translate_layout_coordinates), 아래
-    # _build_team_rows()에는 sub_image가 아니라 항상 원본 image를 넘긴다.
+    # layout 좌표는 이미 원본 기준이므로 sub_image가 아니라 원본 image를 넘긴다.
     my_team, ally_detected_count, self_row_idx, self_reason, ally_row_crops, ally_hero_crops = _build_team_rows(
         cv2, np, image, layout["ally"]["row_boxes"], templates, team="ally", team_box=layout["ally"]["team_box"],
         role_codes=layout["ally"]["role_codes"],
@@ -2502,8 +2353,7 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
         role_codes=layout["enemy"]["role_codes"],
     )
 
-    # 양쪽 팀 패널을 하나도 못 찾으면 점수판 캡처가 아닐 가능성이 높다.
-    # Gemini를 부르기 전에 조기 반려한다(호출부가 안내 문구로 바꿔 보여준다).
+    # 양쪽 팀 패널을 하나도 못 찾으면 Gemini를 부르기 전에 조기 반려한다.
     if ally_detected_count == 0 and enemy_detected_count == 0:
         raise ScoreboardAnalysisError("점수판 팀 패널을 전혀 찾지 못했습니다(점수판 캡처가 아닐 가능성).")
 
@@ -2541,17 +2391,13 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
         self_known = _self_feedback_eligible(self_row_idx, my_team)
         enemy_counterpart = None
         if self_known and enemy_ok:
-            # 6인은 양 팀의 탱커·딜러 배분이 다를 수 있어 행 인덱스로 맞추면
-            # 어긋난다 — role_code로 같은 역할 상대를 찾고, 여럿이면 먼저
-            # 인식된 한 명을 쓴다.
+            # 행 인덱스가 아니라 role_code로 같은 역할 상대를 찾는다.
             self_role_code = my_team[self_row_idx]["role_code"]
             for candidate in enemy_team:
                 if candidate["role_code"] == self_role_code and candidate["hero"] != "unknown":
                     enemy_counterpart = candidate
                     break
-        # 팀 피드백과 개인 피드백은 서로를 참조하지 않고 둘 다 위에서 확정된
-        # 숫자에만 의존한다 — 직렬로 부르면 Gemini 왕복이 그대로 두 번 쌓여
-        # 스탯창 응답이 느려지므로 함께 실행한다(retrieve_docs_node와 같은 패턴).
+        # 두 피드백은 서로를 참조하지 않으므로 함께 실행한다.
         with ThreadPoolExecutor(max_workers=2) as executor:
             team_future = executor.submit(
                 _generate_team_feedback, llm, my_team, enemy_team, enemy_ok, low_hero_recognition,
@@ -2566,8 +2412,7 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
             team_feedback = team_future.result()
             personal_feedback = personal_future.result() if personal_future else None
     else:
-        # Gemini를 쓰지 않는 경우. 수치는 None으로 초기화돼 있어 표에는
-        # "확인 필요"로 나간다.
+        # Gemini를 쓰지 않는 경우. 수치는 표에 "확인 필요"로 나간다.
         team_feedback = {
             "overview": "영웅 인식(OpenCV) 정확도 개선 작업 중이라 코치 피드백은 잠시 꺼둔 상태입니다.",
             "good_points": "-",
@@ -2577,8 +2422,7 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
         self_known = False
         personal_feedback = None
 
-    # my_team/enemy_team의 kda/damage/... 값이 최종 확정된 뒤(Gemini가 채웠든
-    # 그대로 None이든) admin_log를 만들어야 missing_stats가 정확하다.
+    # 수치가 최종 확정된 뒤에 만들어야 missing_stats가 정확하다.
     admin_log = _build_admin_log(
         my_team, enemy_team, ally_detected_count, enemy_detected_count,
         self_row_idx, self_reason, None, layout, pair_evaluations,

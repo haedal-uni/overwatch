@@ -1,8 +1,6 @@
-"""점수판 디버그 이미지(logs/scoreboard_debug/{turn_id}/) 정리 유틸.
+"""스탯창 디버그 이미지(logs/scoreboard_debug/{turn_id}/) 정리 유틸.
 
-원래 `chat/admin.py`에만 있던 함수인데, 오래된 로그를 일괄 정리하는
-`python manage.py cleanup_chatlogs`도 같은 삭제 규칙(경로 검증 + 권한 실패
-보고)을 그대로 써야 해서 중립 모듈로 옮겼다. admin은 여기서 import한다.
+admin의 삭제 액션과 cleanup_chatlogs 명령이 함께 쓴다.
 """
 
 import logging
@@ -26,10 +24,7 @@ def scoreboard_debug_root() -> str:
 def delete_scoreboard_debug_dirs(turn_ids):
     """주어진 turn_id들의 디버그 이미지 폴더를 지운다.
 
-    대부분의 turn_id는 일반 채팅이라 폴더가 없으며 이 경우는 건너뛴다. 삭제
-    실패(주로 서버 파일 권한 문제) turn_id 목록을 반환해 호출자가 관리자에게
-    알릴 수 있게 한다 — `ignore_errors=True`로 조용히 삼키면 디스크에 고아
-    폴더가 쌓이는 걸 아무도 모른다.
+    삭제에 실패한 turn_id 목록을 돌려준다(조용히 삼키지 않는다).
     """
     debug_root = scoreboard_debug_root()
     failed_turn_ids = []

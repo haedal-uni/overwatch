@@ -16,42 +16,20 @@ MD_PATH = "source/overwatch.md"
 DB_PATH = "./chroma_db_overwatch"
 COLLECTION_NAME = "overwatch_docs"
 
-# 검색 인덱스에서 통째로 빼는 섹션(H1 기준).
-#
-# "6. 영웅 수 검증"은 영웅 이름만 나열해둔 검산용 메모라 답변 근거가 될 내용이
-# 없는데, 모든 영웅 이름이 한 chunk에 들어있어서 어떤 영웅 질문에도 유사도가
-# 높게 잡힌다. 실제 평가에서 카운터 질문의 검색 1위가 이 chunk였다 — 상위 k
-# 자리를 하나 차지하고 정보는 주지 않으니, 그 자리에 들어왔어야 할 상성 문서가
-# 밀려난다. 인덱싱에서 빼면 카운터 유형 MRR이 0.695 → 0.729로 오르고 다른
-# 질문 유형에는 부작용이 없었다(rag_eval/eval_report.md 7절).
-#
-# 이 목록을 고치면 벡터스토어를 다시 만들어야 반영된다(create_vectorstore).
+# 검색 인덱스에서 통째로 빼는 섹션(H1 기준). 답변 근거가 없으면서 상위 k를
+# 차지하는 절이라 뺐다. 고치면 벡터스토어를 다시 만들어야 반영된다.
 EXCLUDED_H1_SECTIONS = {"6. 영웅 수 검증"}
 
 class ChatBot:
-    """markdown 문서를 chunk/임베딩/벡터스토어로 준비하고 Gemini LLM을 로드하는 RAG 컴포넌트 빌더.
-
-    이 클래스는 "무거운 컴포넌트를 만들어주는 빌더"일 뿐 대화 상태를 갖지 않는다
-    — `chatbot_service`가 인스턴스를 싱글턴으로 공유하므로 여기에 대화 기록 같은
-    사용자별 상태를 두면 모든 사용자가 그것을 공유하게 된다. 대화 맥락은 Django
-    세션의 `coach_context`가 담당한다.
-
-    터미널에서 검색/답변을 직접 확인하는 CLI는 `python manage.py rag_cli`로
-    분리돼 있다(chat/management/commands/rag_cli.py).
-    """
+    """벡터스토어/LLM 빌더. 싱글턴으로 공유되므로 대화 상태를 두지 않는다."""
 
     def __init__(
         self,
         md_path=MD_PATH,
         db_path=DB_PATH,
         collection_name=COLLECTION_NAME,
-        # 2026-07-29 재측정으로 정한 값(rag_eval/eval_report.md).
-        # overlap 0: 겹침을 주면 같은 내용의 chunk가 늘어 상위 k를 중복이 차지하고
-        #   서로 다른 정답 섹션이 밀려난다(k=10에서 Hit@k 0.840 → 0.800).
-        #   분할 경계 376개를 전수 조사한 결과 문장이 끊긴 사례는 0건이라 겹침이 필요 없었다.
-        # search_k 10: k=7 대비 Hit@k가 0.680 → 0.840으로 오른다. chunk가 작아
-        #   한 섹션이 여러 조각으로 나뉘므로 같은 내용을 담으려면 더 가져와야 한다.
-        # 이 셋 중 하나라도 바꾸면 ChromaDB를 재구축해야 한다(chunk 경계가 달라진다).
+        # 평가셋으로 실측해 정한 값이다(rag_eval/eval_report.md). 감으로 바꾸지 말 것 —
+        # 하나라도 바꾸면 chunk 경계가 달라져 ChromaDB를 재구축해야 한다.
         chunk_size=800,
         chunk_overlap=0,
         search_k=10,

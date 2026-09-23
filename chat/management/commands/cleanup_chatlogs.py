@@ -3,14 +3,7 @@
     python manage.py cleanup_chatlogs --days 90            # 90일 지난 로그 삭제
     python manage.py cleanup_chatlogs --days 90 --dry-run  # 삭제 없이 건수만 확인
 
-ChatLog.metadata에는 턴마다 context_before/context_after와 카드 전문이 통째로
-들어가고, 스탯창 분석은 logs/scoreboard_debug/{turn_id}/에 행별 crop 이미지를
-남긴다. 지금까지는 관리자가 화면에서 수동으로 지우는 방법밖에 없어서 둘 다
-무한정 쌓였다 — 보존 기간을 정해두고 주기적으로(예: cron/스케줄러) 돌리면
-된다.
-
-DB 로그가 이미 지워진 뒤 디스크 폴더만 남은 "고아 폴더"도 함께 정리한다
-(과거 삭제가 권한 문제로 실패했던 경우 등).
+DB 로그가 없는 고아 폴더도 함께 정리한다.
 """
 
 from datetime import timedelta
@@ -46,7 +39,7 @@ class Command(BaseCommand):
         if days < 1:
             raise CommandError("--days는 1 이상이어야 합니다.")
 
-        # USE_TZ=False라 양쪽 다 naive datetime이다(True로 바꿔도 그대로 동작).
+        # USE_TZ=False라 양쪽 다 naive datetime이다.
         cutoff = timezone.now() - timedelta(days=days)
 
         old_logs = ChatLog.objects.filter(created_at__lt=cutoff)

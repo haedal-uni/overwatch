@@ -1,8 +1,6 @@
 """LLM 호출과 응답 파싱, 문서 검색을 감싸는 얇은 유틸.
 
-LangChain 모델/retriever 구현이 버전마다 조금씩 다른(응답이 str인지 list인지,
-retriever가 invoke인지 get_relevant_documents인지) 부분을 여기서 흡수해,
-노드 코드가 그 차이를 신경 쓰지 않게 한다.
+LangChain 버전에 따라 달라지는 호출 방식을 여기서 흡수한다.
 """
 
 import json
