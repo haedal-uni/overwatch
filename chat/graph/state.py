@@ -1,8 +1,4 @@
-"""LangGraph 파이프라인이 노드 사이로 주고받는 상태(state) 정의.
-
-한 요청이 그래프를 한 바퀴 도는 동안 이 dict 하나가 계속 갱신되며 흘러간다.
-각 노드는 자기가 바꾼 키만 담은 dict를 반환하고 LangGraph가 병합한다.
-"""
+"""노드 사이를 흐르는 상태(state) 정의. 각 노드는 자기가 바꾼 키만 반환한다."""
 
 from typing import Any, Dict, List, Optional, TypedDict
 
@@ -62,16 +58,16 @@ class ChatbotGraphState(TypedDict, total=False):
     recommend_card_mode: Optional[str]
     recommend_card: Optional[Dict[str, Any]]
     is_perk_question: bool
+    # 우선 타겟 질문인지와, 문서 판정으로 정렬한 상대 목록.
+    is_target_priority_question: bool
+    target_priority: List[Dict[str, Any]]
     ally_team: List[str]
     llm_ally_team: List[str]
-    # 아군 조합으로 좁힌 사용자 역할 후보와, 그 조합이 역할 좁히기에 쓸 만큼
-    # 최근인지(5분 규칙).
+    # 아군 조합으로 좁힌 역할 후보와, 그 조합이 최근 것인지.
     role_candidates: List[str]
     role_candidates_fresh: bool
-    # roster_size = 사용자가 직접 알려준 팀 인원수(5/6, 안 알려줬으면 None).
-    # roster_size_effective = 실제로 답변에 적용한 인원수(안 알려줬으면 현재 메타
-    # CURRENT_META_ROSTER_SIZE). roster_is_full = 아군만으로 정원이 찼는지
-    # (사용자가 채울 자리가 없어 개인 픽 추천 대신 조합 평가로 답해야 하는 경우).
+    # roster_size는 사용자가 직접 밝힌 인원수, effective는 이번 답변에 적용한 값,
+    # is_full은 아군만으로 정원이 찼는지.
     roster_size: Optional[int]
     roster_size_effective: int
     roster_is_full: bool
