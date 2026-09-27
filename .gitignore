@@ -232,3 +232,4 @@ chat/hero_icons
 chat/static/chat/hero_icons
 tests/
 chat/vision/hero_icons
+chat/rag/matchup_summaries.json
