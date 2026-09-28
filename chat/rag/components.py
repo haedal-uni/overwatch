@@ -10,8 +10,7 @@ _chatbot: Optional[ChatBot] = None
 _retriever: Optional[Any] = None
 _llm: Optional[Any] = None
 
-# 임베딩 모델 로드는 수십 초에 GB 단위 메모리를 쓰므로 락으로 최초 1회만
-# 만든다. 내부에서도 여러 스레드가 이 함수를 부른다(retrieve_docs_node).
+# 임베딩 모델 로드가 무거워 락으로 최초 1회만 만든다(여러 스레드가 부른다).
 _init_lock = threading.Lock()
 
 
@@ -19,12 +18,12 @@ def initialize_chatbot() -> Tuple[ChatBot, Any, Any]:
     """RAG 챗봇에 필요한 무거운 컴포넌트를 최초 1회만 초기화하고 이후 재사용한다."""
     global _chatbot, _retriever, _llm
 
-    # 초기화가 끝난 뒤에는 락 없이 바로 반환한다(대부분의 호출이 이 경로).
+    # 초기화가 끝난 뒤에는 락 없이 바로 반환한다.
     if _chatbot is not None and _retriever is not None and _llm is not None:
         return _chatbot, _retriever, _llm
 
     with _init_lock:
-        # 락을 기다리는 동안 다른 스레드가 초기화를 끝냈을 수 있으므로 다시 확인한다.
+        # 락을 기다리는 동안 다른 스레드가 끝냈을 수 있으므로 다시 확인한다.
         if _chatbot is not None and _retriever is not None and _llm is not None:
             return _chatbot, _retriever, _llm
 

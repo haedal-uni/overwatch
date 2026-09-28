@@ -1,11 +1,6 @@
-"""LLM 없이 메시지 문장만 보고 판단하는 규칙 기반 추출/분류 계층.
+"""메시지 문장만 보고 의도·영웅·역할을 판단하는 규칙 계층(순수 함수).
 
-의도(intent), 자기 영웅 선언, 아군/상대 조합 나열, 비교 질문 여부, 역할
-되묻기 필요 여부 등을 정규식과 단어 목록으로 판단한다.
-
-문장 구조로 확실히 알 수 있는 신호는 LLM 분류보다 우선하므로, 여기 함수
-대부분은 merge_context_node에서 LLM 결과를 덮어쓰는 안전장치로 쓰인다.
-LLM/DB/Django에 의존하지 않는 순수 함수다.
+각 규칙을 둔 배경은 chat_모듈_구조.md 참고.
 """
 
 import logging
@@ -46,17 +41,12 @@ def _hero_name_variants(hero: Optional[str]) -> set:
     return names
 
 
-# 조합 나열에서 이름 사이에 들어가는 구분자(공백만인 경우 포함).
+# 조합 나열에서 이름 사이에 들어가는 구분자.
 _COMP_LIST_SEPARATOR = r"\s*(?:,|/|랑|이랑|와|과|하고|그리고|\+)?\s*"
 
 
 def hero_listed_in_ally_comp(hero: Optional[str], text: str) -> bool:
-    """그 영웅 이름이 조합 나열의 일부로 등장했는지.
-
-    나열 맨 뒤 이름에 "인데"가 붙으면 hero_mentioned_as_current_hero가 자기
-    선언으로 오인하므로, 그 앞에서 걸러내는 용도다. 판정은 인접성으로만 한다 —
-    바로 앞에 구분자만 두고 다른 영웅 이름이 붙어 있으면 나열로 본다.
-    """
+    """그 영웅 이름이 조합 나열의 일부로 등장했는지."""
     normalized = normalize_hero_name(hero)
     if not normalized or not text:
         return False
@@ -65,7 +55,7 @@ def hero_listed_in_ally_comp(hero: Optional[str], text: str) -> bool:
         return False
 
     names = _hero_name_variants(normalized)
-    # 1인칭 표지가 바로 앞에 붙어 있으면 나열이 아니라 자기 선언이다.
+    # 1인칭 표지가 바로 앞에 붙으면 나열이 아니라 자기 선언이다.
     for name in names:
         if re.search(rf"(?<![가-힣])(?:난|나는|나|저는|제가|내가)\s*{re.escape(name)}", text):
             return False
@@ -75,8 +65,7 @@ def hero_listed_in_ally_comp(hero: Optional[str], text: str) -> bool:
         for n in _hero_name_variants(other)
     ]
 
-    # 같은 영웅이 나열에도 따로도 나올 수 있으므로 등장 위치마다 본다.
-    # 나열이 아닌 등장이 하나라도 있으면 자기 선언 판정을 막지 않는다.
+    # 등장 위치마다 보고, 나열이 아닌 등장이 하나라도 있으면 False.
     found_any = False
     for name in names:
         for match in re.finditer(re.escape(name), text):
@@ -87,51 +76,65 @@ def hero_listed_in_ally_comp(hero: Optional[str], text: str) -> bool:
     return found_any
 
 
-def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
-    """영웅 이름이 "상대 겐지"처럼 적으로 언급된 경우와 "겐지로 할게"처럼
-    사용자가 직접 플레이한다고 말한 경우를 구분한다."""
+# "X가/이 아니다"류 부정. 자기 선언 패턴보다 먼저 본다.
+_SELF_NEGATION_SUFFIX = r"\s*(?:이|가)?\s*아니(?:라|야|고|에요|예요|거든|잖아|다|란|라니까|라구)?"
+
+
+def hero_negated_as_self(hero: Optional[str], text: str) -> bool:
+    """"내가 X가 아니라고"처럼 그 영웅이 자기 영웅이 아니라고 말했는지."""
     normalized = normalize_hero_name(hero)
     if not normalized or not text:
+        return False
+    return any(
+        re.search(rf"{re.escape(name)}{_SELF_NEGATION_SUFFIX}", text)
+        for name in _hero_name_variants(normalized)
+    )
+
+
+def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
+    """그 영웅을 사용자가 직접 플레이한다고 선언했는지(적 언급과 구분)."""
+    normalized = normalize_hero_name(hero)
+    if not normalized or not text:
+        return False
+    if hero_negated_as_self(normalized, text):
         return False
 
     names = _hero_name_variants(normalized)
 
     for name in names:
         escaped = re.escape(name)
-        # 앞에 한글 음절이 없을 때만 — 영웅 이름 속 음절이 1인칭 표지로 잡히면 안 된다.
+        # 앞에 한글 음절이 없을 때만(영웅 이름 속 음절 오탐 방지).
         if re.search(rf"(?<![가-힣])(?:난|나는|나|저는|제가|내가)\s*{escaped}", text):
             return True
         if re.search(rf"{escaped}\s*(?:로|으로)\s*(?:플레이|하고|하는|할|가|갈|쓰|쓸|이기|즐기)", text):
             return True
-        # "윈스턴으로 수비하는데"처럼 로/으로와 활용형 사이에 역할 명사가 낄 때도 인정한다.
+        # 로/으로와 활용형 사이에 다른 명사가 끼는 경우.
         if re.search(
             rf"{escaped}\s*(?:로|으로)\s*[가-힣]{{0,4}}\s*"
             rf"(?:하고|하는|할|해서|하면서|하는데|하다가)",
             text,
         ):
             return True
-        # "파라를 하고 싶은데"처럼 목적격 조사(을/를)가 낀 경우도 인정한다.
+        # 목적격 조사(을/를) + 희망/유지 표현.
         if re.search(
             rf"{escaped}\s*(?:을|를)?\s*(?:하고\s*있|하는\s*중|하고\s*싶|하고싶|할\s*거|할건데|"
             rf"쓰고\s*싶|쓰고싶|쓸건데|계속|유지|고정|원챔)",
             text,
         ):
             return True
-        # "시그마인데"처럼 서술격 조사만 붙는 표현도 인정한다 (로/으로 패턴으로는 못 잡음).
+        # 서술격 조사만 붙는 표현.
         if re.search(rf"{escaped}\s*(?:인데요|인데|이야|이거든|임|입니다|이에요|예요)", text):
             return True
-        # "겐지 하는데"처럼 조사 없이 "하다" 활용형만 붙는 표현도 인정한다.
+        # 조사 없이 "하다" 활용형만 붙는 표현.
         if re.search(rf"{escaped}\s*(?:하는데요|하는데|할\s*때|하다가)", text):
             return True
-        # "겐지로 윈스턴 상대법 알려줘"처럼 로/으로 뒤에 다른 영웅명이 끼면 위 패턴들이
-        # 놓치므로, 상대법류 표현과 "로/으로"가 함께 있으면 자기 선언으로 본다.
+        # 로/으로 뒤에 다른 영웅명이 끼는 상대법 질문.
         if (
             any(word in text for word in _STAY_OPERATION_WORDS)
             and re.search(rf"{escaped}\s*(?:로|으로)", text)
         ):
             return True
-        # "트레이서를 고르면"처럼 확정 전 고려 표현도 인정한다(없으면 후보 영웅이
-        # 인식되지 않아 불필요하게 역할을 되묻는다).
+        # 확정 전 고려 표현.
         if re.search(
             rf"{escaped}\s*(?:을|를)?\s*(?:고르면|고를까|고르는\s*게|고르는게|"
             rf"골라도|픽하면|픽할까|선택하면|선택할까)",
@@ -142,8 +145,7 @@ def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
     return False
 
 
-# 양 팀을 한 문장에 나열하면 한쪽 캡처가 반대 팀 마커까지 삼킬 수 있어,
-# 캡처 조각을 반대 팀 마커 앞에서 자른다.
+# 캡처 조각을 반대 팀 마커 앞에서 자를 때 쓴다.
 _ALLY_TEAM_MARKERS = ["우리팀", "아군", "우리는", "우리가"]
 _ENEMY_TEAM_MARKERS = ["상대팀", "상대는", "상대가", "상대", "적은", "적팀은"]
 
@@ -197,20 +199,19 @@ def extract_ally_team(text: str) -> List[str]:
     return []
 
 
-# 조합 평가 질문과 추천 요청 질문을 가르는 표현. 후자만 추천 영웅 카드로 보낸다.
+# 조합 평가 질문과 추천 요청 질문을 가르는 표현.
 _COMPOSITION_RECOMMEND_REQUEST_WORDS = (
     "추천", "뭐 하면", "뭘 하면", "뭘 해야", "뭐 해야", "뭐가 좋을까", "뭐로 하면",
     "골라야", "고를까", "고르면", "선택하는", "선택하면", "선택해야",
     "누구를 고르", "누구 고르", "누구를 선택", "누구 선택", "누구를 뽑", "누구 뽑",
 )
 
-# 표기를 하나씩 추가하면 계속 누락되므로 "의문사 + (조사) + 고르는 동사"
-# 구조를 정규식으로 잡는다.
+# "의문사 + (조사) + 고르는 동사" 구조.
 _COMPOSITION_RECOMMEND_REQUEST_PATTERN = re.compile(
     r"(뭐|뭘|무엇|누구|누굴|어떤\s*영웅|무슨\s*영웅|어떤\s*거|어느\s*영웅)"
     r"\s*(을|를|로|으로|가)?\s*"
     r"(하면|할까|해야|하지|하는\s*게|골라|고르|고를|선택|뽑|픽|가면|갈까|잡으면"
-    # 교체 표현("뭘로 바꿔야 할지")도 추천 요청이다.
+    # 교체 표현도 추천 요청이다.
     r"|바꾸|바꿔|바꿀|교체|갈아)"
 )
 
@@ -221,16 +222,14 @@ def wants_composition_recommendation(message: str) -> bool:
     return bool(_COMPOSITION_RECOMMEND_REQUEST_PATTERN.search(message))
 
 
-# 조합을 다시 나열하지 않고 추천만 재요청하는 질문. 이 턴에는
-# is_team_comp_question이 False라 별도로 잡아 세션의 아군 조합을 쓴다.
+# 조합을 다시 나열하지 않고 추천만 재요청하는 질문.
 def is_composition_reask(message: str) -> bool:
     if "조합" not in message:
         return False
     return wants_composition_recommendation(message)
 
 
-# 아군의 실제 활약을 비교해달라는 질문. is_team_comp_question보다 우선해야
-# 조합 평가가 아니라 스탯 비교로 답이 간다.
+# 아군의 실제 활약을 비교해달라는 질문.
 _PERFORMANCE_COMPARISON_PATTERN = re.compile(
     r"누(가|구)\s*(더|제일|가장)?\s*(잘\s*(했|하|한)|못\s*(했|하|한)|나은|나아|잘함|못함)"
 )
@@ -241,10 +240,7 @@ def is_performance_comparison_question(message: str) -> bool:
 
 
 def find_performance_comparison_heroes(text: str) -> List[str]:
-    """비교 질문에 등장한 영웅들을 ally_team 후보로 뽑는다.
-
-    llm_ally_team이 비어도 compared_heroes가 채워지도록 하는 규칙 기반 폴백.
-    적대 신호가 있으면 상대와의 비교일 수 있어 적용하지 않는다."""
+    """비교 질문에 등장한 영웅들을 ally_team 후보로 뽑는다(규칙 기반 폴백)."""
     if any(word in text for word in ADVERSARIAL_SIGNAL_WORDS):
         return []
     if not is_performance_comparison_question(text):
@@ -252,38 +248,25 @@ def find_performance_comparison_heroes(text: str) -> List[str]:
     return find_all_heroes(text)
 
 
-# 아군 조합으로 사용자가 맡을 수 있는 역할을 좁히는 계층.
-# 5vs5: 탱1/딜2/힐2 고정, 6vs6: 탱1~2/딜2~3/힐2(남는 한 자리가 판마다 다름).
+# 인원수별 역할 정원(최소, 최대).
 ROSTER_ROLE_RANGES = {
     5: {"tank": (1, 1), "damage": (2, 2), "support": (2, 2)},
     6: {"tank": (1, 2), "damage": (2, 3), "support": (2, 2)},
 }
 
-# ─────────────────────────────────────────────────────────────────────────
-# 현재 패치 메타의 팀 인원수. 5vs5 ↔ 6vs6를 바꾸는 **유일한 고정점**이다.
-# 패치가 바뀌면 이 값만 5 또는 6으로 고치면 역할 좁히기, 답변 프롬프트에
-# 들어가는 규격 설명, 답변 하단 정정 버튼("5대5예요"/"6대6이에요")이 전부
-# 따라 바뀐다. 다른 곳에 5나 6을 직접 쓰지 마라.
-#
-# 인원수는 추측하지 않는다 — 사용자가 직접 말하거나("5대5야") 답변 하단
-# 버튼을 누르기 전까지는 항상 이 값을 쓴다.
-# ─────────────────────────────────────────────────────────────────────────
-CURRENT_META_ROSTER_SIZE = 6
+# 현재 패치 메타의 팀 인원수. 5대5 ↔ 6대6을 바꾸는 유일한 고정점이므로
+# 다른 곳에 5나 6을 직접 쓰지 마라(chat_모듈_구조.md 참고).
+CURRENT_META_ROSTER_SIZE = 5
 
-# 아군 조합을 역할 좁히기에 쓸 수 있는 유효 기간. 이보다 오래되면 답변 참고
-# 자료로만 쓴다.
+# 아군 조합을 역할 좁히기에 쓸 수 있는 유효 기간.
 ROLE_NARROWING_MAX_AGE_SECONDS = 5 * 60
 
-# "5대5야", "6대6인데" 같은 인원수 선언을 읽는다. 숫자 사이에 대/vs/v/: 를 허용.
+# 인원수 선언 패턴. 숫자 사이에 대/vs/v/: 를 허용.
 _ROSTER_SIZE_PATTERN = re.compile(r"(?<![0-9])([56])\s*(?:대|vs|VS|v|V|:)\s*([56])(?![0-9])")
 
 
 def detect_roster_size(text: str) -> Optional[int]:
-    """사용자가 직접 밝힌 팀 인원수(5 또는 6). 없으면 None.
-
-    "5대5야"처럼 양쪽 숫자가 같을 때만 인정한다 — "5대6" 같은 표기는 오타이거나
-    인원수 선언이 아닐 가능성이 높아 추측하지 않는다.
-    """
+    """사용자가 직접 밝힌 팀 인원수(5 또는 6). 양쪽 숫자가 같을 때만 인정한다."""
     if not text:
         return None
     match = _ROSTER_SIZE_PATTERN.search(text)
@@ -293,34 +276,30 @@ def detect_roster_size(text: str) -> Optional[int]:
 
 
 def resolve_roster_size(declared: Optional[int]) -> int:
-    """이번 답변에 실제로 적용할 인원수. 사용자가 밝힌 값이 있으면 그 값,
-    없으면 현재 메타(CURRENT_META_ROSTER_SIZE)."""
+    """이번 답변에 적용할 인원수. 밝힌 값이 없으면 현재 메타."""
     if declared in ROSTER_ROLE_RANGES:
         return declared
     return CURRENT_META_ROSTER_SIZE
 
 
 def alternate_roster_size(roster_size: Optional[int] = None) -> int:
-    """지금 적용 중인 인원수의 반대쪽(5↔6). 답변 하단 정정 버튼용 —
-    6대6으로 답했으면 "5대5예요", 5대5로 답했으면 "6대6이에요"가 붙는다."""
+    """지금 적용 중인 인원수의 반대쪽(5↔6). 정정 버튼용."""
     return 5 if resolve_roster_size(roster_size) == 6 else 6
 
 
 def roster_size_label(roster_size: int) -> str:
-    """5 → "5대5"."""
+    """인원수를 "5대5" 형태의 라벨로."""
     return f"{roster_size}대{roster_size}"
 
 
 def roster_size_button_label(roster_size: int) -> str:
-    """정정 버튼 라벨. 받침 유무에 따라 조사가 달라진다
-    (5="오"→"5대5예요", 6="육"→"6대6이에요")."""
+    """정정 버튼 라벨(받침 유무에 따라 조사가 달라진다)."""
     suffix = "예요" if roster_size == 5 else "이에요"
     return f"{roster_size_label(roster_size)}{suffix}"
 
 
 def roster_role_quota_text(roster_size: int) -> str:
-    """프롬프트에 넣는 역할 정원 설명. 예: "탱커 1명, 딜러 2명, 힐러 2명"
-    (6인은 "탱커 1~2명, 딜러 2~3명, 힐러 2명")."""
+    """프롬프트에 넣는 역할 정원 설명."""
     ranges = ROSTER_ROLE_RANGES.get(roster_size) or ROSTER_ROLE_RANGES[CURRENT_META_ROSTER_SIZE]
     parts = []
     for role in ROLE_HEROES:
@@ -329,8 +308,7 @@ def roster_role_quota_text(roster_size: int) -> str:
         parts.append(f"{ROLE_LABELS[role]} {count}")
     return ", ".join(parts)
 
-# 예전 이름(표준 구성 쿼터). 5vs5 기준 값이라 그대로 두되, 새 코드는
-# ROSTER_ROLE_RANGES를 쓴다.
+# 예전 이름(5대5 기준). 새 코드는 ROSTER_ROLE_RANGES를 쓴다.
 TEAM_COMP_ROLE_QUOTA = {"tank": 1, "damage": 2, "support": 2}
 
 
@@ -351,11 +329,7 @@ def _fits_roster(counts: Dict[str, int], roster_size: int) -> bool:
 
 
 def _can_complete(counts: Dict[str, int], unknown: int, roster_size: int) -> bool:
-    """확정 인원 + 미지의 팀원 `unknown`명으로 유효한 조합을 만들 수 있는가.
-
-    각 역할의 남은 여유(max-현재)의 합이 unknown 이상이어야 하고, 아직 최소
-    인원을 못 채운 역할들의 부족분 합이 unknown 이하여야 한다.
-    """
+    """확정 인원 + 미지의 팀원 `unknown`명으로 유효한 조합을 만들 수 있는가."""
     if unknown < 0:
         return False
     ranges = ROSTER_ROLE_RANGES[roster_size]
@@ -376,20 +350,16 @@ def analyze_team_comp(
         candidate_roles  사용자가 맡을 수 있는 역할 목록(좁히지 못하면 3개 전부)
         is_last_slot     사용자 자리가 마지막 한 자리인지(미지의 팀원이 없음)
         is_full_roster   말한 아군만으로 이미 정원이 찬 조합인지(사용자 자리 없음)
-
-    인원수는 추측하지 않는다 — 사용자가 직접 알려준 값(roster_size 인자)이
-    없으면 항상 현재 메타(CURRENT_META_ROSTER_SIZE)로 본다.
     """
     counts = count_roles(ally_heroes)
     known_count = sum(counts.values())
 
     roster_size = resolve_roster_size(roster_size)
 
-    # 말한 아군만으로 정원이 다 찼으면 사용자가 채울 자리가 없다 — "내가 뭘
-    # 고를까"가 아니라 완성된 팀 조합 자체를 평가해달라는 질문이다.
+    # 말한 아군만으로 정원이 찼으면 사용자가 채울 자리가 없다.
     full_roster = len(ally_heroes or []) >= roster_size
 
-    # 사용자 자신을 뺀 나머지 자리 중 아직 정체를 모르는 팀원 수.
+    # 사용자 자리를 뺀, 아직 정체를 모르는 팀원 수.
     unknown_teammates = roster_size - 1 - known_count
 
     candidate_roles = []
@@ -417,14 +387,7 @@ def analyze_team_comp(
 
 
 def can_be_roster_size(ally_heroes: List[str], roster_size: int) -> bool:
-    """지금까지 말한 아군 조합이 그 인원수 규격으로도 성립할 수 있는가.
-
-    인원수 정정 버튼("5대5예요"/"6대6이에요")을 보여줄지 결정하는 데 쓴다 —
-    사용자 자리를 포함해 정원을 이미 넘었거나(아군을 roster_size명 이상 말함),
-    어느 역할이든 그 규격의 상한을 넘었으면(5vs5인데 탱커 2명/딜러 3명 등)
-    그 인원수로는 성립할 수 없으므로 버튼을 숨긴다. 힐러는 두 규격 모두 2명
-    이라 판별에 쓰이지 않는다.
-    """
+    """말한 아군 조합이 그 인원수 규격으로도 성립할 수 있는가(정정 버튼 표시용)."""
     if roster_size not in ROSTER_ROLE_RANGES:
         return False
     if len(ally_heroes or []) >= roster_size:
@@ -433,12 +396,7 @@ def can_be_roster_size(ally_heroes: List[str], roster_size: int) -> bool:
 
 
 def infer_missing_role_from_team_comp(ally_heroes: List[str]) -> Optional[str]:
-    """아군 조합으로 사용자 역할이 **하나로** 확정될 때만 그 역할을 돌려준다.
-
-    (예: 6vs6에서 딜러 3 + 힐러 2를 나열 → 남은 자리는 탱커뿐)
-    두 개 이상으로 좁혀지거나 전혀 좁혀지지 않으면 None — 호출부가 되묻거나
-    복합 역할 필터를 만든다.
-    """
+    """아군 조합으로 사용자 역할이 하나로 확정될 때만 그 역할을 돌려준다."""
     if not ally_heroes:
         return None
 
@@ -462,7 +420,7 @@ def detect_wants_to_keep_hero(text: str) -> bool:
     if hero == find_enemy_mentioned_hero(text):
         return False
 
-    # 붙여 쓰기 대응: 예) "파라쓸건데"
+    # 띄어쓰기를 없애고 검사한다.
     compact = re.sub(r"\s+", "", text)
 
     keep_patterns = [
@@ -470,16 +428,14 @@ def detect_wants_to_keep_hero(text: str) -> bool:
         r"(계속|유지|고정|원챔|포기안|안바꾸|바꾸지않)",
         r"(이기고싶|이기면서|즐기고싶|즐기면서)",
         r"(해도돼|해도될까|가능할까|괜찮을까)",
-        # hero_mentioned_as_current_hero의 같은 패턴은 검증용이라, LLM이 null을
-        # 준 경우의 규칙 기반 폴백으로 여기서도 본다.
+        # 확정 전 고려 표현(LLM이 영웅을 못 찾았을 때의 폴백).
         r"(고르면|고를까|고르는게|골라도|픽하면|픽할까|선택하면|선택할까)",
     ]
 
     return any(re.search(pattern, compact) for pattern in keep_patterns)
 
 
-# "상대법/파훼/대처"는 stay 질문에도 쓰이므로 counter로 바로 분류하지 않는다.
-# counter는 "카운터/상성 목록" 요청일 때만 해당한다.
+# counter는 카운터/상성 "목록" 요청일 때만, 상대법류 표현은 stay로 간다.
 _COUNTER_LIST_WORDS = ["카운터", "상성", "상대하기 어려운", "상대하기 쉬운"]
 _STAY_OPERATION_WORDS = ["상대법", "어떻게 상대", "어떻게 잡", "어떻게 막", "파훼", "대처", "견제"]
 
@@ -493,9 +449,7 @@ _SITUATION_PATTERNS = [
 
 
 def detect_stay_with_named_hero(text: str) -> bool:
-    """"겐지로 윈스턴 상대법 알려줘", "파라로 솔저 어떻게 상대해?"처럼 (자기
-    영웅)로 + 상대법/파훼/대처류 표현이 함께 있으면, 그 영웅을 유지한 채 상대법을
-    묻는 stay 질문으로 본다."""
+    """(자기 영웅)로 + 상대법류 표현 = 영웅을 유지한 채 상대법을 묻는 질문."""
     if not any(word in text for word in _STAY_OPERATION_WORDS):
         return False
 
@@ -507,22 +461,20 @@ def detect_stay_with_named_hero(text: str) -> bool:
 
 
 def detect_situation(text: str) -> bool:
-    """"파라가 계속 압박해", "둠피가 계속 힐러 물어"처럼 인게임에서 겪고 있는
-    위기/압박 상황을 그대로 토로하는 표현인지 판단한다."""
+    """인게임에서 겪는 위기/압박 상황을 토로하는 표현인지."""
     return any(pattern.search(text) for pattern in _SITUATION_PATTERNS)
 
 
 _SWAP_TRIGGER_PATTERN = re.compile(r"말고|다른\s*영웅|바꾸|바꿀|바꿔|교체|변경|픽\s*추천")
 
-# 영웅 이름을 생략한 후속 질문("E 스킬은?"). 이런 질문만 이전
-# intent/focus_heroes를 이어받는다.
+# 영웅 이름을 생략한 후속 질문의 단서. 이런 질문만 이전 턴 값을 이어받는다.
 _ELLIPSIS_FOLLOWUP_WORDS = [
     "플레이", "운영", "스킬", "포지션", "타이밍", "궁", "굴리", "굴려", "특전", "퍼크",
 ]
 _ELLIPSIS_FOLLOWUP_MAP_PATTERN = re.compile(r"어떤\s*맵|맵에서")
 
 
-# 특전/퍼크는 오버워치에서 이 뜻으로만 쓰이는 단어라 등장만으로 판단해도 된다.
+# 특전 질문 판정(단어 등장만으로 충분하다).
 _PERK_QUESTION_PATTERN = re.compile(r"특전|퍼크|perk", re.IGNORECASE)
 
 
@@ -532,11 +484,27 @@ def is_perk_question(message: str) -> bool:
     return bool(_PERK_QUESTION_PATTERN.search(message))
 
 
+# 우선 타겟 질문. 순위 질문과 겹치지 않게 먼저/우선/노리다 계열을 반드시 요구한다.
+_TARGET_PRIORITY_PATTERNS = [
+    re.compile(r"(?:누구|누굴|누구를|어떤\s*영웅)\s*부터"),
+    re.compile(r"(?:누구|누굴|누구를|어떤\s*영웅)[^.?!]{0,12}(?:먼저|우선)"),
+    re.compile(r"(?:먼저|우선)[^.?!]{0,10}(?:노려|노리|잡|짜르|자르|끊|처리|죽|녹)"),
+    re.compile(r"우선\s*순위"),
+    re.compile(r"포커싱|포커스|집중\s*공격|집중\s*포화"),
+]
+
+
+def is_target_priority_question(message: str) -> bool:
+    """상대 조합에서 누구부터 노릴지 묻는 질문인지."""
+    if not message:
+        return False
+    return any(pattern.search(message) for pattern in _TARGET_PRIORITY_PATTERNS)
+
+
 def is_ellipsis_followup(text: str) -> bool:
     if find_all_heroes(text):
         return False
-    # 맵을 언급한 질문은 그 자체로 완결된 질문이라 이전 턴을 이어받지
-    # 생략형 후속 질문으로 보면 안 된다.
+    # 맵을 언급한 질문은 그 자체로 완결된 질문이다.
     if find_map(text):
         return False
     if any(word in text for word in _ELLIPSIS_FOLLOWUP_WORDS):
@@ -547,8 +515,7 @@ def is_ellipsis_followup(text: str) -> bool:
 def infer_intent_by_rule(message: str, context: Dict[str, Any]) -> str:
     text = message.strip()
 
-    # 1. swap: 교체 의도가 명확한 표현. stay 신호와 안 겹치는 가장 구체적인
-    # 신호라 최우선으로 본다. 단 "안 바꾸고"류는 stay로 처리.
+    # 1. swap: 교체 의도가 명확한 표현. 단 부정형은 stay로 처리.
     if _SWAP_TRIGGER_PATTERN.search(text):
         compact = re.sub(r"\s+", "", text)
 
@@ -557,21 +524,19 @@ def infer_intent_by_rule(message: str, context: Dict[str, Any]) -> str:
 
         return "swap"
 
-    # 2. situation: 위기/압박 토로. 예: "파라가 계속 압박해"
-    # detect_wants_to_keep_hero(3번)보다 먼저 검사해야 "계속"이라는 흔한 단어
-    # 때문에 stay로 잘못 묶이지 않는다.
+    # 2. situation: 위기/압박 토로. 3번보다 먼저 봐야 "계속"이 stay로 새지 않는다.
     if detect_situation(text):
         return "situation"
 
-    # 3. stay: 영웅 유지 의사. 예: "파라 하고싶어"
+    # 3. stay: 영웅 유지 의사.
     if detect_wants_to_keep_hero(text):
         return "stay"
 
-    # 4. stay: 영웅을 유지한 채 상대법 문의. 예: "겐지로 윈스턴 상대법 알려줘"
+    # 4. stay: 영웅을 유지한 채 상대법 문의.
     if detect_stay_with_named_hero(text):
         return "stay"
 
-    # 5. counter: 대표 카운터/상성 목록 요청. 예: "겐지 카운터 알려줘"
+    # 5. counter: 카운터/상성 목록 요청.
     if any(word in text for word in _COUNTER_LIST_WORDS):
         return "counter"
 
@@ -599,8 +564,8 @@ def infer_intent_by_rule(message: str, context: Dict[str, Any]) -> str:
     return "general"
 
 
-# 상대 영웅을 가리키는 패턴. infer_current_hero도 공유해 상대를 자기 영웅으로
-# 인식하지 않게 막는다. _NARROWING_FILLER는 조사와 동사 사이 부사를 허용한다.
+# 상대 영웅을 가리키는 패턴(infer_current_hero도 제외 목록으로 공유한다).
+# _NARROWING_FILLER는 조사와 동사 사이 부사를 허용한다.
 _NARROWING_FILLER = r"(?:\s*(?:일단|우선|먼저|이번엔|반드시|꼭|그냥))?"
 
 ENEMY_MENTION_PATTERNS = [
@@ -615,7 +580,7 @@ ENEMY_MENTION_PATTERNS = [
     r"상대\s*([가-힣A-Za-z0-9\.]+)",
 ]
 
-# 역할로만 카운터 대상을 좁히는 경우 — 다른 상대 영웅은 함께 언급하지 않는다.
+# 역할로만 카운터 대상을 좁히는 경우.
 ENEMY_ROLE_FOCUS_WORDS = {"탱커": "tank", "딜러": "damage", "힐러": "support"}
 ENEMY_ROLE_FOCUS_LABELS = {"tank": "상대 탱커", "damage": "상대 딜러", "support": "상대 힐러"}
 ENEMY_ROLE_FOCUS_PATTERN = re.compile(
@@ -640,7 +605,7 @@ def normalize_hero_candidate(candidate: Optional[str]) -> Optional[str]:
     if normalized in valid_heroes:
         return normalized
 
-    # 자유 캡처가 이름 뒤 조사까지 먹는 경우를 보정한다. 긴 조사부터 검사한다.
+    # 캡처에 딸려온 조사를 떼어낸다(긴 조사부터).
     for suffix in ["이랑", "랑", "과", "와", "이", "가", "은", "는", "을", "를", "도", "만"]:
         if cleaned.endswith(suffix):
             normalized = normalize_hero_name(cleaned[:-len(suffix)].strip())
@@ -650,8 +615,7 @@ def normalize_hero_candidate(candidate: Optional[str]) -> Optional[str]:
     return None
 
 
-# 후보 영웅을 나란히 비교하는 문장은 마커가 없어 extract_ally_team이 놓친다.
-# 적대 신호가 있으면 적용하지 않는다.
+# 아군 판정 함수들이 공유하는 적대 신호(있으면 아군으로 보지 않는다).
 ADVERSARIAL_SIGNAL_WORDS = ["상대", "카운터", "견제", "때문에"]
 
 _SELF_COMPARISON_PATTERN = re.compile(
@@ -674,8 +638,7 @@ def find_self_comparison_heroes(text: str) -> List[str]:
     return heroes
 
 
-# 동료의 역할 수행을 불만하는 문장의 영웅은 아군이다. 적대 마커가 바로 앞에
-# 있으면 적용하지 않는다.
+# 동료의 역할 수행을 불만하는 문장의 영웅은 아군이다.
 _ALLY_COMPLAINT_PATTERN = re.compile(
     r"([가-힣A-Za-z0-9\.]+)[이가]\s*(?:힐|케어|탱킹|딜|나를)[^.!?\n]{0,10}(?:안|못|않)"
 )
@@ -693,7 +656,7 @@ def find_ally_complaint_hero(text: str) -> Optional[str]:
     return candidate
 
 
-# 시너지를 묻는 문장의 영웅은 아군이다. 적대 신호가 있으면 적용하지 않는다.
+# 시너지를 묻는 문장의 영웅은 아군이다.
 _SYNERGY_WORDS = [
     "조합", "시너지", "궁합", "같이 쓰면", "같이 하면", "같이 할 때",
     "함께 쓰면", "함께 하면", "랑 할 때", "이랑 할 때",
@@ -718,7 +681,7 @@ def find_enemy_mentioned_hero(text: str) -> Optional[str]:
     return None
 
 
-# 특정 영웅의 사용법을 묻는 질문의 영웅은 상대가 아니라 설명 대상이다.
+# 사용법을 묻는 질문의 영웅은 상대가 아니라 설명 대상이다.
 _HERO_USAGE_GUIDE_WORDS = ["활용법", "운영법", "사용법", "쓰는 법", "다루는 법", "활용"]
 
 
@@ -745,8 +708,7 @@ def infer_target_enemy(message: str, context: Dict[str, Any], intent: str) -> Op
     if is_hero_usage_guide_question(text):
         return None
 
-    # 최후 수단: 메시지의 첫 영웅을 상대로 본다. 아군으로 분류된 영웅은
-    # 제외하며, 규칙 기반 탐지가 놓치는 경우를 위해 ally_team_this_turn도 본다.
+    # 최후 수단: 아군으로 분류되지 않은 첫 영웅을 상대로 본다.
     complaint_hero = find_ally_complaint_hero(text)
     ally_named_this_turn = (
         set(extract_ally_team(text))
@@ -791,7 +753,7 @@ def infer_current_hero(message: str, context: Dict[str, Any], intent: str) -> Op
     if te:
         enemy_heroes.add(te)
 
-    # 적으로 언급된 영웅은 제외한다(트리거 단어와 우연히 겹칠 수 있다).
+    # 적으로 언급된 영웅은 후보에서 제외한다.
     enemy_mentioned = find_enemy_mentioned_hero(text)
     if enemy_mentioned:
         enemy_heroes.add(enemy_mentioned)
@@ -802,12 +764,11 @@ def infer_current_hero(message: str, context: Dict[str, Any], intent: str) -> Op
         if hero and hero not in enemy_heroes:
             return hero
 
-    # 검증된 자기 선언만 채택한다. 주제로만 언급된 영웅은 focus_heroes의 몫이고,
-    # 세션에 남은 이전 current_hero를 자동으로 되살리지도 않는다.
+    # 검증된 자기 선언만 채택한다(주제로만 언급된 영웅은 focus_heroes의 몫).
     for hero in find_all_heroes(text):
         if hero in enemy_heroes:
             continue
-        # 조합 나열의 일부로 불린 이름은 자기 영웅이 아니다.
+        # 조합 나열 속 이름은 자기 영웅이 아니다.
         if hero_listed_in_ally_comp(hero, text):
             continue
         if hero_mentioned_as_current_hero(hero, text):
@@ -816,20 +777,20 @@ def infer_current_hero(message: str, context: Dict[str, Any], intent: str) -> Op
     return None
 
 
-# 앵커링된 자기 역할 선언. hero_mentioned_as_current_hero와 같은 수준으로 좁게
-# 간다 — 남의 역할을 말하는 문장이 걸리면 안 된다.
+# 역할 단어 → 내부 역할 코드.
 _ROLE_WORDS = {
     "탱커": "tank", "탱": "tank",
     "딜러": "damage", "딜": "damage",
     "힐러": "support", "지원가": "support", "힐": "support",
 }
+# 1인칭이 붙은 자기 역할 선언만 인정한다.
 _SELF_ROLE_PATTERN = re.compile(
     r"(?:^|[^가-힣])(?:난|나는|나|내가|저는|제가)\s*"
     r"(탱커|딜러|힐러|지원가)\s*"
     r"(?:야|이야|입니다|이에요|예요|임|인데|인데요|고|이고|할게|할래|로|으로|$|[.!?\s,])"
 )
 
-# "탱커랑 딜러로만 알려줘", "탱커/딜러 기준으로"처럼 여러 역할을 함께 고르는 표현.
+# 여러 역할을 함께 고르는 표현.
 _MULTI_ROLE_PATTERN = re.compile(
     r"(탱커|딜러|힐러|지원가)\s*(?:랑|이랑|나|이나|와|과|하고|,|/|\+)\s*"
     r"(탱커|딜러|힐러|지원가)\s*"
@@ -838,10 +799,8 @@ _MULTI_ROLE_PATTERN = re.compile(
 
 
 def role_filter_from_text(message: str) -> Optional[str]:
-    # 역할 단어가 문장 전체와 사실상 같을 때만 자기 역할 선언으로 본다.
     stripped = re.sub(r"[\s,.!?~]+", "", message)
-    # 역할 단어 하나에 서술격 어미만 붙은 짧은 대답. 어미를 나열하면 누락이
-    # 잦아 정규식으로 받는다.
+    # 역할 단어 하나에 서술격 어미만 붙은 짧은 대답.
     short_reply = re.match(
         r"^(탱커|탱|딜러|딜|힐러|지원가|힐|전체|전부)"
         r"(요|임|야|이야|이에요|에요|예요|입니다|이야요|이요|다|입니당)?$",
@@ -853,14 +812,14 @@ def role_filter_from_text(message: str) -> Optional[str]:
             return "all"
         return _ROLE_WORDS[word]
 
-    # 두 역할을 함께 고른 경우 — 한 역할만 돌려주면 나머지가 통째로 빠진다.
+    # 두 역할을 함께 고른 경우 복합 필터로 만든다.
     multi = _MULTI_ROLE_PATTERN.search(message)
     if multi:
         roles = {_ROLE_WORDS[g] for g in multi.groups() if g in _ROLE_WORDS}
         if len(roles) >= 2:
             return make_role_filter(list(roles))
 
-    # "나는 힐러야"처럼 앵커링된 자기 역할 선언.
+    # 1인칭이 붙은 자기 역할 선언.
     self_role = _SELF_ROLE_PATTERN.search(message)
     if self_role:
         return _ROLE_WORDS.get(self_role.group(1))
@@ -876,10 +835,7 @@ def role_filter_from_text(message: str) -> Optional[str]:
     return None
 
 
-# 정정만 있고 질문은 없는 메시지. 여기 걸리면 merge_context_node가 정정 버튼과
-# 똑같이 직전 질문을 다시 태운다.
-# 판정은 좁게 간다 — 역할/인원수 표현과 상투적인 조사·요청 표현을 지운 뒤에도
-# 내용이 남거나 영웅 이름이 섞여 있으면 그 자체로 답할 내용이 있는 새 질문이다.
+# 정정 메시지에서 지워도 되는 표현(역할/인원수/조사/요청 표현).
 _ROLE_CORRECTION_FILLER_PATTERN = re.compile(
     r"(탱커|딜러|힐러|지원가|전체|전부|탱|딜|힐"
     r"|\d\s*대\s*\d|\d\s*v\s*s?\s*\d"
@@ -893,7 +849,7 @@ _ROLE_CORRECTION_FILLER_PATTERN = re.compile(
 
 
 def is_pure_role_correction(message: str) -> bool:
-    """역할/인원수 정정 그 자체만 담긴 메시지인지."""
+    """역할/인원수 정정 그 자체만 담긴 메시지인지(직전 질문을 다시 태운다)."""
     if not message:
         return False
     if not (role_filter_from_text(message) or detect_roster_size(message)):
@@ -905,24 +861,42 @@ def is_pure_role_correction(message: str) -> bool:
     return not remainder
 
 
+# 사용자 자신을 가리키는 1인칭 표현.
+_FIRST_PERSON_PATTERN = re.compile(
+    r"(?<![가-힣])(?:난|나는|나도|나랑|나를|나한테|내가|내|나|저는|제가|저도|저랑|저를|제|저)(?![가-힣])"
+)
+
+
+def mentions_self(text: str) -> bool:
+    """메시지가 사용자 자신을 가리키는지(앞서 밝힌 자기 영웅을 이어받는 근거)."""
+    return bool(text and _FIRST_PERSON_PATTERN.search(text))
+
+
+def is_self_hero_negation_correction(message: str) -> bool:
+    """"내가 X가 아니라고"처럼 자기 영웅 오해를 바로잡는 말만 담긴 메시지인지."""
+    if not message:
+        return False
+    heroes = [h for h in find_all_heroes(message) if hero_negated_as_self(h, message)]
+    if not heroes:
+        return False
+    remainder = message
+    for hero in heroes:
+        for name in sorted(_hero_name_variants(hero), key=len, reverse=True):
+            remainder = re.sub(rf"{re.escape(name)}{_SELF_NEGATION_SUFFIX}", "", remainder)
+    remainder = _ROLE_CORRECTION_FILLER_PATTERN.sub("", remainder)
+    remainder = re.sub(r"(아니|말고|진짜|그게|그거|라니까|라고|다고|구|요)", "", remainder)
+    remainder = re.sub(r"[\s,.!?~]+", "", remainder)
+    return not remainder
+
+
 # current_hero를 모를 때 역할을 되물어야 하는 intent.
-# map_strategy(영웅과 무관할 수 있음)와 composition(역할 없이도 평가 가능하고
-# role_filter="all" 폴백이 있음)은 제외한다.
 ROLE_CLARIFICATION_INTENTS = {
     "performance_improve", "stay", "swap", "general", "counter", "situation",
 }
 
-# 카드가 나가는 경우는 merge_context_node의 matchup_subject 기준 두 가지뿐이다:
-# counter이면서 영웅 미확정, 또는 swap이면서 이미 쓰는 영웅이 있는 경우.
-
 
 def should_ask_role_filter(state: ChatbotGraphState) -> bool:
-    """현재 역할을 전혀 알 수 없을 때 역할을 먼저 물어야 하는지 판단한다:
-    1) counter이고 상대는 지목했지만 내 역할을 모르는 경우, 2) 상대 지목
-    여부와 무관하게 지금 영웅 자체를 몰라 개인화된 답이 불가능한 경우.
-    role_filter는 merge_context_node가 이미 explicit_role_filter →
-    current_hero_role → 세션 잔존값 순으로 채우므로, 여기서 비어 있다는 것은
-    어떤 방법으로도 역할을 알아낼 수 없었다는 뜻이다."""
+    """역할을 알아낼 방법이 없어 4버튼으로 먼저 되물어야 하는지."""
     role_filter = state.get("role_filter")
     if role_filter:
         return False
@@ -935,21 +909,18 @@ def should_ask_role_filter(state: ChatbotGraphState) -> bool:
     target_enemy = state.get("target_enemy")
 
     if intent == "counter" and target_enemy:
-        # 조합이 최근 것이면 그 후보 기준으로 바로 답하고, 오래됐으면 되묻는다.
+        # 조합이 최근 것이면 그 후보 기준으로 바로 답한다.
         return not state.get("role_candidates_fresh")
 
-    # 팀 전체 스탯이 있으면 그 데이터가 답변 근거가 되므로 역할을 몰라도 답한다
-    # (counter는 위에서 이미 처리됐다).
+    # 팀 전체 스탯이 있으면 그 데이터가 답변 근거가 된다.
     if state.get("my_team_stats"):
         return False
 
-    # 역할 후보가 좁혀졌으면 되묻지 않고 답한 뒤 버튼/말로 정정받는다.
+    # 역할 후보가 좁혀졌으면 답한 뒤 버튼/말로 정정받는다.
     if state.get("role_candidates_fresh"):
         return False
 
-    # focus_heroes가 곧 설명 대상인 intent(performance_improve/stay)면 역할을
-    # 몰라도 그 영웅 기준으로 답할 수 있다. general/situation은 제외 — 상대만
-    # 언급된 상황이라 여전히 사용자 역할이 필요하다.
+    # focus_heroes가 곧 설명 대상인 intent면 역할을 몰라도 답할 수 있다.
     focus_hero_sufficient = intent in ("performance_improve", "stay") and bool(state.get("focus_heroes"))
     if not state.get("current_hero") and not focus_hero_sufficient and intent in ROLE_CLARIFICATION_INTENTS:
         return True

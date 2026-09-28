@@ -1,12 +1,7 @@
 """웰컴 화면 예시 버튼 5개에 대한 캐시(canned) 응답.
 
-이 5개 질문(파라 카운터 / 조합 추천 / 맵 운영 / 스탯 피드백 / 영웅 유지)은
-LangGraph 파이프라인을 타지 않고 미리 저장해둔 결과를 즉시 돌려준다 —
-데모에서 가장 많이 눌리는 버튼이라 응답 속도를 확보하기 위함이다.
-
-중요: 새 캐시를 추가/수정할 때는 반드시 실제 파이프라인을 한 번 돌려 나온
-결과를 그대로 넣어야 한다. 임의로 지어내면 RAG 문서에 근거가 없는 답이
-나가고, 같은 질문을 조금 다르게 물었을 때의 실제 답변과 어긋난다.
+새 캐시는 반드시 실제 파이프라인을 돌려 나온 결과를 그대로 넣는다
+(지어내면 문서 근거 없는 답이 나간다).
 """
 
 import logging
@@ -265,12 +260,11 @@ def match_canned_topic(message: str) -> Optional[str]:
     if not text:
         return None
 
-    # 캐시 판정은 "무엇을 묻는지"가 아니라 대상만 보므로, 캐시에 없는 주제를
-    # 물으면 여기서 먼저 걸러야 한다.
+    # 캐시 판정은 대상만 보므로, 캐시에 없는 주제는 여기서 먼저 걸러낸다.
     if is_perk_question(text):
         return None
 
-    # 영웅 유지(리퍼 유지 + 상대 아나) — 두 조건이 모두 맞을 때만 인정한다.
+    # 영웅 유지 — 자기 영웅과 상대가 모두 맞을 때만 인정한다.
     if (
         hero_mentioned_as_current_hero(CANNED_STAY_HERO, text)
         and CANNED_STAY_ENEMY in find_all_heroes(text)
@@ -278,7 +272,7 @@ def match_canned_topic(message: str) -> Optional[str]:
     ):
         return "stay_reaper_ana"
 
-    # 스탯 피드백 — 수치까지 일치할 때만 캐시를 쓰고, 다르면 그래프로 보낸다.
+    # 스탯 피드백 — 수치까지 일치할 때만 캐시를 쓴다.
     if find_first_hero(text) == CANNED_STAT_HERO and detect_stat_input(text):
         kills = _find_stat_number(["킬"], text)
         deaths = _find_stat_number(["데스", "사망"], text)
@@ -290,18 +284,18 @@ def match_canned_topic(message: str) -> Optional[str]:
         ):
             return "stat_soldier76"
 
-    # 맵 운영(왕의 길 수비)
+    # 맵 운영
     if find_map(text) == CANNED_MAP_NAME and find_side(text) == CANNED_MAP_SIDE:
         return "map_kings_row_defense"
 
-    # 조합 추천(고정 상대/아군 조합) — 두 조합이 정확히 일치할 때만 캐시를 쓴다.
+    # 조합 추천 — 두 조합이 정확히 일치할 때만 캐시를 쓴다.
     if (
         set(extract_enemy_team(text)) == CANNED_COMPOSITION_ENEMY_SET
         and set(extract_ally_team(text)) == CANNED_COMPOSITION_ALLY_SET
     ):
         return "composition_fixed"
 
-    # 카운터(겐지) — 자기 영웅 선언이 아니라 카운터 대상으로 물을 때만 인정한다.
+    # 카운터 — 자기 영웅 선언이 아니라 카운터 대상으로 물을 때만 인정한다.
     if (
         CANNED_COUNTER_HERO in text
         and any(word in text for word in CANNED_COUNTER_TRIGGER_WORDS)
@@ -339,9 +333,7 @@ def _canned_result(
     matchup_card: Optional[Dict[str, Any]] = None,
     recommend_card: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """format_response_node가 만드는 result와 동일한 모양으로 캐시 답변을
-    돌려준다 — chat_api가 캐시/실제 그래프 어느 쪽 결과든 구분 없이 처리할 수
-    있게 하기 위해서다."""
+    """캐시 답변을 format_response_node의 result와 같은 모양으로 돌려준다."""
     return {
         "answer": sanitize_answer_for_user(answer, keep_dash_bullets=answer_style == "simple"),
         "message": message,
@@ -420,10 +412,7 @@ def _build_canned_composition(message: str, answer_style: str) -> Dict[str, Any]
     context_patch = {
         **_canned_base_context_patch(message, answer_style, "composition"),
         "enemy_team": list(CANNED_COMPOSITION_ENEMY_LIST),
-        # 아군 조합도 상대 조합과 똑같이 세션에 남긴다 — 실제 파이프라인이
-        # merge_context_node에서 하는 일이다(ally_team/ally_team_ts). 이게 빠져
-        # 있으면 "우리 조합 운영법 알려줘" 같은 후속 질문에서 아군만 비어 있어,
-        # 세션에 남은 상대 조합이나 옛 값이 아군 자리로 흘러든다(2026-07-31).
+        # 캐시도 실제 파이프라인과 같은 세션 값을 남겨야 한다.
         "ally_team": list(CANNED_COMPOSITION_ALLY_LIST),
         "ally_team_ts": time.time(),
         "focus_heroes": [h["hero"] for h in CANNED_COMPOSITION_HEROES],
@@ -518,12 +507,11 @@ def try_canned_shortcut(
     context: Dict[str, Any],
     answer_style: Optional[str],
 ) -> Dict[str, Any]:
-    """5개 고정 버튼(과 비슷한 표현)에 대해 그래프를 실행하지 않고 미리 준비된
-    답을 즉시 돌려준다. chat_api가 run_chatbot_graph보다 먼저 호출한다.
+    """고정 버튼 질문이면 그래프를 타지 않고 캐시 답을 돌려준다.
 
-    반환값: result(매칭 시 응답 결과, 아니면 None), resume_message(캐시된
-    역할 되묻기에 캐시 없는 역할로 답해 그래프를 태워야 할 때 넘길 원문,
-    그 외 None), context_updates(세션에 즉시 반영할 정리용 값)."""
+    반환: result(매칭 시 응답, 아니면 None), resume_message(그래프를 태워야
+    할 때 넘길 원문), context_updates(세션에 즉시 반영할 값).
+    """
     style = answer_style or context.get("answer_style") or "detailed"
     pending_topic = context.get("pending_canned_topic")
     pending_question = context.get("pending_canned_question") or ""

@@ -1,11 +1,4 @@
-"""그래프 중단 노드 — 잡담 응답, 검색 질의 생성, 문서 검색, 전략 판단.
-
-off_topic_response_node는 오버워치와 무관한 잡담을 LLM 호출 없이 고정 문구로
-끊어내고, build_retrieval_queries_node가 확정된 컨텍스트로 여러 개의 검색
-질의를 만들면 retrieve_docs_node가 그것들을 병렬로 검색한다.
-judge_strategy_node는 검색 결과를 바탕으로 "영웅을 바꿔야 하는지"를 먼저
-판단해 답변 노드가 쓸 재료를 만든다("간단히" 스타일에서는 생략된다).
-"""
+"""그래프 중단 노드 — 잡담 응답, 검색 질의 생성, 문서 검색, 전략 판단."""
 
 import json
 import logging
@@ -19,8 +12,9 @@ from chat.graph.state import ChatbotGraphState
 from chat.domain.heroes import (
     ROLE_HEROES,
     ROLE_LABELS,
+    normalize_hero_name,
 )
-from chat.rag.doc_sections import get_hero_perk_section
+from chat.rag.doc_sections import get_hero_perk_section, get_hero_profile
 from chat.rag.llm_utils import (
     call_llm_text,
     document_to_dict,
@@ -39,9 +33,7 @@ OFF_TOPIC_ANSWER = (
 
 
 def off_topic_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
-    """오버워치2와 무관한 메시지에는 LLM을 호출하지 않고 항상 같은 고정
-    문구로 응답한다 — 관련 없는 주제에 LLM이 그럴듯하게 답을 지어내는 것을
-    막기 위함이다."""
+    """오버워치2와 무관한 메시지에는 LLM을 호출하지 않고 고정 문구로 응답한다."""
     context_patch = {
         **state.get("context_patch", {}),
     }
@@ -145,12 +137,16 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
         else:
             queries.append(f"{current_hero or ''} 위기 상황 대처법 생존 운영")
 
-    # 특전 절 자체는 retrieve_docs_node가 문서에서 직접 꺼내고, 이 검색은 함께
-    # 볼 운영 맥락을 모으는 용도다.
+    # 특전 절은 문서에서 직접 꺼내고, 이 검색은 운영 맥락만 모은다.
     if state.get("is_perk_question"):
         perk_hero = resolve_perk_hero(state)
         if perk_hero:
             queries.append(f"{perk_hero} 특전 보조 특전 주요 특전")
+
+    # 상대 프로필도 직접 꺼내므로 여기서는 조합 운영 맥락만 모은다.
+    if state.get("is_target_priority_question"):
+        enemies = " ".join(state.get("enemy_team") or [])
+        queries.append(f"{enemies} 조합 상대 포커싱 우선순위 운영")
 
     unique_queries = [q.strip() for q in dict.fromkeys(queries) if q.strip()]
     logger.info("[RAG 검색 쿼리] %s", unique_queries)
@@ -167,9 +163,7 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
         queries = state.get("retrieval_queries", []) or []
 
-        # 검색어마다 로컬 임베딩 계산이 필요해 순차 실행하면 지연이 쌓인다.
-        # 스레드로 동시 실행하되, 결과는 queries 순서대로 병합해 순차 실행과
-        # 동일한 dedup/절단 결과를 유지한다.
+        # 스레드로 동시 검색하되 결과는 queries 순서대로 병합한다.
         results_by_query: List[List[Any]] = [[] for _ in queries]
         if len(queries) > 1:
             with ThreadPoolExecutor(max_workers=min(6, len(queries))) as executor:
@@ -198,8 +192,7 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 doc_dict["query"] = query
                 all_docs.append(doc_dict)
 
-        # 특전 절끼리 문장이 거의 같아 검색이 영웅을 구분 못 함 → 이름으로 직접
-        # 꺼내 맨 앞에 얹는다.
+        # 특전 절은 검색으로 영웅을 구분하지 못해 이름으로 직접 꺼낸다.
         if state.get("is_perk_question"):
             perk_hero = resolve_perk_hero(state)
             perk_section = get_hero_perk_section(perk_hero)
@@ -212,6 +205,19 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 logger.info("[PERK SECTION] %s 특전 절을 검색 결과 맨 앞에 추가", perk_hero)
             else:
                 logger.info("[PERK SECTION] %s의 특전 절이 문서에 없음", perk_hero)
+
+        # 상대별 프로필은 검색으로 다 안 걸려서 직접 꺼낸다.
+        if state.get("is_target_priority_question"):
+            for enemy in reversed(state.get("enemy_team") or []):
+                profile = get_hero_profile(enemy)
+                if not profile:
+                    continue
+                all_docs.insert(0, {
+                    "content": f"## {normalize_hero_name(enemy)}\n{profile}",
+                    "metadata": {"H2": normalize_hero_name(enemy), "H3": "상대 프로필"},
+                    "query": f"{enemy} 기본 위치·취약한 상대(원문 직접 조회)",
+                })
+            logger.info("[TARGET PRIORITY] 상대 %s 프로필을 검색 결과 앞에 추가", state.get("enemy_team"))
 
         all_docs = all_docs[:12]
         numbered_docs = [{**doc, "doc_id": idx} for idx, doc in enumerate(all_docs, start=1)]
@@ -253,13 +259,12 @@ def judge_strategy_node(state: ChatbotGraphState) -> ChatbotGraphState:
         side = state.get("side")
         enemy_team = state.get("enemy_team", [])
         has_stats = state.get("has_stats", False)
-        # 이번 턴에 적이 실제로 언급되지 않았다면 프롬프트에 "확정된 상대"로 넘기지 않는다.
+        # 이번 턴에 적이 언급되지 않았으면 확정된 상대로 넘기지 않는다.
         enemy_named_this_turn = state.get("enemy_named_this_turn", False)
-        # 이번 메시지에서 확인되지 않은 current_hero. 역할을 제한하면 옛 영웅
-        # 기준으로 답이 좁혀진다.
+        # 이번 메시지에서 확인되지 않은 current_hero(역할 제한에 쓰지 않는다).
         current_hero_uncertain = state.get("current_hero_uncertain", False)
 
-        # 이번 턴에 명시된 역할 필터가 최우선이다(덮어쓰면 선택과 다른 역할이 나간다).
+        # 이번 턴에 명시된 역할 필터가 최우선이다.
         if (
             not role_filter_explicit
             and current_hero_role
@@ -305,8 +310,7 @@ def judge_strategy_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 f"팀 문제·힐 부족·어떤 이유가 있어도 이 목록 밖의 영웅은 절대 추천 불가."
             )
         elif role_filter == "all" and role_filter_explicit:
-            # "전체"를 직접 골랐을 때만 이 분기를 탄다. 기본값 "all"까지 걸리면
-            # 영웅 추천이 필요 없는 질문에도 역할별 추천이 붙는다.
+            # "전체"를 직접 골랐을 때만 이 분기를 탄다.
             role_constraint = (
                 "사용자가 '전체' 역할을 선택했다. 특정 역할로 제한하지 말고, "
                 "탱커/딜러/힐러 각 역할에서 이 상황에 대응할 수 있는 영웅을 "

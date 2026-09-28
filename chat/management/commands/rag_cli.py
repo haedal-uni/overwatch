@@ -2,14 +2,7 @@
 
     python manage.py rag_cli
 
-원래 이 코드는 `chat/rag/vectorstore.py`(당시 `chat/rag_class.py`)의 `ChatBot` 안에 있었다. 웹 서비스가 쓰는
-컴포넌트(`build_rag_components`/`get_llm`)와 CLI 전용 대화 기록(`chat_history`)
-이 한 클래스에 섞여 있었고, 그 인스턴스는 `chatbot_service`에서 싱글턴으로
-공유되기 때문에 "이 chat_history를 웹 대화 기억으로 쓰면 안 된다"는 주석으로만
-막아둔 상태였다. CLI를 이쪽으로 옮겨 그 위험 자체를 없앴다.
-
-여기서 만드는 대화 기록은 이 명령 실행 동안만 살아있는 지역 변수라 웹 요청과
-절대 섞이지 않는다.
+대화 기록은 명령 실행 동안만 사는 지역 변수라 웹 요청과 섞이지 않는다.
 """
 
 import logging

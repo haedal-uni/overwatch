@@ -15,17 +15,18 @@ from chat.graph.pipeline import (
     try_canned_shortcut,
 )
 from chat.models import ChatLog
+from chat.rag.matchup_tables import get_hero_matchup, get_matchup_roster
 from chat.vision.scoreboard import analyze_scoreboard_image, ScoreboardAnalysisError
 
 logger = logging.getLogger(__name__)
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB
 
-# 입력 길이 상한. 없으면 수십 KB 문자열이 그대로 LLM 프롬프트에 실린다.
+# 입력 길이 상한.
 MAX_MESSAGE_LENGTH = 500
 MAX_FEEDBACK_REASON_LENGTH = 1000
 
-# content_type은 클라이언트가 보내는 값이라 그대로 신뢰하지 않고 화이트리스트로 검증한다.
+# content_type은 클라이언트가 보내는 값이라 화이트리스트로 검증한다.
 ALLOWED_IMAGE_TYPES = {
     "image/png",
     "image/jpeg",
@@ -37,17 +38,14 @@ def index(request):
 
 
 def _fingerprint(value):
-    """쿠키/헤더 값 원문을 로그에 그대로 남기면 CSRF 시크릿이 노출되므로,
-    "두 요청이 같은 값을 보냈는지"만 비교할 수 있는 정도로만(길이 + 끝 6글자)
-    잘라서 남긴다."""
+    """값 원문 대신 비교만 가능한 지문(길이 + 끝 6글자)을 만든다."""
     if not value:
         return None
     return {"len": len(value), "tail": value[-6:]}
 
 
 def csrf_failure_debug(request, reason=""):
-    """CSRF 403 발생 시 쿠키/헤더 상태를 진단 로그로 남기고 Django 기본 CSRF
-    실패 페이지를 그대로 반환한다. settings.CSRF_FAILURE_VIEW로 등록해서 쓴다."""
+    """CSRF 403의 쿠키/헤더 상태를 진단 로그로 남긴다(settings.CSRF_FAILURE_VIEW)."""
     csrf_cookie = request.COOKIES.get("csrftoken")
     csrf_header = request.META.get("HTTP_X_CSRFTOKEN")
     session_cookie_present = "sessionid" in request.COOKIES
@@ -77,11 +75,7 @@ def csrf_failure_debug(request, reason=""):
     return django_csrf_failure(request, reason=reason)
 
 def ensure_log_session_id(request):
-    """대화 묶음 추적용 UUID를 세션에 보장하고 그 값을 돌려준다.
-
-    Django 세션키는 로그인/세션 만료 등으로 바뀔 수 있어 로그 식별자로 쓰기에
-    적합하지 않아, 로그 전용 UUID를 따로 둔다.
-    """
+    """대화 묶음 추적용 UUID를 세션에 보장하고 돌려준다(Django 세션키와 별개)."""
     if not request.session.get("log_session_id"):
         request.session["log_session_id"] = str(uuid.uuid4())
         request.session.modified = True
@@ -90,12 +84,7 @@ def ensure_log_session_id(request):
 
 
 def save_error_log(request, exc, *, source=None, extra_metadata=None):
-    """예외를 ERROR 로그로 남긴다(관리자 페이지의 "오류 로그" 메뉴).
-
-    오류 처리 경로에서 또 예외가 나 사용자 응답까지 막는 일이 없도록 실패는
-    삼킨다 — 세 곳(chat_api / chat_scoreboard_ocr의 두 핸들러)에 같은 블록이
-    복사돼 있던 것을 하나로 합쳤다.
-    """
+    """예외를 ERROR 로그로 남긴다. 여기서 난 실패는 삼킨다."""
     try:
         metadata = {"traceback": traceback.format_exc()}
         if source:
@@ -145,9 +134,9 @@ def chat_api(request):
 
         message = data.get("message", "").strip()
         role_filter = data.get("role_filter")
-        # 되묻기에 고른 영웅. role_filter 버튼과 동일하게 message=''와 함께 온다.
+        # 되묻기에 고른 영웅(버튼 클릭이라 message=''와 함께 온다).
         focus_hero = (data.get("focus_hero") or "").strip() or None
-        # "5대5예요" 버튼. 인원수는 5/6만 유효하고 그 외 값은 무시한다.
+        # 인원수 버튼. 5/6만 유효하고 그 외 값은 무시한다.
         try:
             roster_size = int(data.get("roster_size"))
         except (TypeError, ValueError):
@@ -156,7 +145,7 @@ def chat_api(request):
             roster_size = None
         reset = bool(data.get("reset", False))
 
-        # 알 수 없는 값이면 None으로 넘겨 세션 값(없으면 detailed)을 쓰게 한다.
+        # 알 수 없는 값이면 None으로 넘겨 세션 값을 쓰게 한다.
         answer_style = data.get("answer_style")
         if answer_style not in ("simple", "detailed"):
             answer_style = None
@@ -183,11 +172,8 @@ def chat_api(request):
 
         conversation_context = request.session.get("coach_context", {})
 
-        # 세션 타임아웃(10분) 검사는 원래 그래프 안(merge_context_node)에만 있었다.
-        # 그런데 캐시 응답은 그래프를 타지 않으면서 last_message_ts만 지금 시각으로
-        # 갱신하므로, 캐시로 시작한 대화는 며칠 전 세션을 그대로 물고 간다. 그래서
-        # 두 경로가 갈리기 전인 여기서 먼저 본다(그래프 쪽 검사는 그대로 남아 있고,
-        # 여기서 비우면 그쪽은 자연히 통과한다).
+        # 캐시 응답도 검사를 거치도록 캐시/그래프로 갈라지기 전에 한 번 본다
+        # (그래프 안의 검사도 그대로 남아 있다).
         if is_session_timed_out(conversation_context):
             logger.info(
                 "[SESSION TIMEOUT] 마지막 메시지로부터 %.0f초 경과 — 컨텍스트 초기화 (새 게임으로 간주)",
@@ -232,8 +218,7 @@ def chat_api(request):
         target_enemy = context_patch.get("target_enemy") or conversation_context.get("target_enemy")
         intent = result.get("intent")
 
-        # 버튼 클릭 턴은 message가 비어 있다. 어떤 버튼을 눌렀는지와 복원된
-        # 원래 질문을 함께 로그에 남긴다.
+        # 버튼 클릭 턴은 누른 버튼과 복원된 원래 질문을 함께 로그에 남긴다.
         if message:
             user_log_message = message
         elif focus_hero:
@@ -251,7 +236,7 @@ def chat_api(request):
                 else f"[인원수 선택: {roster_size}대{roster_size}]"
             )
         else:
-            # "tank+damage"처럼 두 역할이 함께 선택될 수 있어 라벨 변환 함수를 쓴다.
+            # 복합 역할 필터가 올 수 있어 라벨 변환 함수를 쓴다.
             role_label = role_filter_label(role_filter)
             original_question = result.get("message") or ""
             user_log_message = (
@@ -276,7 +261,7 @@ def chat_api(request):
         )
 
         if graph_error:
-            # 그래프 내부 오류는 예외가 아니라 state["error"]로 오므로 여기서 남긴다.
+            # 그래프 내부 오류는 예외가 아니라 state["error"]로 온다.
             save_chat_log(
                 log_session_id=log_session_id,
                 turn_id=turn_id,
@@ -317,7 +302,7 @@ def chat_api(request):
                 },
             )
 
-        # 피드백이 어떤 답변에 대한 것인지 알 수 있게 turn_id를 함께 내려준다.
+        # 피드백을 어느 답변에 달지 알 수 있게 turn_id를 함께 내려준다.
         result["turn_id"] = turn_id
 
         return JsonResponse(result)
@@ -332,6 +317,25 @@ def chat_api(request):
             {"error": "요청을 처리하는 중 오류가 발생했습니다."},
             status=500,
         )
+
+
+@require_http_methods(["GET"])
+def chat_matchups(request):
+    """상성표 모달이 쓰는 읽기 전용 데이터.
+
+    `?hero=`가 있으면 그 영웅의 상성표만, 없으면 역할별 영웅 목록만 돌려준다.
+    """
+    hero = (request.GET.get("hero") or "").strip()
+
+    if not hero:
+        return JsonResponse({"roles": get_matchup_roster()})
+
+    data = get_hero_matchup(hero)
+    if not data:
+        return JsonResponse({"error": "상성 정보를 찾을 수 없는 영웅입니다."}, status=404)
+
+    # 중립은 우선 타겟 정렬에만 쓰고 화면에는 안 띄운다.
+    return JsonResponse({"hero": {k: v for k, v in data.items() if k != "even"}})
 
 
 @require_http_methods(["POST"])
@@ -375,11 +379,9 @@ def chat_feedback(request):
 
 @require_http_methods(["POST"])
 def chat_scoreboard_ocr(request):
-    """TAB 점수판 스크린샷을 분석해 표+코치 피드백 마크다운(report)을 반환한다.
+    """스탯창 스크린샷을 분석해 표+코치 피드백 마크다운(report)을 반환한다.
 
-    분석은 vision_stats.analyze_scoreboard_image가 담당한다(팀/역할/본인 판별과
-    영웅 인식은 OpenCV, 숫자와 피드백 생성은 Gemini). 진단 정보(admin_log)는
-    ChatLog.metadata에만 남기고 사용자 응답에는 포함하지 않는다.
+    진단 정보(admin_log)는 ChatLog.metadata에만 남기고 응답에는 넣지 않는다.
     """
     try:
         image_file = request.FILES.get("image")
@@ -397,7 +399,7 @@ def chat_scoreboard_ocr(request):
                 status=400,
             )
 
-        # 디버그 이미지가 turn_id 폴더에 저장되므로 ChatLog도 같은 turn_id를 쓴다.
+        # 디버그 이미지 폴더 이름이 turn_id라 ChatLog도 같은 값을 쓴다.
         turn_id = str(uuid.uuid4())
 
         image_bytes = image_file.read()
@@ -417,8 +419,7 @@ def chat_scoreboard_ocr(request):
             },
         )
 
-        # 인식된 팀 조합을 세션에 남겨 후속 질문이 이어받게 한다. current_hero는
-        # 매 턴 직접 선언해야 하는 값이라 건드리지 않는다.
+        # 인식된 팀 조합을 세션에 남겨 후속 질문이 이어받게 한다.
         hero_rows = admin_log.get("hero_rows", [])
         enemy_team = [
             r["hero"] for r in sorted(hero_rows, key=lambda r: r["row_index"])
@@ -428,8 +429,7 @@ def chat_scoreboard_ocr(request):
             r["hero"] for r in sorted(hero_rows, key=lambda r: r["row_index"])
             if r.get("team") == "ally" and r.get("hero") and r["hero"] != "unknown"
         ]
-        # 실제 수치도 함께 남긴다. my_stats는 infer_current_hero의 최우선 근거라,
-        # 채워두면 후속 질문에서 본인 영웅/역할이 자동으로 확정된다.
+        # 실제 수치도 함께 남긴다(my_stats는 본인 영웅 추론의 최우선 근거다).
         my_team_stats = result.get("my_team_stats") or {}
         enemy_team_stats = result.get("enemy_team_stats") or {}
         my_stats = result.get("my_stats") or {}
@@ -445,8 +445,7 @@ def chat_scoreboard_ocr(request):
                 conversation_context["enemy_stats"] = enemy_team_stats
             if my_stats:
                 conversation_context["my_stats"] = my_stats
-            # 세션 타임아웃 기준 시각도 갱신한다. 안 하면 방금 patch한 값이
-            # 다음 채팅 질문에서 새 판으로 오인돼 삭제될 수 있다.
+            # 세션 타임아웃 기준 시각도 갱신해야 방금 넣은 값이 살아남는다.
             conversation_context["last_message_ts"] = time.time()
             request.session["coach_context"] = conversation_context
             request.session.modified = True
@@ -460,7 +459,7 @@ def chat_scoreboard_ocr(request):
     except Exception as e:
         logger.exception("chat_scoreboard_ocr 오류: %s", e)
 
-        # 사용자에게는 일반 메시지만 보여주고, traceback은 ErrorChatLog에만 남긴다.
+        # traceback은 ErrorChatLog에만 남긴다.
         save_error_log(request, e, source="chat_scoreboard_ocr")
 
         return JsonResponse({"error": "이미지 분석 중 오류가 발생했습니다."}, status=500)

@@ -21,8 +21,8 @@ from chat.models import ChatLog, ErrorChatLog, UnsatisfiedChatLog
 
 logger = logging.getLogger(__name__)
 
-# 디버그 이미지 파일명 화이트리스트(경로 조작 방지). _save_debug_images의
-# 파일명 규칙과 일치해야 하며, 행 번호는 인원수가 달라질 수 있어 \d+로 받는다.
+# 디버그 이미지 파일명 화이트리스트(경로 조작 방지).
+# _save_debug_images의 파일명 규칙과 일치해야 한다.
 SCOREBOARD_DEBUG_FILENAME_RE = re.compile(
     r"(?:ally|enemy)_row_\d+_(?:row|hero)_crop\.png|original\.png|coarse_crop\.png"
 )
@@ -34,37 +34,26 @@ ROLE_BADGE_STYLES = {
 
 
 class ChatLogDisplayMixin:
-    """
-    ChatLog와 그 프록시 모델(ErrorChatLog, UnsatisfiedChatLog) admin이 공통으로
-    쓰는 표시용 메서드 모음. 프록시 모델은 테이블은 같고 조회 범위만 다르므로
-    화면 렌더링 로직을 중복해서 적을 필요가 없다.
-    """
+    """ChatLog와 그 프록시 모델 admin이 공통으로 쓰는 표시용 메서드 모음."""
 
     def has_add_permission(self, request):
-        # 로그는 챗봇 응답 파이프라인에서만 생성되어야 하며, 관리자가 수동으로
-        # 만들 이유가 없다.
+        # 로그는 응답 파이프라인에서만 생성된다.
         return False
 
     @property
     def media(self):
-        # 컬럼 헤더 드롭다운 필터. 사이드바 필터 링크를 JS가 재사용하는
-        # 프론트 레이어라 서버 필터링 로직과는 무관하다.
+        # 컬럼 헤더 드롭다운 필터(사이드바 필터를 재사용하는 프론트 레이어).
         return super().media + forms.Media(
             css={"all": ("chat/admin/column_filter.css",)},
             js=("chat/admin/column_filter.js",),
         )
 
     def has_change_permission(self, request, obj=None):
-        # 로그는 읽기 전용이다 — 저장 버튼을 노출하면 클릭할 때마다 실질적
-        # 변경 없이 LogEntry만 쌓인다(목록/상세 조회는 별도 권한이라 가능).
+        # 로그는 읽기 전용이다(목록/상세 조회는 별도 권한이라 가능).
         return False
 
     def history_view(self, request, object_id, extra_context=None):
-        """기본 "히스토리" 버튼을 세션 대화 전체보기로 리다이렉트한다.
-
-        ChatLog는 자동 생성만 되어 Django 기본 히스토리(LogEntry)가 항상
-        비어 있으므로, 실제 대화 내용은 session_transcript_view로 보여준다.
-        """
+        """기본 "히스토리" 버튼을 세션 대화 전체보기로 리다이렉트한다."""
         obj = self.get_object(request, object_id)
         if obj is not None and obj.log_session_id:
             url = reverse("admin:chat_chatlog_session_transcript", args=[obj.log_session_id])
@@ -72,9 +61,7 @@ class ChatLogDisplayMixin:
         return super().history_view(request, object_id, extra_context)
 
     def _warn_if_debug_dir_cleanup_failed(self, request, failed_turn_ids):
-        """디스크의 점수판 디버그 폴더 삭제가 실패했으면(주로 서버의 파일
-        소유권/권한 문제) DB 로그 삭제는 이미 끝났더라도 관리자에게 알려서
-        조용히 고아 폴더가 쌓이지 않게 한다."""
+        """디버그 폴더 삭제가 실패했으면(주로 파일 권한 문제) 관리자에게 알린다."""
         if not failed_turn_ids:
             return
         self.message_user(
@@ -86,16 +73,14 @@ class ChatLogDisplayMixin:
         )
 
     def delete_model(self, request, obj):
-        """개별 로그 삭제(변경 화면의 "삭제") 시 그 turn_id의 점수판 디버그
-        이미지 폴더도 함께 지운다."""
+        """개별 로그 삭제 시 그 turn_id의 디버그 이미지 폴더도 함께 지운다."""
         turn_id = obj.turn_id
         super().delete_model(request, obj)
         failed = _delete_scoreboard_debug_dirs([turn_id])
         self._warn_if_debug_dir_cleanup_failed(request, failed)
 
     def delete_queryset(self, request, queryset):
-        """기본 "delete_selected" 일괄 삭제 액션의 삭제 경로. 지워지는 로그들의
-        turn_id를 먼저 모아두고, 삭제 후 해당 디버그 이미지 폴더도 함께 지운다."""
+        """일괄 삭제 시 지워지는 로그들의 디버그 이미지 폴더도 함께 지운다."""
         turn_ids = list(queryset.values_list("turn_id", flat=True).distinct())
         super().delete_queryset(request, queryset)
         failed = _delete_scoreboard_debug_dirs(turn_ids)
@@ -103,9 +88,7 @@ class ChatLogDisplayMixin:
 
     @admin.action(description="선택한 로그가 속한 세션 전체 삭제(같은 log_session_id의 모든 USER/AI/ERROR 로그)")
     def delete_entire_session(self, request, queryset):
-        """선택한 로그가 속한 세션(log_session_id) 전체를, 선택하지 않은 행과
-        다른 role(USER/AI/ERROR)까지 포함해 통째로 지운다. 프록시 모델
-        (ErrorChatLog 등)에서 실행해도 항상 원본 ChatLog 기준으로 삭제된다."""
+        """선택한 로그가 속한 세션 전체를 role 구분 없이 통째로 지운다."""
         session_ids = list(queryset.values_list("log_session_id", flat=True).distinct())
         if not session_ids:
             self.message_user(request, "선택한 로그에 세션 정보가 없습니다.", level="warning")
@@ -153,8 +136,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="메시지 미리보기")
     def message_preview(self, obj):
-        # 컬럼 폭이 좁아지면 텍스트가 여러 줄로 줄바꿈돼 행 높이가 늘어나므로
-        # CSS로 한 줄 말줄임을 강제한다.
+        # 행 높이가 늘어나지 않게 CSS로 한 줄 말줄임을 강제한다.
         text = (obj.message or "").replace("\n", " ").strip()
         truncated = text[:80] + ("…" if len(text) > 80 else "")
         color = "color:#b91c1c; font-weight:600;" if obj.role == "ERROR" else ""
@@ -192,8 +174,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="상대 조합")
     def enemy_team_display(self, obj):
-        """target_enemy는 카운터 대상 1명만 담으므로, metadata의 enemy_team
-        전체를 옆에 함께 보여준다(답변 생성은 이미 enemy_team 전체를 참고한다)."""
+        """카운터 대상 1명(target_enemy)과 상대 조합 전체를 함께 보여준다."""
         metadata = obj.metadata or {}
         enemy_team = (
             metadata.get("context_patch", {}).get("enemy_team")
@@ -206,7 +187,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="상성 카드")
     def matchup_card_display(self, obj):
-        """카운터 질문 답변의 핵심인 상성 카드(metadata.matchup_card)를 message_box 옆에 풀어서 보여준다."""
+        """상성 카드(metadata.matchup_card)를 풀어서 보여준다."""
         metadata = obj.metadata or {}
         card = metadata.get("matchup_card")
         if not card:
@@ -236,7 +217,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="추천 영웅 카드")
     def recommend_card_display(self, obj):
-        """교체(swap)/조합(composition) 질문 답변의 추천 영웅 카드(metadata.recommend_card)를 풀어서 보여준다."""
+        """추천 영웅 카드(metadata.recommend_card)를 풀어서 보여준다."""
         metadata = obj.metadata or {}
         card = metadata.get("recommend_card")
         if not card:
@@ -267,7 +248,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="예측 질문")
     def suggested_questions_display(self, obj):
-        """AI 답변에 딸린 예측 질문 3개(metadata.suggested_questions)를 목록으로 보여준다."""
+        """답변에 딸린 예측 질문을 목록으로 보여준다."""
         metadata = obj.metadata or {}
         questions = metadata.get("suggested_questions")
         if not questions:
@@ -276,8 +257,7 @@ class ChatLogDisplayMixin:
         return format_html('<ul style="margin:0 0 0 18px; padding:0;">{}</ul>', items)
 
     def _scoreboard_debug_image_url(self, turn_id, rel_path):
-        """admin_log에 저장된 "logs/scoreboard_debug/{turn_id}/파일명" 상대
-        경로를, 그 파일을 실제로 서빙하는 관리자 전용 URL로 바꾼다."""
+        """디버그 이미지 상대 경로를 관리자 전용 서빙 URL로 바꾼다."""
         if not rel_path or not turn_id:
             return None
         filename = rel_path.rsplit("/", 1)[-1]
@@ -301,8 +281,7 @@ class ChatLogDisplayMixin:
             return "-"
         return f"({box['x0']},{box['y0']})-({box['x1']},{box['y1']})"
 
-    # Django admin의 readonly 필드 카드 배경 때문에 <tr>에서 상속한 색상이
-    # 적용되지 않을 수 있어, 셀마다 배경/글자색을 직접 인라인으로 지정한다.
+    # readonly 필드 배경 때문에 상속 색상이 안 먹어 셀마다 직접 지정한다.
     SCOREBOARD_TD_STYLE = "padding:6px 8px; border-bottom:1px solid #374151; background:#111827; color:#e5e7eb; vertical-align:top;"
     SCOREBOARD_TH_STYLE = "padding:6px 8px; text-align:left; background:#1f2937; color:#f9fafb; font-weight:700; white-space:nowrap;"
 
@@ -314,9 +293,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="스탯창 분석 진단 정보 (관리자 전용)")
     def scoreboard_admin_log_display(self, obj):
-        """점수판 분석 진단 정보(metadata.admin_log: 팀 패널 좌표, 행별 crop,
-        영웅 유사도 점수/후보)를 관리자 전용으로 렌더링한다. 사용자 응답에는
-        포함되지 않는다."""
+        """스탯창 분석 진단 정보(metadata.admin_log)를 관리자 전용으로 렌더링한다."""
         metadata = obj.metadata or {}
         log = metadata.get("admin_log")
         if not log:
@@ -340,7 +317,7 @@ class ChatLogDisplayMixin:
             return format_html('<ul style="margin:4px 0 0 18px; padding:0;">{}</ul>', items)
 
         def render_team_layout(team_key, team_label):
-            # 후보 목록(mask_candidate_boxes)은 데이터에는 남아있지만 화면에는 표시하지 않는다.
+            # 후보 목록은 데이터에만 남기고 화면에는 표시하지 않는다.
             data = (log.get("team_layout") or {}).get(team_key) or {}
             pair_details = data.get("pair_details") or {}
             return format_html(
@@ -445,8 +422,7 @@ class ChatLogDisplayMixin:
             if coarse_url else "(이미지 없음)"
         )
         if log.get("coarse_crop_is_noop"):
-            # 표만 캡처한 경우 완화된 색 영역이 이미지 대부분을 덮어 경계에
-            # clamp되므로, 전체화면 캡처 오인식이 아니라 정상적인 no-op이다.
+            # 표만 캡처한 이미지에서는 오인식이 아니라 정상적인 no-op이다.
             used_text = "예 (원본 이미지 전체 크기와 동일 — 실질적으로 아무것도 안 좁힌 no-op)"
         elif log.get("coarse_crop_used"):
             used_text = "예"
@@ -502,7 +478,7 @@ class ChatLogDisplayMixin:
 
     @admin.display(description="연관 질문")
     def related_question(self, obj):
-        """같은 turn_id를 공유하는 USER 로그를 찾아, 이 AI 답변의 원래 질문을 보여준다."""
+        """같은 turn_id의 USER 로그를 찾아 원래 질문을 보여준다."""
         if obj.role != "AI":
             return "-"
         user_log = (
@@ -523,8 +499,7 @@ class ChatLogDisplayMixin:
 
 @admin.register(ChatLog)
 class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
-    # actions를 명시하지 않으면 Django가 delete_selected만 자동으로 넣으므로,
-    # delete_entire_session도 항상 노출되도록 둘 다 명시적으로 등록한다.
+    # 명시하지 않으면 delete_selected만 노출되므로 둘 다 등록한다.
     actions = ["delete_selected", "delete_entire_session"]
 
     list_display = (
@@ -628,10 +603,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         return custom_urls + super().get_urls()
 
     def session_delete_view(self, request, log_session_id):
-        """대화 전체보기(session_transcript_view) 화면의 "이 세션 전체 삭제"
-        버튼이 POST하는 곳. 이 세션의 모든 로그(USER/AI/ERROR 전부)를 지우고
-        changelist로 돌아간다. GET으로는 실행되지 않게 막는다(실수로 링크를
-        클릭/미리보기하다 삭제되는 것 방지)."""
+        """"이 세션 전체 삭제" 버튼이 POST하는 곳(GET으로는 실행되지 않는다)."""
         if request.method != "POST":
             raise Http404
         if not self.has_delete_permission(request):
@@ -646,11 +618,10 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         return HttpResponseRedirect(reverse("admin:chat_chatlog_changelist"))
 
     def scoreboard_debug_image_view(self, request, turn_id, filename):
-        """logs/scoreboard_debug/{turn_id}/의 디버그 이미지를 관리자에게만 서빙한다.
+        """디버그 이미지를 관리자에게만 서빙한다.
 
-        admin_view가 staff 권한을 강제하고, turn_id/filename을 화이트리스트
-        정규식으로 검증한 뒤 최종 경로가 디버그 루트를 벗어나지 않는지도 다시
-        확인해 경로 조작을 이중으로 막는다.
+        turn_id/filename을 화이트리스트로 검증하고 최종 경로가 디버그 루트를
+        벗어나지 않는지도 확인한다.
         """
         if not SCOREBOARD_DEBUG_TURN_ID_RE.fullmatch(turn_id) or not SCOREBOARD_DEBUG_FILENAME_RE.fullmatch(filename):
             raise Http404
@@ -663,11 +634,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         return FileResponse(open(file_path, "rb"), content_type="image/png")
 
     def session_transcript_view(self, request, log_session_id):
-        """같은 log_session_id의 로그를 표가 아니라 시간순 대화 형태로 보여준다.
-
-        ChatLogDisplayMixin의 표시 메서드(role_badge/message_box 등)를 그대로
-        재사용해 렌더링 로직을 중복하지 않는다.
-        """
+        """같은 세션의 로그를 표가 아니라 시간순 대화 형태로 보여준다."""
         logs = list(
             ChatLog.objects.filter(log_session_id=log_session_id).order_by("created_at", "id")
         )
@@ -746,7 +713,7 @@ class ErrorChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
 
 @admin.register(UnsatisfiedChatLog)
 class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
-    """사용자가 불만족으로 표시한 AI 답변만 모아, 질문/답변/이유를 한 화면에서 보여준다."""
+    """사용자가 불만족으로 표시한 AI 답변만 모아 보여준다."""
 
     actions = ["delete_selected", "delete_entire_session"]
 
@@ -768,8 +735,7 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
     ordering = ("-created_at",)
     list_per_page = 50
 
-    # is_resolved/resolution_note만 편집 가능해야 해서 이 admin만 예외로 둔다
-    # (다른 로그 admin은 완전 읽기 전용).
+    # is_resolved/resolution_note만 편집 가능한 예외(다른 로그는 읽기 전용).
     def has_change_permission(self, request, obj=None):
         return True
 

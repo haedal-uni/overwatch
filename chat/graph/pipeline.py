@@ -1,20 +1,7 @@
-"""LangGraph 그래프 조립과 실행 진입점(`chat/chatbot_graph.py`의 후신).
+"""LangGraph 그래프 배선과 실행 진입점.
 
-이 파일은 원래 4,400줄짜리 단일 모듈이었다 — 영웅 데이터, 규칙 기반 분류,
-캐시 응답, 모든 노드, 프롬프트가 한 곳에 있었다. 지금은 주제별 패키지로
-나뉘어 있고 여기에는 "노드를 어떤 순서로 잇는가"와 실행 함수만 남아 있다.
-패키지 구성 설명은 저장소 루트의 `chat_모듈_구조.md` 참고.
-
-    chat/domain (영웅 데이터·규칙·프롬프트)   chat/rag (검색·LLM)
-        ↑                                          ↑
-    chat/graph/state · nodes_context → nodes_retrieval → nodes_answer
-        ↑
-    chat/graph/pipeline (이 파일: 그래프 배선)
-    chat/graph/canned   (그래프를 우회하는 캐시 응답)
-
-아래 재수출(re-export)은 노드/규칙/영웅 데이터의 주요 이름을 이 모듈 하나로
-모아준다 — `views.py`처럼 파이프라인 바깥에서 부르는 쪽이 내부 모듈 경로를
-일일이 알 필요가 없게 하려는 것이다.
+파이프라인 바깥(views 등)에서 쓸 이름을 모아주는 재수출 창구도 겸한다.
+패키지 구성은 chat_모듈_구조.md 참고.
 """
 
 import logging
@@ -51,7 +38,6 @@ from chat.domain.heroes import (  # noqa: F401
     HERO_TO_ROLE,
     HEROES,
     MAPS,
-    OVERWATCH_SKILL_SHORTCUTS,
     ROLE_HEROES,
     ROLE_LABELS,
     _validate_hero_tables,
@@ -60,7 +46,6 @@ from chat.domain.heroes import (  # noqa: F401
     find_map,
     find_side,
     get_hero_role,
-    get_skill_shortcut_text,
     hero_mentioned_in_text,
     heroes_for_role_filter,
     josa_eul_reul,
@@ -162,8 +147,7 @@ def route_after_parse_stats(state: ChatbotGraphState) -> str:
 def route_after_context_merge(state: ChatbotGraphState) -> str:
     if state.get("intent") == "off_topic":
         return "off_topic_response"
-    # 기준 영웅 확정이 역할 확인보다 우선이다 — 영웅을 모르면 역할을 알아도
-    # 답을 만들 수 없다.
+    # 기준 영웅 확정이 역할 확인보다 우선이다.
     if state.get("needs_focus_hero_clarify"):
         return "clarify_focus_hero"
     if should_ask_role_filter(state):
@@ -178,8 +162,7 @@ def route_after_retrieve(state: ChatbotGraphState) -> str:
         return "generate_matchup_answer"
     if state.get("recommend_card_mode"):
         return "generate_recommend_card"
-    # "간단히"는 호출 수를 줄인다 — generate_answer가 state만으로 같은 판단을
-    # 내릴 수 있다. "자세히"는 기존 방식을 유지한다.
+    # "간단히"는 전략 판단 호출을 생략한다.
     if state.get("answer_style") == "simple":
         return "generate_answer"
     return "judge_strategy"
@@ -190,11 +173,10 @@ def route_after_judge(state: ChatbotGraphState) -> str:
 def route_after_generate(state: ChatbotGraphState) -> str:
     if state.get("error"):
         return "format_response"
-    # 정정 버튼이 붙는 턴은 추천 질문을 생략한다(다음 답변에는 정상 표시된다).
+    # 정정 버튼이 붙는 턴은 추천 질문을 생략한다.
     if state.get("choice_buttons"):
         return "format_response"
-    # "간단히"는 답변 노드가 추천 질문을 함께 받아오므로, 3개가 확보됐으면
-    # 별도 호출 없이 끝낸다.
+    # "간단히"는 답변 노드가 추천 질문을 함께 받아오므로 별도 호출이 없다.
     if state.get("answer_style") == "simple" and len(state.get("suggested_questions") or []) >= 3:
         return "format_response"
     return "generate_suggested_questions"

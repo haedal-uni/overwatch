@@ -1,7 +1,6 @@
-"""LLM이 만든 답변 문자열을 사용자에게 내보내기 전에 다듬는 함수 모음.
+"""답변 문자열 다듬기와 프롬프트용 스탯 요약 포맷.
 
-마크다운 잔재/내부 표기 제거(sanitize_answer_for_user), 답변 JSON에 함께 실려
-오는 후속 질문 추출, 프롬프트에 넣을 스탯 요약 문자열 포맷이 여기 있다.
+각 후처리를 둔 배경은 chat_모듈_구조.md 참고.
 """
 
 import logging
@@ -23,7 +22,7 @@ def sanitize_answer_for_user(answer: str, keep_dash_bullets: bool = False) -> st
     sanitized = re.sub(r'\n*"used_doc_ids"\s*:\s*\[.*?\]\s*\}?\s*$', '', sanitized).strip()
 
     sanitized = re.sub(r"\s*\(문서\s*\d+\)", "", sanitized)
-    # 대괄호만 지우면 "에서 언급했듯이"같은 어색한 잔여 문구가 남아 뒤 어구까지 제거.
+    # 대괄호만 지우면 어색한 잔여 문구가 남아 뒤 어구까지 함께 지운다.
     sanitized = re.sub(r"\s*\[문서\s*\d+\][^,.\n]{0,12}(?:듯이|면서)?,?", "", sanitized)
     sanitized = re.sub(r"\s*\[문서\s*\d+\]", "", sanitized)
     banned_phrases = [
@@ -44,10 +43,10 @@ def sanitize_answer_for_user(answer: str, keep_dash_bullets: bool = False) -> st
     for pattern in map_warning_patterns:
         sanitized = re.sub(pattern, "", sanitized)
 
-    # LLM이 지시를 어기고 마크다운을 섞어 쓸 때를 위한 안전망(JSON 파싱 깨짐의 흔한 원인).
+    # LLM이 지시를 어기고 마크다운을 섞어 쓸 때를 위한 안전망.
     sanitized = re.sub(r"\*\*(.+?)\*\*", r"\1", sanitized)
     if keep_dash_bullets:
-        # 간단 모드는 "- "를 의도된 목록 기호로 써서 보존하고, "*"만 안전망으로 제거한다.
+        # "- "가 형식의 일부인 답변은 보존하고 "*"만 제거한다.
         sanitized = re.sub(r"^\s*\*\s+", "", sanitized, flags=re.MULTILINE)
     else:
         sanitized = re.sub(r"^\s*[\*\-]\s+", "", sanitized, flags=re.MULTILINE)
@@ -66,10 +65,7 @@ _DASH_LINE_RE = re.compile(r"^\s*-\s+\S")
 
 
 def tighten_bullet_blocks(answer: str) -> str:
-    """목록 항목을 앞 줄에 붙여 한 묶음으로 읽히게 한다.
-
-    묶음은 항상 제목 줄로 시작하므로 묶음 사이 빈 줄은 유지된다.
-    """
+    """목록 항목을 앞 줄에 붙여 한 묶음으로 읽히게 한다."""
     if not answer:
         return answer
 
@@ -86,12 +82,11 @@ def tighten_bullet_blocks(answer: str) -> str:
     return "\n".join(kept)
 
 
-# 조합 이름 뒤 구분자와 괄호 유무가 LLM 출력마다 달라 느슨하게 잡고,
-# "+ 와 괄호가 있는 나머지"인지로 제목 줄 여부를 가른다.
+# 운용 조합 제목 줄. 구분자·괄호가 LLM 출력마다 달라 느슨하게 잡는다.
 _PERK_TITLE_RE = re.compile(
     r"^\s*(?:-\s+)?([^:：(]*운용)\s*[:：]?\s*(.+?)\s*(?:추천\s*⭐?)?\s*$"
 )
-# 답변의 줄바꿈이 화면에 그대로 보이므로 한 줄이 이보다 길면 나눈다.
+# 도입부 한 줄이 이보다 길면 나눈다.
 _PERK_LINE_LIMIT = 60
 _PERK_RECOMMEND_RE = re.compile(r"^\s*(?:-\s+)?\**\s*추천\s*운용\s*[:：]\s*(.+?)\s*\**\s*$")
 # 조합 목록이 끝나는 지점(마무리 섹션/번호 목록).
@@ -143,7 +138,7 @@ def _perk_title_parts(line: str) -> Optional[Dict[str, Any]]:
     return {
         "name": match.group(1).strip(),
         "combo": combo,
-        # 조립된 답변을 다시 넣어도 결과가 같아야 한다(멱등).
+        # 이미 조립된 답변을 다시 넣어도 결과가 같아야 한다.
         "recommended": "추천" in line[match.end(2):],
     }
 
@@ -174,8 +169,7 @@ def _wrap_sentences(text: str) -> List[str]:
     return lines
 
 
-# "간단히" 스타일의 격식체 종결을 짧은 구로 바꾼다. 프롬프트로 여러 번 지시해도
-# LLM이 "~합니다"로 되돌아가, 스타일 차이가 형식에만 남고 문장에는 안 남았다.
+# "간단히" 스타일의 격식체 종결 → 짧은 구 치환 규칙.
 _POLITE_ENDING_RULES = [
     (re.compile(r"([가-힣]+)세요\.?$"), r"\1기"),
     (re.compile(r"([가-힣]+)십시오\.?$"), r"\1기"),
@@ -184,16 +178,13 @@ _POLITE_ENDING_RULES = [
     (re.compile(r"좋습니다\.?$"), "좋음"),
     (re.compile(r"됩니다\.?$"), "됨"),
     (re.compile(r"[가-힣]*합니다\.?$"), lambda m: m.group(0).replace("합니다", "").rstrip(".")),
-    # 명사 뒤 "입니다"만 뗀다. 앞이 한 글자면 "높입니다"류 동사라 건드리면 깨진다.
+    # 명사 뒤 "입니다"만 뗀다(앞이 한 글자면 동사 어미라 건드리지 않는다).
     (re.compile(r"([가-힣]{2,})입니다\.?$"), r"\1"),
 ]
 
 
 def shorten_polite_endings(answer: str) -> str:
-    """줄 끝의 격식체 종결을 짧은 구로 줄인다.
-
-    추천 이유("*" 줄)는 판단을 설명하는 자리라 문장 그대로 둔다.
-    """
+    """줄 끝의 격식체 종결을 짧은 구로 줄인다(추천 이유 줄은 그대로 둔다)."""
     if not answer:
         return answer
 
@@ -215,15 +206,14 @@ def shorten_polite_endings(answer: str) -> str:
 def format_perk_answer(answer: str) -> str:
     """특전 답변의 운용 조합 부분을 정해진 모양으로 다시 조립한다.
 
-    형식은 프롬프트로 지시해도 LLM 출력이 매번 달라 여기서 확정한다. 조합 제목을
-    하나도 못 찾으면 손대지 않는다 — 특전과 무관한 답변을 망가뜨리지 않기 위함.
+    조합 제목을 하나도 못 찾으면 손대지 않는다.
     """
     if not answer:
         return answer
 
     lines = [line.rstrip() for line in answer.split("\n")]
 
-    # 1) 따로 떨어진 추천 문단을 떼어낸다(해당 조합 블록 안으로 옮기려고).
+    # 1) 따로 떨어진 추천 문단을 떼어낸다.
     recommended: Optional[str] = None
     reason_lines: List[str] = []
     rest: List[str] = []
@@ -242,7 +232,7 @@ def format_perk_answer(answer: str) -> str:
             if _PERK_SECTION_BREAK_RE.match(following) or _perk_title_parts(following):
                 break
             if following.strip():
-                # 앞머리 기호는 LLM 출력마다 달라 떼고 아래에서 "*"로 통일한다.
+                # 앞머리 기호를 떼고 아래에서 "*"로 통일한다.
                 reason_lines.append(following.strip().lstrip("*-").strip())
             idx += 1
 
@@ -267,8 +257,7 @@ def format_perk_answer(answer: str) -> str:
                 continue
             bullet = body.startswith("-")
             content = body.lstrip("-").strip() if bullet else body
-            # "*" 줄은 설명이 아니라 그 조합을 고른 이유이고, 줄바꿈으로 이어진
-            # 뒷줄도 같은 이유다.
+            # "*" 줄은 설명이 아니라 그 조합을 고른 이유다(이어지는 줄 포함).
             if content.startswith("*"):
                 current["in_reason"] = True
                 current["reason"].append(content.lstrip("*").strip())
@@ -304,12 +293,12 @@ def format_perk_answer(answer: str) -> str:
 
         reason = reason_lines if matches_recommendation else block["reason"]
         if is_recommended and reason:
-            # 추천 이유는 조합의 특징이 아니라 이번 판단이라 목록에 넣지 않는다.
+            # 추천 이유는 목록이 아니라 평문 줄로 넣는다.
             rendered.append(f"*{' '.join(reason)}")
             if matches_recommendation:
                 reason_used = True
 
-    # 추천 조합 이름이 어느 블록과도 안 맞으면 정보를 잃지 않게 따로 남긴다.
+    # 추천 조합 이름이 어느 블록과도 안 맞으면 따로 남긴다.
     if recommended and not reason_used:
         rendered.append("")
         rendered.append(f"추천 운용: {recommended}")
@@ -323,8 +312,7 @@ def format_perk_answer(answer: str) -> str:
     return "\n".join(rendered)
 
 
-# "간단히" 전용: 추천 질문을 답변 생성 호출에서 함께 받아 별도 LLM 호출을
-# 생략한다(응답 속도 우선). "자세히"는 기존 방식을 유지한다.
+# "간단히" 전용: 답변 JSON에 함께 실려 온 추천 질문을 꺼낸다.
 def extract_inline_suggested_questions(parsed: Any) -> List[str]:
     if not isinstance(parsed, dict):
         return []
@@ -353,3 +341,42 @@ def _format_stat_text(stats: Dict[str, Any], label: str = "") -> str:
             parts.append(f"힐량 {s['healing']}")
         lines.append(f"- {hero}: {', '.join(parts)}")
     return "\n".join(lines)
+
+
+# 답변에 붙은 단축키 표기 → 표준 단축키.
+_KEY_TOKENS = {
+    "좌클릭": "좌클릭", "좌클": "좌클릭", "우클릭": "우클릭", "우클": "우클릭",
+    "shift": "shift", "좌shift": "shift", "좌 shift": "shift", "e": "e", "q": "q",
+}
+_UPPER_KEYS = {"shift": "Shift", "e": "E", "q": "Q"}
+
+
+def fix_skill_keys(text: str, skill_keys: Dict[str, Dict[str, str]]) -> str:
+    """"스킬명(단축키)"의 단축키를 원본 문서 표({영웅: {스킬: 키}}) 기준으로 바로잡는다."""
+    if not text or not skill_keys:
+        return text
+    name_to_keys: Dict[str, set] = {}
+    for skills in skill_keys.values():
+        for skill, key in skills.items():
+            name_to_keys.setdefault(skill, set()).add(key)
+    # 영웅마다 키가 다른 같은 이름은 어느 쪽인지 몰라 건드리지 않는다.
+    name_to_key = {name: next(iter(keys)) for name, keys in name_to_keys.items() if len(keys) == 1}
+    if not name_to_key:
+        return text
+    names = sorted(name_to_key, key=len, reverse=True)
+    pattern = re.compile(
+        r"(?<![가-힣A-Za-z])(" + "|".join(re.escape(n) for n in names) + r")\s*\(([^()]{1,10})\)"
+    )
+
+    def _replace(match):
+        name, written = match.group(1), match.group(2).strip()
+        if written.lower() not in _KEY_TOKENS:
+            return match.group(0)
+        correct = name_to_key[name]
+        if _KEY_TOKENS[written.lower()] == correct:
+            return match.group(0)
+        # 원래 표기가 대문자였으면 대문자로 맞춘다.
+        shown = _UPPER_KEYS.get(correct, correct) if written[:1].isupper() else correct
+        return f"{name}({shown})"
+
+    return pattern.sub(_replace, text)
