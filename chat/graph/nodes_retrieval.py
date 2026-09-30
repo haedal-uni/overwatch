@@ -3,7 +3,6 @@
 import json
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
 
 from chat.domain.answer_format import _format_stat_text
@@ -14,11 +13,12 @@ from chat.domain.heroes import (
     ROLE_LABELS,
     normalize_hero_name,
 )
+from chat.domain.prompts import ally_team_prompt_text
 from chat.rag.doc_sections import get_hero_perk_section, get_hero_profile
 from chat.rag.llm_utils import (
     call_llm_text,
     document_to_dict,
-    retrieve_documents,
+    retrieve_documents_batch,
     safe_json_loads,
 )
 
@@ -163,18 +163,8 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
         queries = state.get("retrieval_queries", []) or []
 
-        # 스레드로 동시 검색하되 결과는 queries 순서대로 병합한다.
-        results_by_query: List[List[Any]] = [[] for _ in queries]
-        if len(queries) > 1:
-            with ThreadPoolExecutor(max_workers=min(6, len(queries))) as executor:
-                future_to_idx = {
-                    executor.submit(retrieve_documents, retriever, query): idx
-                    for idx, query in enumerate(queries)
-                }
-                for future in as_completed(future_to_idx):
-                    results_by_query[future_to_idx[future]] = future.result()
-        elif queries:
-            results_by_query[0] = retrieve_documents(retriever, queries[0])
+        # 검색어를 한 번에 임베딩한다(스레드 병렬 검색보다 빠르고 결과는 같다).
+        results_by_query = retrieve_documents_batch(retriever, queries)
 
         all_docs: List[Dict[str, Any]] = []
         seen_contents: set = set()
@@ -353,7 +343,7 @@ def judge_strategy_node(state: ChatbotGraphState) -> ChatbotGraphState:
 가장 위협적인 적: {display_high_threat or "없음"}
 맵: {map_name or "없음"} / 공격-수비: {side_text}
 상대 조합: {', '.join(display_enemy_team) if display_enemy_team else "없음"}
-아군 조합: {', '.join(state.get("ally_team") or []) or "없음"}
+아군 조합: {ally_team_prompt_text(state.get("ally_team"))}
 
 스탯 정보:
 {stat_summary or "없음"}

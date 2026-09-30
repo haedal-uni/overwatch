@@ -8,7 +8,7 @@ import os
 import re
 from typing import Dict, List, Optional
 
-from chat.domain.heroes import normalize_hero_name, resolve_hero_name
+from chat.domain.heroes import HERO_TO_ROLE, normalize_hero_name, resolve_hero_name
 from chat.rag.vectorstore import MD_PATH
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,12 @@ def get_hero_profile(hero: Optional[str]) -> Optional[str]:
 
 
 # 스킬 데이터 줄의 괄호 속 첫 항목 → 표준 단축키.
-_SKILL_KEY_WORDS = {"좌클": "좌클릭", "우클": "우클릭", "Shift": "shift", "E": "e", "Q": "q"}
+_SKILL_KEY_WORDS = {
+    "좌클": "좌클릭", "우클": "우클릭", "좌클릭": "좌클릭", "우클릭": "우클릭",
+    "Shift": "shift", "좌Shift": "shift", "E": "e", "Q": "q",
+}
+# 단축키를 괄호가 아니라 이름 끝에 붙인 줄("펄스 소총 좌클릭(기본 발사)").
+_NAME_SUFFIX_KEY_RE = re.compile(r"^(.+?)\s+(좌클릭|우클릭)$")
 _SKILL_LINE_RE = re.compile(r"^\s+-\s+(.+?)\(([^)]*)\)\s*:")
 
 _skill_keys_cache: Optional[Dict[str, Dict[str, str]]] = None
@@ -187,6 +192,7 @@ def _build_skill_keys() -> Dict[str, Dict[str, str]]:
                 if key:
                     table.setdefault(hero, {})[heading.group(2).strip()] = key
         in_block = False
+        found: Dict[str, set] = {}
         for line in body:
             if line.startswith("- "):
                 in_block = line.strip().rstrip(":") == "- 스킬 데이터"
@@ -196,9 +202,17 @@ def _build_skill_keys() -> Dict[str, Dict[str, str]]:
             match = _SKILL_LINE_RE.match(line)
             if not match:
                 continue
+            name = match.group(1).strip()
             key = _skill_key_from(match.group(2))
+            suffix = _NAME_SUFFIX_KEY_RE.match(name)
+            if not key and suffix:
+                name, key = suffix.group(1), _SKILL_KEY_WORDS[suffix.group(2)]
             if key:
-                table.setdefault(hero, {})[match.group(1).strip()] = key
+                found.setdefault(name, set()).add(key)
+        # 이름 하나에 키가 둘이면(수리검 좌클릭/우클릭) 바로잡을 기준이 없어 뺀다.
+        for name, keys in found.items():
+            if len(keys) == 1:
+                table.setdefault(hero, {})[name] = next(iter(keys))
 
     logger.info("[SKILL KEYS] 영웅 %d명 스킬 단축키 로드", len(table))
     return table
@@ -210,6 +224,71 @@ def get_skill_keys() -> Dict[str, Dict[str, str]]:
     if _skill_keys_cache is None:
         _skill_keys_cache = _build_skill_keys()
     return _skill_keys_cache
+
+
+# 탱커 스킬 태그 중 피해를 막아 경감량을 쌓는 것.
+_ABSORB_SKILL_TAGS = {"방벽", "방울", "투사체 무효화"}
+_STAT_TYPE_LINE_RE = re.compile(r"^\*\*(메인|서브) (딜러|힐러)\*\*\s*:\s*(.+)$")
+_STAT_TYPE_KEYS = {
+    ("메인", "딜러"): "main_damage", ("서브", "딜러"): "sub_damage",
+    ("메인", "힐러"): "main_support", ("서브", "힐러"): "sub_support",
+}
+
+_stat_types_cache: Optional[Dict[str, str]] = None
+
+
+def _is_ultimate_skill(paren: str) -> bool:
+    """스킬 줄 괄호("Q", "Q, 궁극기", "조종사 Q, 궁극기")가 궁극기인지."""
+    first = paren.split(",")[0].strip()
+    return "궁극기" in paren or (bool(first) and first.split()[-1] == "Q")
+
+
+def _tank_absorbs_damage(body: List[str]) -> bool:
+    """궁극기를 뺀 스킬 태그에 방벽·방울·투사체 무효화가 있는지."""
+    in_block = False
+    for line in body:
+        if line.startswith("- "):
+            in_block = line.strip().rstrip(":") == "- 스킬 데이터"
+            continue
+        if not in_block:
+            continue
+        match = _SKILL_LINE_RE.match(line)
+        if not match or _is_ultimate_skill(match.group(2)):
+            continue
+        tag_text = line[match.end():].split(";")[0]
+        tags = {tag.strip() for tag in re.split(r"[|,]", tag_text)}
+        if tags & _ABSORB_SKILL_TAGS:
+            return True
+    return False
+
+
+def _build_stat_types() -> Dict[str, str]:
+    types: Dict[str, str] = {}
+    text = read_source_markdown() or ""
+    for line in text.splitlines():
+        match = _STAT_TYPE_LINE_RE.match(line.strip())
+        if not match:
+            continue
+        type_key = _STAT_TYPE_KEYS[(match.group(1), match.group(2))]
+        for raw in match.group(3).split(","):
+            hero = resolve_hero_name(raw.strip())
+            if hero:
+                types[hero] = type_key
+
+    for hero, body in _hero_section_bodies().items():
+        if HERO_TO_ROLE.get(hero) == "tank":
+            types[hero] = "absorb_tank" if _tank_absorbs_damage(body) else "plain_tank"
+
+    logger.info("[STAT TYPES] 영웅 %d명 스탯 판정 유형 로드", len(types))
+    return types
+
+
+def get_hero_stat_types() -> Dict[str, str]:
+    """{영웅: 스탯 판정 유형} — 딜러·힐러는 메인·서브 이론 절, 탱커는 스킬 태그 기준."""
+    global _stat_types_cache
+    if _stat_types_cache is None:
+        _stat_types_cache = _build_stat_types()
+    return _stat_types_cache
 
 
 def skill_key_reference(heroes) -> str:

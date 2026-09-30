@@ -16,7 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from chat.rag import components as chatbot_service
 from chat.domain.heroes import ROLE_HEROES, normalize_hero_name
 from chat.rag.llm_utils import call_llm_text, safe_json_loads
-from chat.domain.prompts import stat_judgement_rules
+from chat.domain.prompts import stat_judgement_rules, stat_verdict_block
+from chat.domain.stat_verdicts import entries_from_scoreboard_rows
 
 logger = logging.getLogger(__name__)
 
@@ -2110,6 +2111,8 @@ TEAM_FEEDBACK_PROMPT_TEMPLATE = """너는 오버워치2 코치다. 방금 TAB �
 상대팀:
 {enemy_team_text}
 
+{stat_verdicts}
+
 {opponent_instruction}
 {recognition_instruction}
 
@@ -2130,7 +2133,7 @@ TEAM_FEEDBACK_PROMPT_TEMPLATE = """너는 오버워치2 코치다. 방금 TAB �
 {{
   "overview": "우리팀과 상대팀의 처치/죽음/피해량/치유량/경감량을 비교한 전체 교전 흐름 요약",
   "good_points": "우리팀에서 좋았던 점(높은 피해량/치유량, 낮은 데스, 높은 경감량 등)",
-  "concerns": "아쉬웠던 점(특정 역할군의 데스가 높거나 피해량/치유량이 낮은 경우, 역할 기준으로만)",
+  "concerns": "아쉬웠던 점(위 스탯 판정에서 약점으로 나온 지표만, 역할 기준으로. 약점 판정이 없으면 뚜렷한 약점이 없었다고 써라)",
   "next_tips": "다음 판 개선 방향(탱커/딜러/힐러 관점에서 바로 적용 가능한 운영 팁)"
 }}"""
 
@@ -2150,8 +2153,11 @@ def _generate_team_feedback(llm, my_team: List[Dict[str, Any]], enemy_team: List
     )
     # 인원수에 따라 배분이 달라지므로 실제 행 순서를 그대로 알려준다.
     my_team_role_order = ", ".join(e["role"] for e in my_team)
+    # 상대 영웅 인식이 불안정하면 상대 수치는 비교에 쓰지 않는다.
+    entries = entries_from_scoreboard_rows(my_team, enemy_team if enemy_ok else [])
     prompt = TEAM_FEEDBACK_PROMPT_TEMPLATE.format(
         stat_judgement_rules=stat_judgement_rules(),
+        stat_verdicts=stat_verdict_block(entries),
         my_team_role_order=my_team_role_order,
         my_team_text=_format_team_for_feedback(my_team),
         enemy_team_text=_format_team_for_feedback(enemy_team) if enemy_ok else "인식 실패/정보 부족",
@@ -2180,7 +2186,8 @@ PERSONAL_FEEDBACK_PROMPT_TEMPLATE = """너는 오버워치2 코치다. 본인은
 {role}({hero})로 플레이했고 다음 스탯을 기록했다.
 
 {stat_line}
-{enemy_counterpart_line}
+
+{stat_verdicts}
 
 본인 스탯을 중심으로 잘한 점과 아쉬운 점, 다음 판에 바로 적용할 팁 1~2가지를
 문단 서술로 3~4문장 이내로 작성해라. 마크다운 문법은 쓰지 말고, 확인되지 않은
@@ -2188,8 +2195,7 @@ PERSONAL_FEEDBACK_PROMPT_TEMPLATE = """너는 오버워치2 코치다. 본인은
 
 판단 기준:
 {stat_judgement_rules}
-- 위 비교 규칙은 "상대팀 같은 역할 스탯"이 함께 주어졌을 때만 적용한다.
-  주어지지 않았다면 본인 수치 안에서만 판단해라."""
+- 스탯 판정이 주어지지 않았다면 본인 수치 안에서만 판단해라."""
 
 
 def _self_feedback_eligible(self_row_idx: Optional[int], my_team: List[Dict[str, Any]]) -> bool:
@@ -2207,29 +2213,17 @@ def _self_feedback_eligible(self_row_idx: Optional[int], my_team: List[Dict[str,
     )
 
 
-def _generate_personal_feedback(
-    llm, self_entry: Dict[str, Any], enemy_counterpart: Optional[Dict[str, Any]] = None,
-) -> str:
+def _generate_personal_feedback(llm, self_entry: Dict[str, Any], stat_verdicts: str = "") -> str:
     kda = self_entry["kda"]
     stat_line = (
         f"K/D/A {_fmt_num(kda['kill'])}/{_fmt_num(kda['death'])}/{_fmt_num(kda['assist'])}, "
         f"피해량 {_fmt_num(self_entry.get('damage'))}, 치유량 {_fmt_num(self_entry.get('healing'))}, "
         f"경감량 {_fmt_num(self_entry.get('mitigation'))}"
     )
-    enemy_counterpart_line = ""
-    if enemy_counterpart is not None:
-        enemy_kda = enemy_counterpart["kda"]
-        enemy_counterpart_line = (
-            f"참고로 상대팀 같은 역할({enemy_counterpart['hero']})의 이번 판 스탯: "
-            f"K/D/A {_fmt_num(enemy_kda['kill'])}/{_fmt_num(enemy_kda['death'])}/{_fmt_num(enemy_kda['assist'])}, "
-            f"피해량 {_fmt_num(enemy_counterpart.get('damage'))}, "
-            f"치유량 {_fmt_num(enemy_counterpart.get('healing'))}, "
-            f"경감량 {_fmt_num(enemy_counterpart.get('mitigation'))}"
-        )
     prompt = PERSONAL_FEEDBACK_PROMPT_TEMPLATE.format(
         stat_judgement_rules=stat_judgement_rules(),
         role=self_entry["role"], hero=self_entry["hero"], stat_line=stat_line,
-        enemy_counterpart_line=enemy_counterpart_line,
+        stat_verdicts=stat_verdicts,
     )
     try:
         return call_llm_text(llm, prompt).strip()
@@ -2271,21 +2265,26 @@ def _build_stat_dict(team: List[Dict[str, Any]]) -> Dict[str, Any]:
             "assists": kda["assist"],
             "damage": e.get("damage"),
             "healing": e.get("healing"),
+            "mitigation": e.get("mitigation"),
         }
     return result
 
 
 def build_scoreboard_report(
     my_team: List[Dict[str, Any]], enemy_team: List[Dict[str, Any]],
-    team_feedback: Dict[str, str], personal_feedback: Optional[str],
+    team_feedback: Optional[Dict[str, str]], personal_feedback: Optional[str],
 ) -> str:
-    """사용자에게 그대로 보여줄 마크다운(진단 문구는 넣지 않는다)."""
+    """사용자에게 그대로 보여줄 마크다운(진단 문구는 넣지 않는다). 피드백이 없으면 표만 만든다."""
     lines = [
         "### 우리팀",
         _team_table(my_team),
         "",
         "### 상대팀",
         _team_table(enemy_team),
+    ]
+    if not team_feedback:
+        return "\n".join(lines)
+    lines += [
         "",
         "### 코치 피드백",
         "",
@@ -2310,10 +2309,14 @@ def build_scoreboard_report(
 # 전체 파이프라인
 # ============================================================
 
-def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", turn_id: Optional[str] = None) -> Dict[str, Any]:
+def analyze_scoreboard_image(
+    image_bytes: bytes, mime_type: str = "image/png", turn_id: Optional[str] = None,
+    with_feedback: bool = True,
+) -> Dict[str, Any]:
     """스탯창 스크린샷을 분석해 report(사용자용)와 admin_log(진단용)를 반환한다.
 
     turn_id를 넘기면 행별 crop을 디버그 폴더에 저장한다.
+    with_feedback=False면 코치 피드백 없이 표만 만든다.
     """
     cv2, np = _cv2_np()
 
@@ -2389,28 +2392,27 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
             entry["mitigation"] = stat["mitigation"]
 
         self_known = _self_feedback_eligible(self_row_idx, my_team)
-        enemy_counterpart = None
-        if self_known and enemy_ok:
-            # 행 인덱스가 아니라 role_code로 같은 역할 상대를 찾는다.
-            self_role_code = my_team[self_row_idx]["role_code"]
-            for candidate in enemy_team:
-                if candidate["role_code"] == self_role_code and candidate["hero"] != "unknown":
-                    enemy_counterpart = candidate
-                    break
-        # 두 피드백은 서로를 참조하지 않으므로 함께 실행한다.
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            team_future = executor.submit(
-                _generate_team_feedback, llm, my_team, enemy_team, enemy_ok, low_hero_recognition,
-            )
-            personal_future = (
-                executor.submit(
-                    _generate_personal_feedback, llm, my_team[self_row_idx], enemy_counterpart,
+        personal_verdicts = ""
+        if self_known and with_feedback:
+            personal_entries = entries_from_scoreboard_rows(my_team, enemy_team if enemy_ok else [])
+            personal_verdicts = stat_verdict_block(personal_entries, only_me=True)
+        team_feedback, personal_feedback = None, None
+        # 질문과 함께 올린 이미지는 채팅 답변이 스탯을 다루므로 코치 피드백을 만들지 않는다.
+        if with_feedback:
+            # 두 피드백은 서로를 참조하지 않으므로 함께 실행한다.
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                team_future = executor.submit(
+                    _generate_team_feedback, llm, my_team, enemy_team, enemy_ok, low_hero_recognition,
                 )
-                if self_known else None
-            )
+                personal_future = (
+                    executor.submit(
+                        _generate_personal_feedback, llm, my_team[self_row_idx], personal_verdicts,
+                    )
+                    if self_known else None
+                )
 
-            team_feedback = team_future.result()
-            personal_feedback = personal_future.result() if personal_future else None
+                team_feedback = team_future.result()
+                personal_feedback = personal_future.result() if personal_future else None
     else:
         # Gemini를 쓰지 않는 경우. 수치는 표에 "확인 필요"로 나간다.
         team_feedback = {
@@ -2418,7 +2420,7 @@ def analyze_scoreboard_image(image_bytes: bytes, mime_type: str = "image/png", t
             "good_points": "-",
             "concerns": "-",
             "next_tips": "-",
-        }
+        } if with_feedback else None
         self_known = False
         personal_feedback = None
 
