@@ -79,3 +79,4 @@ class ChatbotGraphState(TypedDict, total=False):
     focus_hero_pick: Optional[str]
     needs_focus_hero_clarify: bool
     previous_focus_heroes: List[str]
+    hero_side_unclear: List[str]

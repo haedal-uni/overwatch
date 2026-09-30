@@ -34,7 +34,7 @@ class ChatBot:
         chunk_overlap=0,
         search_k=10,
         embedding_device="cpu",
-        llm_model="gemini-3.1-flash-lite",
+        llm_model="gemini-3.5-flash-lite",
         temperature=0,
     ):
         load_dotenv()

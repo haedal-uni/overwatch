@@ -62,6 +62,17 @@ def retrieve_documents(retriever: Any, query: str) -> List[Any]:
     raise TypeError("retriever는 invoke 또는 get_relevant_documents 메서드를 가져야 합니다.")
 
 
+def retrieve_documents_batch(retriever: Any, queries: List[str]) -> List[List[Any]]:
+    """검색어들을 한 번에 임베딩한 뒤 검색어마다 벡터로 찾는다(결과는 queries 순서)."""
+    vectorstore = getattr(retriever, "vectorstore", None)
+    embeddings = getattr(vectorstore, "embeddings", None)
+    if len(queries) < 2 or embeddings is None or not hasattr(vectorstore, "similarity_search_by_vector"):
+        return [retrieve_documents(retriever, query) for query in queries]
+    k = (getattr(retriever, "search_kwargs", None) or {}).get("k", 4)
+    vectors = embeddings.embed_documents(list(queries))
+    return [vectorstore.similarity_search_by_vector(vector, k=k) for vector in vectors]
+
+
 def document_to_dict(doc: Any) -> Dict[str, Any]:
     if hasattr(doc, "page_content"):
         return {"content": doc.page_content, "metadata": getattr(doc, "metadata", {})}

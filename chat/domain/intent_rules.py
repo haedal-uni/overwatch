@@ -895,6 +895,36 @@ ROLE_CLARIFICATION_INTENTS = {
 }
 
 
+# 영웅 대 영웅으로 답해야 하는 상황 서술형 intent.
+HERO_CONTEXT_CLARIFICATION_INTENTS = {"situation", "stay", "performance_improve"}
+
+
+_ENEMY_MARKER_PATTERN = re.compile(r"상대|적팀|(?<![가-힣])적(?![가-힣])")
+
+
+def side_unclear_heroes(message: str) -> List[str]:
+    """영웅 이름만 있고 내 영웅인지 상대인지 표지("나", "상대")가 없으면 그 영웅들을 돌려준다."""
+    heroes = find_all_heroes(message)
+    if not heroes or mentions_self(message) or _ENEMY_MARKER_PATTERN.search(message):
+        return []
+    return heroes
+
+
+def should_ask_hero_context(state: ChatbotGraphState) -> bool:
+    """자기 영웅도 상대 영웅도 모르는 상황 질문이라 영웅부터 되물어야 하는지."""
+    if state.get("role_filter") or role_filter_from_text(state.get("message", "")):
+        return False
+    if state.get("intent") not in HERO_CONTEXT_CLARIFICATION_INTENTS:
+        return False
+    known = (
+        state.get("current_hero") or state.get("target_enemy") or state.get("enemy_team")
+        or state.get("focus_heroes") or state.get("ally_team") or state.get("my_team_stats")
+    )
+    if known or state.get("role_candidates_fresh"):
+        return False
+    return not find_all_heroes(state.get("message", ""))
+
+
 def should_ask_role_filter(state: ChatbotGraphState) -> bool:
     """역할을 알아낼 방법이 없어 4버튼으로 먼저 되물어야 하는지."""
     role_filter = state.get("role_filter")

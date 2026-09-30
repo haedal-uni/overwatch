@@ -93,6 +93,7 @@ from chat.domain.intent_rules import (  # noqa: F401
     roster_role_quota_text,
     roster_size_button_label,
     roster_size_label,
+    should_ask_hero_context,
     should_ask_role_filter,
     wants_composition_recommendation,
 )
@@ -115,6 +116,8 @@ from chat.graph.nodes_answer import (
 from chat.graph.nodes_context import (
     SESSION_TIMEOUT_SECONDS,  # noqa: F401
     clarify_focus_hero_node,
+    clarify_hero_context_node,
+    clarify_hero_side_node,
     clarify_role_filter_node,
     is_session_timed_out,  # noqa: F401
     llm_parse_context_node,
@@ -147,9 +150,13 @@ def route_after_parse_stats(state: ChatbotGraphState) -> str:
 def route_after_context_merge(state: ChatbotGraphState) -> str:
     if state.get("intent") == "off_topic":
         return "off_topic_response"
+    if state.get("hero_side_unclear"):
+        return "clarify_hero_side"
     # 기준 영웅 확정이 역할 확인보다 우선이다.
     if state.get("needs_focus_hero_clarify"):
         return "clarify_focus_hero"
+    if should_ask_hero_context(state):
+        return "clarify_hero_context"
     if should_ask_role_filter(state):
         return "clarify_role_filter"
     return "build_retrieval_queries"
@@ -191,6 +198,8 @@ def build_chatbot_graph():
     graph.add_node("merge_context", merge_context_node)
     graph.add_node("clarify_role_filter", clarify_role_filter_node)
     graph.add_node("clarify_focus_hero", clarify_focus_hero_node)
+    graph.add_node("clarify_hero_context", clarify_hero_context_node)
+    graph.add_node("clarify_hero_side", clarify_hero_side_node)
     graph.add_node("off_topic_response", off_topic_response_node)
     graph.add_node("build_retrieval_queries", build_retrieval_queries_node)
     graph.add_node("retrieve_docs", retrieve_docs_node)
@@ -211,11 +220,15 @@ def build_chatbot_graph():
         {
             "clarify_role_filter": "clarify_role_filter",
             "clarify_focus_hero": "clarify_focus_hero",
+            "clarify_hero_context": "clarify_hero_context",
+            "clarify_hero_side": "clarify_hero_side",
             "off_topic_response": "off_topic_response",
             "build_retrieval_queries": "build_retrieval_queries",
         })
     graph.add_edge("clarify_role_filter", "format_response")
     graph.add_edge("clarify_focus_hero", "format_response")
+    graph.add_edge("clarify_hero_context", "format_response")
+    graph.add_edge("clarify_hero_side", "format_response")
     graph.add_edge("off_topic_response", "format_response")
     graph.add_edge("build_retrieval_queries", "retrieve_docs")
     graph.add_conditional_edges("retrieve_docs", route_after_retrieve,

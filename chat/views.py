@@ -402,8 +402,13 @@ def chat_scoreboard_ocr(request):
         # 디버그 이미지 폴더 이름이 turn_id라 ChatLog도 같은 값을 쓴다.
         turn_id = str(uuid.uuid4())
 
+        # 질문과 함께 올린 이미지는 표만 만들고, 답은 이어지는 채팅 요청이 한다.
+        with_feedback = request.POST.get("with_feedback", "1") != "0"
+
         image_bytes = image_file.read()
-        result = analyze_scoreboard_image(image_bytes, mime_type=mime_type, turn_id=turn_id)
+        result = analyze_scoreboard_image(
+            image_bytes, mime_type=mime_type, turn_id=turn_id, with_feedback=with_feedback,
+        )
         admin_log = result.get("admin_log", {})
 
         save_chat_log(
