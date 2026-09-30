@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from chat.domain.answer_format import (
     _format_stat_text,
+    drop_single_role_labels,
     extract_inline_suggested_questions,
     fix_skill_keys,
     format_perk_answer,
@@ -41,8 +42,11 @@ from chat.domain.prompts import (
     SUGGESTED_QUESTIONS_INLINE_RULES,
     SUGGESTED_QUESTIONS_INLINE_SCHEMA_LINE,
     SUPPORT_DAMAGE_CONTRIBUTION_RULE,
+    ally_team_prompt_text,
     stat_judgement_rules,
+    stat_verdict_block,
 )
+from chat.domain.stat_verdicts import entries_from_stat_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +192,9 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
 - 내 스탯이 있으면: 딜량/킬/데스 수치를 언급하며 잘한 점과 개선할 점을 말해라.
 - 상대 스탯이 있으면: 딜량/킬이 높은 상대를 먼저 언급하고 어떻게 대처할지 설명해라.
 - 수치가 낮은 항목(예: 딜량 낮음, 데스 많음)의 원인과 해결책을 알려줘라.
-""" + stat_judgement_rules() + "\n" + SUPPORT_DAMAGE_CONTRIBUTION_RULE + """
+""" + stat_judgement_rules() + "\n" + SUPPORT_DAMAGE_CONTRIBUTION_RULE + "\n" + stat_verdict_block(
+                entries_from_stat_dicts(my_team_stats, enemy_stats, my_stats)
+            ) + """
 - 사용자가 팀원 중 누가 잘했는지/못했는지 순위를 묻는다면 전략 조언으로
   화제를 돌리며 회피하지 말고, 위에 주어진 실제 스탯을 근거로 직접 답해라.
   순위만 나열하고 끝내지 말고, 각 순위마다 왜 그 순서인지 근거가 되는
@@ -196,13 +202,15 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
   역할 판단 기준은 그대로 적용해라. 순위를 나열할 때는 "1위 ○○는 ...",
   "2위 ○○는 ..."처럼 순위마다 줄을 바꿔 한 문단씩 써라 — 여러 순위를
   한 문단에 이어 붙이지 마라.
+- 위 스탯 판정에 종합 점수 순위가 있으면 순위는 그 순서를 그대로 따르고,
+  아래 기준은 각 순위의 근거를 설명할 때 써라.
 - 순위를 매길 때 킬/데스/도움 숫자만으로 판단하지 마라. 딜량/힐량/경감량도
   반드시 함께 비교해서 실제 기여도를 판단해라. 킬 수가 가장 많다고 자동으로
   최상위가 아니다 — 같은 역할군의 다른 딜러(아군이든 상대든)와 딜량을
   비교해서, 킬은 많아도 딜량 자체는 다른 딜러와 비슷하거나 낮다면 화력
   기여를 과대평가하지 마라. 반대로 킬 수는 비슷해도 딜량이나 힐량이 더
   높은 쪽이 있다면 그 기여를 킬 수만으로 저평가하지 마라. 힐러의 딜량을
-  "힐러 항목이니까" 순위 판단에서 제외하지 마라 — 메르시가 아닌 힐러가
+  "힐러 항목이니까" 순위 판단에서 제외하지 마라 — 힐러가
   탱커/딜러급 딜량을 힐량 저하 없이 냈다면, 역할이 다르더라도 그 딜량을
   탱커/딜러의 딜량과 직접 맞대어 비교해 순위에 반영해라.
 - 사용자가 팀 전체 순위나 팀원 전체 평가를 물었다면(본인 스탯 개선을
@@ -229,7 +237,7 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                         f"{compared_list}는 역할이 달라 곧바로 비교할 수 없다는 이유로 "
                         "회피하지 마라. 절차: 1) 각 영웅을 상대팀에서 같은 역할인 "
                         "영웅과 먼저 비교해라(예: 딜러는 상대 딜러와 딜량/킬을, 힐러는 "
-                        "상대 힐러와 힐량/도움을 — 단, 힐러가 메르시가 아니고 딜량도 "
+                        "상대 힐러와 힐량/도움을 — 단, 힐러의 딜량이 "
                         "탱커/딜러에 준할 만큼 높다면 그 딜량도 반드시 함께 비교 근거에 "
                         "포함해라, 힐량/도움만 보고 딜량을 빼면 안 된다) — 상대와 비교해 "
                         "더 앞섰는지 판단해라. "
@@ -337,18 +345,57 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
 사용자가 그런 질문을 했다면 절대 회피하지 말고 명확히 판단해서 답해야 한다.
 ======================================="""
 
+        # 자기 영웅을 아는 상황 질문은 그 영웅으로 버티는 법이 먼저고, 교체 추천은 맨 끝에 붙인다.
+        playing_hero = state.get("current_hero")
+        swap_last = bool(playing_hero) and state.get("intent") == "situation"
+        swap_last_rule = (
+            f"본문은 {playing_hero}로 이 상황을 버티는 방법으로 채워라. 다른 영웅 추천은 "
+            "\"바로 할 것 3가지\" 뒤, 답변 맨 끝에만 \"영웅을 바꾼다면: 영웅1(역할), 영웅2(역할)\" "
+            "한 줄과 영웅마다 짧은 이유 1개로 최대 2명까지 적어라. 교체할 만한 영웅이 없으면 "
+            f"이 블록은 빼라. \"바로 할 것 3가지\"도 {playing_hero} 기준 행동으로만 채워라."
+        ) if swap_last else ""
+
+        # "바로 할 것 3가지"의 주어: 사용자 역할을 알면 그 역할, 모르면 아군과의 연계.
+        quick_actions_subject_rule = ""
+        explicit_roles = parse_role_filter(role_filter) if role_filter_explicit else []
+        if swap_last:
+            pass
+        elif current_hero and not current_hero_uncertain:
+            quick_actions_subject_rule = (
+                f" 이 목록은 사용자가 플레이하는 {current_hero} 입장에서 할 행동으로만 채워라."
+            )
+        elif len(explicit_roles) == 1:
+            quick_actions_subject_rule = (
+                f" 이 목록은 사용자가 맡은 {ROLE_LABELS[explicit_roles[0]]} 입장에서 할 행동으로만 채워라."
+            )
+        elif display_ally_team:
+            quick_actions_subject_rule = (
+                f" 사용자가 어떤 영웅을 플레이하는지 모른다 — 질문에 나온 {', '.join(display_ally_team)}는 "
+                "사용자 본인이 아니라 팀원일 수 있다. 이 목록을 한 영웅의 행동으로 쓰지 말고, "
+                "그 아군과 추천 영웅이 함께 하는 연계 플레이로 적어라"
+                "(형식: \"연계 이름: A가 ~하면 B는 ~\", 예: \"한 대상 집중: A가 적을 끊으면 "
+                "B가 고립된 적을 함께 공격\")."
+            )
+
         if is_simple_style:
+            if swap_last:
+                simple_recommend_rule = f"2. {swap_last_rule} 이유는 \"- \"로 시작하는 줄로 적어라.\n"
+            else:
+                simple_recommend_rule = (
+                    "2. 추천 영웅이 있으면 \"추천 영웅: 영웅1, 영웅2\" 한 줄 뒤 영웅마다 이름 줄과 "
+                    "\"- \"로 시작하는 짧은 이유 1~2개를 적어라. 이 블록은 답변 전체에 한 번만 "
+                    "만들어라 — 여러 역할을 함께 추천하더라도 블록을 역할마다 따로 만들지 말고 "
+                    "한 블록에 모아 적고, 이름 옆 괄호로 역할을 밝혀라(예: 윈스턴(탱커)). "
+                    "추천이 모두 같은 역할이면 괄호 없이 이름만 적어라. "
+                    "없으면(운영 개선/유지 등) 이 블록 없이 서론 없이 바로 4번만 적어라.\n"
+                )
             style_rules_1to5 = (
                 "1. 문단 대신 핵심 아이디어당 한 줄, \\n으로 구분해라. 격식체 종결(~입니다 등) "
                 "대신 \"~하기 좋음\", \"~가능\" 같은 짧은 구로 끝내고, 질문에 나온 영웅/상대를 "
                 "되짚는 서두 없이 바로 본론부터 써라. 같은 섹션 안 항목은 빈 줄 없이 \\n으로만 "
                 "구분하고, 빈 줄은 섹션 사이에만 써라.\n"
-                "2. 추천 영웅이 있으면 \"추천 영웅: 영웅1, 영웅2\" 한 줄 뒤 영웅마다 이름 줄과 "
-                "\"- \"로 시작하는 짧은 이유 1~2개를 적어라. 이 블록은 답변 전체에 한 번만 "
-                "만들어라 — 여러 역할을 함께 추천하더라도 블록을 역할마다 따로 만들지 말고 "
-                "한 블록에 모아 적고, 이름 옆 괄호로 역할을 밝혀라(예: 윈스턴(탱커)). "
-                "없으면(운영 개선/유지 등) 이 블록 없이 서론 없이 바로 4번만 적어라.\n"
-                "3. 스킬은 단축키를 괄호로 붙여라(단축키는 '스킬 단축키 참고' 표 그대로)."
+                + simple_recommend_rule
+                + "3. 스킬은 단축키를 괄호로 붙여라(단축키는 '스킬 단축키 참고' 표 그대로)."
             )
             if is_hero_comparison_question:
                 # 비교 질문은 "3가지"를 강제하지 않는다.
@@ -358,8 +405,9 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 )
             else:
                 style_rules_1to5 += (
-                    "\n4. 마지막에 \"바로 할 것 3가지\" 아래 1~3개 항목을 \"1. \", \"2. \" "
-                    "숫자 목록으로 적어라."
+                    f"\n4. {'본문 뒤에' if swap_last else '마지막에'} \"바로 할 것 3가지\" 아래 "
+                    "1~3개 항목을 \"1. \", \"2. \" 숫자 목록으로 적어라."
+                    + quick_actions_subject_rule
                 )
             stay_preference_instruction = (
                 "\"추천 영웅\" 블록과 서두 결론 문장 없이 핵심 운영 아이디어부터 한 줄씩 "
@@ -379,10 +427,14 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "   운영 팁부터 늘어놓지 말고, 먼저 그 질문에 직접 답한 뒤 이유와 팁을 "
                 "설명해라.\n"
                 "2. 영웅 교체를 추천할 때는 위 허용 목록 안에서만 골라라.\n"
-                "   추천 영웅 목록은 답변 전체에 한 번만 만들어라 — 여러 역할을 함께 "
-                "추천하더라도 역할마다 목록을 따로 만들지 말고 한 곳에 모아 적고,\n"
-                "   이름 옆 괄호로 역할을 밝혀라(예: 윈스턴(탱커)).\n"
-                "3. 힐 부족·팀 문제처럼 현재 역할로 해결하기 어려운 상황이라면,\n"
+                + (
+                    f"   {swap_last_rule}\n" if swap_last else
+                    "   추천 영웅 목록은 답변 전체에 한 번만 만들어라 — 여러 역할을 함께 "
+                    "추천하더라도 역할마다 목록을 따로 만들지 말고 한 곳에 모아 적고,\n"
+                    "   이름 옆 괄호로 역할을 밝혀라(예: 윈스턴(탱커)). 추천이 모두 같은 역할이면 "
+                    "괄호 없이 이름만 적어라.\n"
+                )
+                + "3. 힐 부족·팀 문제처럼 현재 역할로 해결하기 어려운 상황이라면,\n"
                 "   역할 변경 대신 \"현재 영웅으로 생존력을 높이는 법\" 또는 \"힐팩 활용\" 등 "
                 "대안을 제시해라.\n"
                 "4. 스킬명에 단축키를 같이 써라(단축키는 '스킬 단축키 참고' 표 그대로)."
@@ -393,7 +445,11 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                     "아니라 비교 결론을 원했다."
                 )
             else:
-                style_rules_1to5 += "\n5. 마지막에 \"바로 적용할 것 3가지\"를 적어라."
+                style_rules_1to5 += (
+                    "\n5. 본문 뒤에 \"바로 적용할 것 3가지\"를 적고, 2번의 교체 블록은 그 뒤에 둬라."
+                    if swap_last else "\n5. 마지막에 \"바로 적용할 것 3가지\"를 적어라."
+                    + quick_actions_subject_rule
+                )
             stay_preference_instruction = (
                 "첫 문장은 반드시 \"그 영웅을 유지해도 된다\" 또는 \"불리하지만 운영으로 풀 수 "
                 "있다\"처럼\n"
@@ -561,7 +617,7 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
 - 맵: {state.get("map_name")}
 - 공격/수비: {state.get("side")}
 - 상대 조합: {display_enemy_team}
-- 아군 조합: {', '.join(display_ally_team) if display_ally_team else "없음"}
+- 아군 조합: {ally_team_prompt_text(display_ally_team)}
 - 질문 의도: {state.get("intent")}
 - 전략 판단: {state.get("recommendation_type") or "없음(직접 판단해라)"}
 - 추천 영웅 후보: {state.get("recommended_heroes", [])}
@@ -1317,6 +1373,8 @@ def format_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
     # 스킬 단축키는 LLM이 틀리게 쓰는 일이 잦아 원본 문서 표로 다시 맞춘다.
     skill_keys = get_skill_keys()
     answer = fix_skill_keys(answer, skill_keys)
+    # 추천이 한 역할뿐이면 이름 옆 역할 괄호는 군더더기다.
+    answer = drop_single_role_labels(answer)
     matchup_card = _fix_card_skill_keys(state.get("matchup_card"), skill_keys)
     recommend_card = _fix_card_skill_keys(state.get("recommend_card"), skill_keys)
 

@@ -60,6 +60,7 @@ from chat.domain.intent_rules import (
     resolve_roster_size,
     role_filter_from_text,
     roster_size_button_label,
+    side_unclear_heroes,
     wants_composition_recommendation,
 )
 from chat.rag.llm_utils import call_llm_text, safe_json_loads
@@ -592,6 +593,17 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     focus_hero_pick = normalize_hero_name(state.get("focus_hero_pick")) if state.get("focus_hero_pick") else None
     focus_hero_reply_consumed = bool(awaiting_focus_hero_reply and focus_hero_pick)
 
+    # 영웅 되묻기에 영웅 이름으로 답한 턴이면 원래 질문에 그 답을 붙여 다시 답한다.
+    awaiting_hero_context_reply = bool(context.get("pending_question")) and pending_intent == "clarify_heroes"
+    # 이름만 답해 내 영웅인지 상대인지 모르면 추측하지 않고 한 번 더 묻는다.
+    hero_side_unclear = (
+        side_unclear_heroes(message) if awaiting_hero_context_reply and not explicit_role_filter else []
+    )
+    hero_context_reply_consumed = bool(
+        awaiting_hero_context_reply and not explicit_role_filter and find_all_heroes(message)
+        and not hero_side_unclear
+    )
+
     # 답변 스타일은 이번 턴 값 우선, 없으면 세션 값.
     requested_answer_style = state.get("answer_style")
     if requested_answer_style not in ("simple", "detailed"):
@@ -604,7 +616,10 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     effective_message = message
     # 직전 질문을 새 조건으로 다시 답하는 턴인지(LLM 추출값이 비어 아래에서 보완).
     resumed_previous_question = False
-    if role_filter_reply_consumed or focus_hero_reply_consumed:
+    if hero_context_reply_consumed:
+        effective_message = f"{context.get('pending_question')}\n{message}"
+        logger.info("[HERO CONTEXT REPLY] 되묻기 답('%s')을 원래 질문에 붙여 다시 답함", message)
+    elif role_filter_reply_consumed or focus_hero_reply_consumed:
         effective_message = context.get("pending_question")
     elif explicit_role_filter or declared_roster_size:
         # 버튼 정정과 말로 한 정정을 똑같이 처리한다 — 직전 질문을 다시 태운다.
@@ -642,6 +657,9 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     swap_guard_triggered = state.get("swap_guard_triggered", False)
 
     intent       = llm_intent or infer_intent_by_rule(effective_message, context)
+    # 되묻기 답만 보면 의도가 흐려지므로 원래 질문의 의도를 따른다.
+    if hero_context_reply_consumed and context.get("pending_question_intent"):
+        intent = context["pending_question_intent"]
     current_hero = llm_current_hero or infer_current_hero(effective_message, context, intent)
     if current_hero and hero_negated_as_self(current_hero, message):
         logger.info("[SELF HERO NEGATED] '%s'는 자기 영웅이 아니라고 밝혀 current_hero에서 제거함", current_hero)
@@ -683,6 +701,26 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         current_hero = None
         llm_hero_role = None
         llm_current_hero_confirmed = False
+
+    # 이번 메시지에서 아군 팀원으로 언급된 영웅은 자기 선언 없이 자기 영웅이 될 수 없다.
+    if current_hero and current_hero == llm_current_hero and not llm_current_hero_confirmed:
+        complaint_hero = find_ally_complaint_hero(effective_message)
+        allies_named_this_turn = {
+            normalize_hero_name(h) for h in (
+                (state.get("llm_ally_team") or [])
+                + extract_ally_team(effective_message)
+                + find_synergy_ally_heroes(effective_message)
+                + ([complaint_hero] if complaint_hero else [])
+            )
+        }
+        if current_hero in allies_named_this_turn:
+            logger.info(
+                "[CURRENT HERO IS ALLY] '%s'는 이번 메시지에서 아군으로 언급됐고 자기 선언이 없어 "
+                "current_hero에서 제거함: %s",
+                current_hero, effective_message,
+            )
+            current_hero = None
+            llm_hero_role = None
 
     # 아래 여러 가드가 공유한다. 조합 나열 속 이름은 자기 선언으로 보지 않는다.
     current_hero_explicit_this_turn = bool(
@@ -1173,6 +1211,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     if awaiting_role_filter_reply or awaiting_focus_hero_reply:
         context_patch["pending_question"] = None
         context_patch["pending_intent"] = None
+        context_patch["pending_question_intent"] = None
 
     if target_enemy:
         context_patch["target_enemy"] = target_enemy
@@ -1302,6 +1341,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "choice_buttons": answer_choice_buttons,
         "focus_heroes": focus_heroes,
         "needs_focus_hero_clarify": needs_focus_hero_clarify,
+        "hero_side_unclear": hero_side_unclear,
         "previous_focus_heroes": previous_focus_heroes,
         # 짧은 후속 질문의 배경으로 쓰는 직전 턴 메시지.
         "previous_user_message": context.get("last_user_message") or context.get("last_effective_message"),
@@ -1390,9 +1430,10 @@ def clarify_role_filter_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
     choice_buttons = build_role_choice_buttons(role_candidates)
 
+    # 되묻기 답을 붙여 다시 답하는 턴이면 합친 질문을 기다려야 원래 질문이 이어진다.
     context_patch = {
         **state.get("context_patch", {}),
-        "pending_question": message,
+        "pending_question": (state.get("context_patch") or {}).get("last_effective_message") or message,
         "pending_intent": "counter",
     }
     if target_enemy:
@@ -1402,6 +1443,83 @@ def clarify_role_filter_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "answer": answer,
         "choice_buttons": choice_buttons,
         # 되묻는 답변에는 판단 근거 문구를 붙이지 않는다.
+        "role_basis_note": "",
+        "context_patch": context_patch,
+        "result": {
+            "answer": answer,
+            "type": "role_filter",
+            "choice_buttons": choice_buttons,
+            "suggested_questions": [],
+            "context_patch": context_patch,
+        },
+    }
+
+
+HERO_CONTEXT_QUESTION = "내 영웅과 상대 영웅을 알려주세요. 예: 나 아나, 상대 겐지 트레이서"
+
+
+def clarify_hero_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
+    """영웅 없이 상황만 말한 질문에 자기 영웅과 상대 영웅을 되묻는다(역할만 골라 답받을 수도 있다)."""
+    choice_buttons = [
+        {"label": "내가 탱커", "value": "tank", "type": "role_filter"},
+        {"label": "내가 딜러", "value": "damage", "type": "role_filter"},
+        {"label": "내가 힐러", "value": "support", "type": "role_filter"},
+        {"label": "그냥 알려주세요", "value": "all", "type": "role_filter"},
+    ]
+    context_patch = {
+        **state.get("context_patch", {}),
+        "pending_question": state.get("message", ""),
+        "pending_intent": "clarify_heroes",
+        "pending_question_intent": state.get("intent"),
+    }
+    return {
+        "answer": HERO_CONTEXT_QUESTION,
+        "choice_buttons": choice_buttons,
+        "role_basis_note": "",
+        "context_patch": context_patch,
+        "result": {
+            "answer": HERO_CONTEXT_QUESTION,
+            "type": "role_filter",
+            "choice_buttons": choice_buttons,
+            "suggested_questions": [],
+            "context_patch": context_patch,
+        },
+    }
+
+
+def clarify_hero_side_node(state: ChatbotGraphState) -> ChatbotGraphState:
+    """영웅 이름만 답해 내 영웅인지 상대인지 모를 때 묻는다(버튼은 그 뜻의 문장을 대신 보낸다)."""
+    heroes = state.get("hero_side_unclear") or []
+    if len(heroes) == 1:
+        hero = heroes[0]
+        answer = f"{hero}, 내 영웅인가요 상대 영웅인가요?"
+        choice_buttons = [
+            {"label": "내 영웅이에요", "value": f"나 {hero}", "type": "message"},
+            {"label": "상대 영웅이에요", "value": f"상대 {hero}", "type": "message"},
+        ]
+    else:
+        answer = f"{', '.join(heroes)} 중에 내 영웅이 있나요?"
+        choice_buttons = [
+            {
+                "label": f"내가 {hero}",
+                "value": f"나 {hero}, 상대 {' '.join(h for h in heroes if h != hero)}",
+                "type": "message",
+            }
+            for hero in heroes
+        ]
+        choice_buttons.append({"label": "모두 상대", "value": f"상대 {' '.join(heroes)}", "type": "message"})
+
+    # 원래 질문을 계속 기다린다(이번 답에서 잡힌 영웅은 세션에 남기지 않는다).
+    context = state.get("conversation_context", {}) or {}
+    context_patch = {
+        "pending_question": context.get("pending_question"),
+        "pending_intent": "clarify_heroes",
+        "pending_question_intent": context.get("pending_question_intent"),
+        "last_message_ts": (state.get("context_patch") or {}).get("last_message_ts", time.time()),
+    }
+    return {
+        "answer": answer,
+        "choice_buttons": choice_buttons,
         "role_basis_note": "",
         "context_patch": context_patch,
         "result": {

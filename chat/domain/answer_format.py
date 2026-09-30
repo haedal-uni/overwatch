@@ -7,6 +7,8 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
+from chat.domain.heroes import HERO_NAME_TO_CANONICAL, HERO_TO_ROLE
+
 logger = logging.getLogger(__name__)
 
 
@@ -339,6 +341,8 @@ def _format_stat_text(stats: Dict[str, Any], label: str = "") -> str:
             parts.append(f"딜량 {s['damage']}")
         if s.get("healing") is not None:
             parts.append(f"힐량 {s['healing']}")
+        if s.get("mitigation") is not None:
+            parts.append(f"경감량 {s['mitigation']}")
         lines.append(f"- {hero}: {', '.join(parts)}")
     return "\n".join(lines)
 
@@ -380,3 +384,26 @@ def fix_skill_keys(text: str, skill_keys: Dict[str, Dict[str, str]]) -> str:
         return f"{name}({shown})"
 
     return pattern.sub(_replace, text)
+
+
+_ROLE_LABEL_TO_KEY = {"탱커": "tank", "딜러": "damage", "힐러": "support"}
+_HERO_ROLE_LABEL_RE = re.compile(
+    r"(?<![가-힣A-Za-z])("
+    + "|".join(re.escape(n) for n in sorted(HERO_NAME_TO_CANONICAL, key=len, reverse=True))
+    + r")\s*\((탱커|딜러|힐러)\)"
+)
+
+
+def drop_single_role_labels(answer: str) -> str:
+    """영웅 이름 뒤 "(역할)" 표기가 모두 같은 역할이면 괄호를 지운다."""
+    if not answer:
+        return answer
+    matches = [
+        m for m in _HERO_ROLE_LABEL_RE.finditer(answer)
+        if HERO_TO_ROLE.get(HERO_NAME_TO_CANONICAL[m.group(1)]) == _ROLE_LABEL_TO_KEY[m.group(2)]
+    ]
+    if not matches or len({_ROLE_LABEL_TO_KEY[m.group(2)] for m in matches}) > 1:
+        return answer
+    for m in reversed(matches):
+        answer = answer[:m.start()] + m.group(1) + answer[m.end():]
+    return answer

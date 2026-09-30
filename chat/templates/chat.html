@@ -233,8 +233,41 @@
       margin-top: 8px
     }
 
-    .status-row:first-child {
-      margin-top: 0
+    .status-title {
+      font-size: 13px;
+      font-weight: 800;
+      margin-bottom: 8px
+    }
+
+    .recent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 10px
+    }
+
+    .recent-item {
+      text-align: left;
+      border: 1px solid var(--line);
+      background: var(--card-solid);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 7px 10px;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: .16s;
+    }
+
+    .recent-item:hover {
+      border-color: var(--primary)
+    }
+
+    .recent-empty {
+      font-size: 12px;
+      color: var(--muted)
     }
 
     .status-value {
@@ -1765,14 +1798,79 @@
       cursor: not-allowed
     }
 
-    .upload-spin {
-      animation: upload-spin .8s linear infinite
+    .attach-preview {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--card-solid);
+      max-width: 100%;
     }
 
-    @keyframes upload-spin {
-      to {
-        transform: rotate(360deg)
-      }
+    .attach-preview[hidden] {
+      display: none
+    }
+
+    .attach-preview img {
+      width: 56px;
+      height: 36px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      flex: 0 0 auto;
+    }
+
+    .attach-preview .attach-name {
+      flex: 1;
+      min-width: 0;
+      font-size: 13px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .attach-preview .attach-remove {
+      width: 28px;
+      height: 28px;
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .attach-preview .attach-remove:hover {
+      color: var(--danger);
+      border-color: var(--danger)
+    }
+
+    .scoreboard-fold {
+      margin-bottom: 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--soft);
+      padding: 8px 12px;
+    }
+
+    .scoreboard-fold summary {
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .scoreboard-fold[open] summary {
+      margin-bottom: 6px
+    }
+
+    .scoreboard-fold .fold-body {
+      overflow-x: auto
     }
 
     .composer-hint {
@@ -2197,7 +2295,7 @@
           <button class="role-btn active" data-role="all">전체</button>
           <button class="role-btn" data-role="tank">탱커</button>
           <button class="role-btn" data-role="dps">딜러</button>
-          <button class="role-btn" data-role="support">지원가</button>
+          <button class="role-btn" data-role="support">힐러</button>
         </div>
       </div>
 
@@ -2207,8 +2305,8 @@
       </div>
 
       <div class="status-card">
-        <div class="status-row"><span>질문 수</span><span class="status-value" id="questionCount">0</span></div>
-        <div class="status-row"><span>세션 시간</span><span class="status-value" id="sessionTime">00:00</span></div>
+        <div class="status-title">최근 질문</div>
+        <div class="recent-list" id="recentList"></div>
         <div class="status-row"><span>상태</span><span class="status-value" style="color:var(--success)">준비 완료</span>
         </div>
       </div>
@@ -2262,7 +2360,7 @@
       <section class="messages" id="messages">
         <div class="welcome" id="welcome">
           <div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div>
-          <h2>게임 상황을 알려주세요</h2>
+          <h2>게임 상황을 적어주세요</h2>
           <p>탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지<br>붙여서 써주시면 더 정확하게 이해할 수 있어요.</p>
           <div class="sample-chips">
             <button class="chip" data-fill="겐지 카운터 알려줘">카운터</button>
@@ -2281,6 +2379,11 @@
           <button type="button" class="style-btn" data-style="detailed" title="복기·학습용 자세한 설명">자세히</button>
           <span class="style-toggle-hint full">영웅 플레이·스탯 피드백·맵 운영처럼 글로 답하는 질문에 적용돼요 (카운터·조합 추천 카드는 차이가 거의 없어요)</span>
           <span class="style-toggle-hint compact">영웅 플레이·스탯 피드백·맵 운영에만 적용돼요</span>
+        </div>
+        <div class="attach-preview" id="attachPreview" hidden>
+          <img id="attachThumb" alt="첨부한 스탯창 이미지">
+          <span class="attach-name" id="attachName"></span>
+          <button type="button" class="attach-remove" id="attachRemove" title="첨부 취소" aria-label="첨부 취소">×</button>
         </div>
         <div class="input-box">
           <textarea id="userInput" rows="1" placeholder="질문을 입력하세요. Enter 전송, Shift+Enter 줄바꿈"></textarea>
@@ -2337,7 +2440,7 @@
       dps: [['DPS', '겐지 질풍참 타이밍 알려줘'], ['DPS', '솜브라 EMP 타이밍 알려줘'], ['COUNTER', '트레이서 카운터 알려줘']],
       support: [['SUPPORT', '아나 수면총 타이밍 알려줘'], ['SUPPORT', '키리코 정화 언제 써야 해?'], ['SUPPORT', '루시우 밀기 맵 운영 알려줘']]
     };
-    let state = { map: null, side: '', q: 0, start: Date.now(), busy: false, answerStyle: 'simple', history: [] };
+    let state = { map: null, side: '', busy: false, answerStyle: 'simple', history: [] };
 
     const $ = (id) => document.getElementById(id);
     const messages = $('messages');
@@ -2516,14 +2619,38 @@
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 
     // ── 스탯창(TAB) 이미지 업로드 ──
-    // 이미지를 고르면 곧바로 서버로 보내고 결과를 AI 메시지로 보여준다.
+    // 이미지를 고르면 입력창 위에 첨부만 해 두고, 전송할 때 질문과 함께 보낸다.
     const uploadBtn = $('uploadBtn');
     const screenshotInput = $('screenshotInput');
     const composerHintText = $('composerHintText');
     const composerHintDefault = composerHintText ? composerHintText.textContent : '';
+    const attachPreview = $('attachPreview');
+    const attachThumb = $('attachThumb');
+    const attachName = $('attachName');
+    let pendingImage = null;
+    let pendingImageUrl = null;
+
+    function attachImage(file) {
+      clearAttachedImage();
+      pendingImage = file;
+      pendingImageUrl = URL.createObjectURL(file);
+      attachThumb.src = pendingImageUrl;
+      attachName.textContent = file.name || '스탯창 이미지';
+      attachPreview.hidden = false;
+      if (composerHintText) composerHintText.textContent = '🖼 궁금한 점을 적어 함께 보내세요. 비워두고 보내면 전체 분석을 보여드려요.';
+      input.focus();
+    }
+    function clearAttachedImage() {
+      if (pendingImageUrl) URL.revokeObjectURL(pendingImageUrl);
+      pendingImage = null; pendingImageUrl = null;
+      attachThumb.removeAttribute('src');
+      attachPreview.hidden = true;
+      screenshotInput.value = '';
+      if (composerHintText) composerHintText.textContent = composerHintDefault;
+    }
+    $('attachRemove')?.addEventListener('click', () => { clearAttachedImage(); input.focus(); });
 
     const UPLOAD_ICON = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>';
-    const UPLOAD_SPINNER_ICON = '<svg viewBox="0 0 24 24" width="19" height="19" class="upload-spin"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="40 100"/></svg>';
     if (uploadBtn) uploadBtn.innerHTML = UPLOAD_ICON;
 
     function formatScoreboardResult(data) {
@@ -2532,31 +2659,40 @@
       return '📋 스탯창을 분석했지만 표시할 내용이 없습니다.';
     }
 
-    async function uploadScoreboard(file) {
-      uploadBtn.disabled = true;
-      uploadBtn.innerHTML = UPLOAD_SPINNER_ICON;
-      uploadBtn.title = '이미지 분석 중...';
-      if (composerHintText) composerHintText.textContent = '🖼 이미지를 분석하고 있습니다...';
+    async function requestScoreboard(file, withFeedback) {
+      const formData = new FormData();
+      formData.append('image', file, file.name || 'scoreboard.png');
+      formData.append('with_feedback', withFeedback ? '1' : '0');
+      const res = await fetch('/chat/api/scoreboard/', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': getCsrf() },
+        body: formData,
+      });
+      const data = await parseJsonOrThrow(res);
+      if (!res.ok || data.error) throw new Error(data.error || '이미지 분석에 실패했습니다.');
+      return data;
+    }
 
+    // 질문이 있으면 표는 접어서 답 위에 붙이고, 없으면 지금처럼 표+코치 피드백을 보여준다.
+    async function sendWithImage(file, text) {
+      addMessage('user', text || '스탯창 분석해줘', { context: '스탯창 이미지 첨부', stats: text ? hasStats(text) : false, recent: Boolean(text) });
+      input.value = ''; autoResize();
+      clearAttachedImage();
+      state.busy = true; sendBtn.disabled = true; uploadBtn.disabled = true; addTyping();
       try {
-        const formData = new FormData();
-        formData.append('image', file, file.name || 'scoreboard.png');
-        const res = await fetch('/chat/api/scoreboard/', {
-          method: 'POST',
-          headers: { 'X-CSRFToken': getCsrf() },
-          body: formData,
-        });
-        const data = await parseJsonOrThrow(res);
-        if (!res.ok || data.error) throw new Error(data.error || '이미지 분석에 실패했습니다.');
-        addMessage('ai', formatScoreboardResult(data), { turnId: data.turn_id });
+        const board = await requestScoreboard(file, !text);
+        if (!text) {
+          removeTyping();
+          addMessage('ai', formatScoreboardResult(board), { turnId: board.turn_id });
+          return;
+        }
+        const data = await requestChat(buildRequestBody(text));
+        removeTyping();
+        addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card, scoreboardTable: board.report });
       } catch (err) {
-        showError(err.message || '이미지 분석에 실패했습니다.');
+        removeTyping(); showError(err.message || '이미지 분석에 실패했습니다.');
       } finally {
-        uploadBtn.disabled = false;
-        uploadBtn.innerHTML = UPLOAD_ICON;
-        uploadBtn.title = '스탯창(TAB) 스크린샷 업로드';
-        if (composerHintText) composerHintText.textContent = composerHintDefault;
-        screenshotInput.value = '';
+        state.busy = false; sendBtn.disabled = false; uploadBtn.disabled = false; input.focus();
       }
     }
 
@@ -2587,7 +2723,7 @@
     });
     screenshotInput?.addEventListener('change', () => {
       const file = screenshotInput.files?.[0];
-      if (file) uploadScoreboard(file);
+      if (file) attachImage(file);
     });
 
     // ── 전체 상성표 모달 ──
@@ -2604,9 +2740,9 @@
       return (code >= 0xAC00 && code <= 0xD7A3 && (code - 0xAC00) % 28 !== 0) ? '이' : '가';
     }
     const MATCHUP_GROUPS = [
-      { key: 'hard', title: (hero) => `${hero}에게 강한 영웅`, badge: (score) => `위협 ${score}/5` },
-      { key: 'easy', title: (hero) => `${hero}${josaIGa(hero)} 강한 영웅`, badge: (score) => `우세 ${score}/5` },
-      { key: 'mixed', title: () => '상황에 따라 갈림', badge: () => '엇갈림' },
+      { key: 'hard', title: (hero) => `${hero}에게 강한 영웅`, badge: (score) => `불리 ${score}/5` },
+      { key: 'easy', title: (hero) => `${hero}${josaIGa(hero)} 강한 영웅`, badge: (score) => `유리 ${score}/5` },
+      { key: 'mixed', title: () => '상황에 따라 갈림', badge: () => '팽팽' },
     ];
     let matchupOverlay = null;
     let matchupRole = 'tank';
@@ -2657,6 +2793,8 @@
               <button type="button" class="mx-ask-btn" data-mx-question="${escapeHtml(item.question)}">공략법 ›</button>
             </div>`;
         }).join('');
+        // "상황에 따라 갈림"은 없는 영웅이 많아 빈 묶음을 띄우지 않는다.
+        if (!rows && group.key === 'mixed') return '';
         const inner = rows || `<div class="mx-empty">문서에 기록된 상대가 없어요.</div>`;
         return `
           <div class="mx-group mx-group-${group.key}">
@@ -2752,12 +2890,30 @@
         btn.classList.add('suggest-btn-used');
       });
     }
+    // 사이드바 "최근 질문": 직접 입력한 질문만, 최신순 3개(누르면 입력창에 다시 채운다).
+    const MAX_RECENT_QUESTIONS = 3;
+    function renderRecent() {
+      const list = $('recentList');
+      if (!list) return;
+      const seen = new Set();
+      const recent = [];
+      for (let i = state.history.length - 1; i >= 0 && recent.length < MAX_RECENT_QUESTIONS; i--) {
+        const m = state.history[i];
+        if (m.role !== 'user' || !m.options?.recent || seen.has(m.text)) continue;
+        seen.add(m.text); recent.push(m.text);
+      }
+      list.innerHTML = recent.length
+        ? recent.map(q => `<button type="button" class="recent-item" data-fill="${escapeHtml(q)}" title="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join('')
+        : '<div class="recent-empty">아직 질문이 없어요</div>';
+    }
+
     function addMessage(role, text, options = {}) {
       $('welcome')?.remove();
       disableOldChoiceButtons();
       // 저장된 대화를 재생할 때는 history에 다시 쌓지 않도록 막는다.
       if (!options.skipHistory) {
         state.history.push({ role, text, options });
+        if (options.recent) renderRecent();
       }
       const row = document.createElement('div');
       row.className = `msg ${role}`;
@@ -2774,6 +2930,11 @@
         if (badges.length) bubble.innerHTML += `<div class="badges">${badges.map(b => `<span class="badge">${escapeHtml(b)}</span>`).join('')}</div>`;
       }
       if (role === 'ai') {
+        if (options.scoreboardTable) {
+          const fold = document.createElement('details'); fold.className = 'scoreboard-fold';
+          fold.innerHTML = `<summary>스탯창 인식 결과 보기</summary><div class="fold-body">${simpleMarkdown(options.scoreboardTable)}</div>`;
+          bubble.prepend(fold);
+        }
         if (options.matchupCard) {
           const card = buildMatchupCard(options.matchupCard);
           if (card) bubble.appendChild(card);
@@ -2874,6 +3035,8 @@
           if (item.type === 'role_filter') sendRoleFilter(item.value, item.label);
           else if (item.type === 'focus_hero') sendFocusHero(item.value, item.label);
           else if (item.type === 'roster_size') sendRosterSize(item.value, item.label);
+          // 버튼이 뜻하는 문장(예: "상대 트레이서")을 사용자가 입력한 것처럼 보낸다.
+          else if (item.type === 'message') { if (!state.busy) { input.value = item.value; sendMessage(); } }
           else { input.value = item.label; autoResize(); input.focus(); }
         });
         box.appendChild(btn); has = true;
@@ -2964,11 +3127,13 @@
       return data;
     }
     async function sendMessage() {
-      const text = input.value.trim(); if (!text || state.busy) return;
+      const text = input.value.trim();
+      if (state.busy) return;
+      if (pendingImage) { sendWithImage(pendingImage, text); return; }
+      if (!text) return;
       const ctx = contextLabel();
-      addMessage('user', text, { stats: hasStats(text), context: ctx });
+      addMessage('user', text, { stats: hasStats(text), context: ctx, recent: true });
       input.value = ''; autoResize();
-      state.q++; $('questionCount').textContent = state.q;
       state.busy = true; sendBtn.disabled = true; addTyping();
       try {
         const data = await requestChat(buildRequestBody(text));
@@ -2984,7 +3149,6 @@
       if (state.busy) return;
       const roleLabel = label || ({ all: '전체', tank: '탱커', damage: '딜러', support: '힐러' }[value]) || value;
       addMessage('user', roleLabel, { context: '역할 선택' });
-      state.q++; $('questionCount').textContent = state.q;
       state.busy = true; sendBtn.disabled = true; addTyping();
       try {
         const data = await requestChat(buildRequestBody('', value));
@@ -2996,7 +3160,6 @@
     async function sendRosterSize(value, label) {
       if (state.busy) return;
       addMessage('user', label || `${value}대${value}예요`, { context: '인원수 선택' });
-      state.q++; $('questionCount').textContent = state.q;
       state.busy = true; sendBtn.disabled = true; addTyping();
       try {
         const data = await requestChat(buildRequestBody('', null, null, value));
@@ -3008,7 +3171,6 @@
     async function sendFocusHero(value, label) {
       if (state.busy) return;
       addMessage('user', label || value, { context: '영웅 선택' });
-      state.q++; $('questionCount').textContent = state.q;
       state.busy = true; sendBtn.disabled = true; addTyping();
       try {
         const data = await requestChat(buildRequestBody('', null, value));
@@ -3020,12 +3182,13 @@
     sendBtn.addEventListener('click', sendMessage);
 
     function resetScreen() {
-      state.q = 0; state.start = Date.now(); $('questionCount').textContent = '0';
       state.answerStyle = 'simple';
       state.history = [];
+      renderRecent();
       document.querySelectorAll('.style-btn').forEach(b => b.classList.toggle('active', b.dataset.style === 'simple'));
       clearContext();
-      messages.innerHTML = `<div class="welcome" id="welcome"><div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div><h2>게임 상황을 편하게 적어주세요</h2><p>탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지<br>붙여서 써주시면 더 정확하게 이해할 수 있어요.</p><div class="sample-chips"><button class="chip" data-fill="겐지 카운터 알려줘">카운터</button><button class="chip" data-fill="상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?">조합 추천</button><button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button><button class="chip" data-fill="내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?">스탯 피드백</button><button class="chip" data-fill="리퍼를 하고 싶은데 상대 아나를 어떻게 처리해야할까?">영웅 유지</button></div></div>`;
+      clearAttachedImage();
+      messages.innerHTML = `<div class="welcome" id="welcome"><div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div><h2>게임 상황을 적어주세요</h2><p>탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지<br>붙여서 써주시면 더 정확하게 이해할 수 있어요.</p><div class="sample-chips"><button class="chip" data-fill="겐지 카운터 알려줘">카운터</button><button class="chip" data-fill="상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?">조합 추천</button><button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button><button class="chip" data-fill="내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?">스탯 피드백</button><button class="chip" data-fill="리퍼를 하고 싶은데 상대 아나를 어떻게 처리해야할까?">영웅 유지</button></div></div>`;
     }
     async function resetServer() {
       try {
@@ -3039,10 +3202,6 @@
       html.dataset.theme = dark ? 'light' : 'dark';
       $('themeBtn').textContent = dark ? '🌙' : '☀️';
     });
-    setInterval(() => {
-      const sec = Math.floor((Date.now() - state.start) / 1000);
-      $('sessionTime').textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
-    }, 1000);
 
     // ── 사용법 투어 ──
     // 처음 접속한 사용자에게만 help 버튼 옆에 말풍선을 5초간 보여준다.
@@ -3359,12 +3518,13 @@
       // 재생 중에는 history에 쌓지 않고, 끝난 뒤 불러온 내용으로 history를 채운다.
       (entry.messages || []).forEach(m => addMessage(m.role, m.text, { ...(m.options || {}), skipHistory: true }));
       state.history = (entry.messages || []).map(m => ({ role: m.role, text: m.text, options: m.options }));
+      renderRecent();
       closeSaveModal();
     }
 
     $('saveChatBtn').addEventListener('click', openSaveModal);
 
-    renderMapList(); updateContext();
+    renderMapList(); updateContext(); renderRecent();
   </script>
 </body>
 
