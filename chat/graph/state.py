@@ -75,6 +75,7 @@ class ChatbotGraphState(TypedDict, total=False):
     role_basis_note: str
     compared_heroes: List[str]
     is_team_comp_question: bool
+    is_ally_target_choice: bool
     focus_heroes: List[str]
     focus_hero_pick: Optional[str]
     needs_focus_hero_clarify: bool

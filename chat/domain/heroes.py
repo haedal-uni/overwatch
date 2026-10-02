@@ -192,6 +192,14 @@ def _scan_hero_mentions(text: str) -> List[tuple]:
     return mentions
 
 
+def strip_hero_mentions(text: str) -> str:
+    """텍스트에서 영웅 표기를 모두 지운 나머지(긴 표기부터 지운다)."""
+    stripped = text or ""
+    for name in _HERO_NAMES_LONGEST_FIRST:
+        stripped = stripped.replace(name, "")
+    return stripped
+
+
 def find_first_hero(text: str) -> Optional[str]:
     """텍스트에 가장 먼저 등장하는 영웅의 표준 이름."""
     mentions = _scan_hero_mentions(text)

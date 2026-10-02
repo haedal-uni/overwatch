@@ -142,6 +142,18 @@ def get_hero_profile(hero: Optional[str]) -> Optional[str]:
     return _profile_cache.get(normalize_hero_name(hero))
 
 
+_TEAMPLAY_LINE_RE = re.compile(r"^\s*-\s*(기본 위치|협업):")
+
+
+def get_hero_teamplay(hero: Optional[str]) -> Optional[str]:
+    """영웅 프로필 중 "기본 위치"와 "협업" 줄만(합이 맞는 영웅을 고를 근거)."""
+    profile = get_hero_profile(hero)
+    if not profile:
+        return None
+    lines = [line.strip() for line in profile.splitlines() if _TEAMPLAY_LINE_RE.match(line)]
+    return "\n".join(lines) or None
+
+
 # 스킬 데이터 줄의 괄호 속 첫 항목 → 표준 단축키.
 _SKILL_KEY_WORDS = {
     "좌클": "좌클릭", "우클": "우클릭", "좌클릭": "좌클릭", "우클릭": "우클릭",
@@ -224,6 +236,34 @@ def get_skill_keys() -> Dict[str, Dict[str, str]]:
     if _skill_keys_cache is None:
         _skill_keys_cache = _build_skill_keys()
     return _skill_keys_cache
+
+
+# 영웅을 가리킨다고 볼 스킬 이름의 최소 길이(공백 제외, "돌진" 같은 일반어 제외).
+_SKILL_NAME_MIN_LENGTH = 3
+
+
+def find_heroes_by_skill_name(text: str) -> List[str]:
+    """텍스트에 나온 스킬 이름의 주인 영웅들(여러 영웅이 같이 쓰는 이름은 뺀다)."""
+    if not text:
+        return []
+    owners: Dict[str, set] = {}
+    for hero, skills in get_skill_keys().items():
+        for name in skills:
+            owners.setdefault(name, set()).add(hero)
+    found: List[tuple] = []
+    compact = text.replace(" ", "")
+    for name, heroes in owners.items():
+        key = name.replace(" ", "")
+        if len(heroes) != 1 or len(key) < _SKILL_NAME_MIN_LENGTH:
+            continue
+        position = compact.find(key)
+        if position != -1:
+            found.append((position, next(iter(heroes))))
+    ordered: List[str] = []
+    for _, hero in sorted(found):
+        if hero not in ordered:
+            ordered.append(hero)
+    return ordered
 
 
 # 탱커 스킬 태그 중 피해를 막아 경감량을 쌓는 것.
