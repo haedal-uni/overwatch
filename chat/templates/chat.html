@@ -1249,6 +1249,12 @@
       content: "· ";
     }
 
+    .matchup-caution {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+
     /* ── 전체 상성표 모달 ── */
     .mx-open-btn {
       display: inline-flex;
@@ -2686,7 +2692,9 @@
           addMessage('ai', formatScoreboardResult(board), { turnId: board.turn_id });
           return;
         }
-        const data = await requestChat(buildRequestBody(text));
+        const body = buildRequestBody(text);
+        body.scoreboard_turn_id = board.turn_id;
+        const data = await requestChat(body);
         removeTyping();
         addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card, scoreboardTable: board.report });
       } catch (err) {
@@ -2932,7 +2940,7 @@
       if (role === 'ai') {
         if (options.scoreboardTable) {
           const fold = document.createElement('details'); fold.className = 'scoreboard-fold';
-          fold.innerHTML = `<summary>스탯창 인식 결과 보기</summary><div class="fold-body">${simpleMarkdown(options.scoreboardTable)}</div>`;
+          fold.innerHTML = `<summary>이번 판 스탯표 보기</summary><div class="fold-body">${simpleMarkdown(options.scoreboardTable)}</div>`;
           bubble.prepend(fold);
         }
         if (options.matchupCard) {
@@ -3022,6 +3030,12 @@
         col.appendChild(row);
       });
       wrap.appendChild(col);
+      // 추천 전체에 공통인 주의는 카드 맨 아래 한 줄로 둔다.
+      if (card.caution) {
+        const caution = document.createElement('div'); caution.className = 'matchup-caution';
+        caution.textContent = `⚠ ${card.caution}`;
+        wrap.appendChild(caution);
+      }
       return wrap;
     }
     function buildResponseButtons(options) {
@@ -3043,7 +3057,8 @@
       });
       (options.suggested || []).slice(0, 3).forEach(q => {
         const btn = document.createElement('button'); btn.className = 'suggest-btn'; btn.textContent = q;
-        btn.addEventListener('click', () => { input.value = q; autoResize(); input.focus(); });
+        // 누르면 입력창을 거치지 않고 바로 질문으로 보낸다.
+        btn.addEventListener('click', () => { if (state.busy) return; input.value = q; autoResize(); sendMessage(); });
         box.appendChild(btn); has = true;
       });
       return has ? box : null;
