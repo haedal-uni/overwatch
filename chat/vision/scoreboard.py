@@ -17,7 +17,7 @@ from chat.rag import components as chatbot_service
 from chat.domain.heroes import ROLE_HEROES, normalize_hero_name
 from chat.rag.llm_utils import call_llm_text, safe_json_loads
 from chat.domain.prompts import stat_judgement_rules, stat_verdict_block
-from chat.domain.stat_verdicts import entries_from_scoreboard_rows
+from chat.domain.stat_verdicts import entries_from_scoreboard_rows, score_basis_label, score_report_rows
 
 logger = logging.getLogger(__name__)
 
@@ -2251,15 +2251,27 @@ def _team_table(entries: List[Dict[str, Any]]) -> str:
 
 
 def _build_stat_dict(team: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """그래프의 my_team_stats/enemy_stats 포맷으로 변환한다(인식 실패 행은 제외)."""
+    """그래프의 my_team_stats/enemy_stats 포맷으로 변환한다.
+
+    인식 실패 행은 "미확인 힐러1"처럼 역할 이름으로 넣고 role을 함께 남겨 순위 계산에서 빠지지 않게 한다.
+    """
     result: Dict[str, Any] = {}
+    unknown_counts: Dict[str, int] = {}
     for e in team:
-        if e["hero"] == "unknown":
-            continue
         kda = e["kda"]
         if all(v is None for v in [kda["kill"], kda["death"], kda["assist"], e.get("damage"), e.get("healing")]):
             continue
-        result[e["hero"]] = {
+        key = e["hero"]
+        extra: Dict[str, Any] = {}
+        if key == "unknown":
+            role_code = e.get("role_code")
+            if role_code not in ROLE_CODE_TO_LABEL:
+                continue
+            unknown_counts[role_code] = unknown_counts.get(role_code, 0) + 1
+            key = f"미확인 {ROLE_CODE_TO_LABEL[role_code]}{unknown_counts[role_code]}"
+            extra = {"role": role_code}
+        result[key] = {
+            **extra,
             "kills": kda["kill"],
             "deaths": kda["death"],
             "assists": kda["assist"],
@@ -2270,9 +2282,17 @@ def _build_stat_dict(team: List[Dict[str, Any]]) -> Dict[str, Any]:
     return result
 
 
+def _rank_table(score_rows: List[Dict[str, Any]]) -> str:
+    lines = ["| 순위 | 영웅 | 세부 역할 | 최종 점수 |", "|---|---|---|---|"]
+    for r in score_rows:
+        lines.append(f"| {r['rank']} | {r['hero']} | {r['type_label']} | {r['final']:.2f} |")
+    return "\n".join(lines)
+
+
 def build_scoreboard_report(
     my_team: List[Dict[str, Any]], enemy_team: List[Dict[str, Any]],
     team_feedback: Optional[Dict[str, str]], personal_feedback: Optional[str],
+    score_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """사용자에게 그대로 보여줄 마크다운(진단 문구는 넣지 않는다). 피드백이 없으면 표만 만든다."""
     lines = [
@@ -2282,6 +2302,8 @@ def build_scoreboard_report(
         "### 상대팀",
         _team_table(enemy_team),
     ]
+    if score_rows:
+        lines += ["", "### 우리팀 순위", _rank_table(score_rows)]
     if not team_feedback:
         return "\n".join(lines)
     lines += [
@@ -2438,7 +2460,19 @@ def analyze_scoreboard_image(
     admin_log["low_hero_recognition"] = low_hero_recognition
     admin_log["gemini_stats_and_feedback_enabled"] = ENABLE_GEMINI_STATS_AND_FEEDBACK
 
-    report = build_scoreboard_report(my_team, enemy_team, team_feedback, personal_feedback)
+    # 수치는 Gemini가 읽으므로 그게 꺼져 있으면 순위를 만들지 않는다.
+    score_rows: List[Dict[str, Any]] = []
+    score_basis = ""
+    if ENABLE_GEMINI_STATS_AND_FEEDBACK:
+        score_entries = entries_from_scoreboard_rows(my_team, enemy_team if enemy_ok else [])
+        score_rows = score_report_rows(score_entries)
+        score_basis = score_basis_label(score_entries)
+    admin_log["score_breakdown"] = score_rows
+    admin_log["score_basis"] = score_basis
+
+    report = build_scoreboard_report(
+        my_team, enemy_team, team_feedback, personal_feedback, score_rows,
+    )
 
     return {
         "report": report,

@@ -292,14 +292,30 @@ class ChatLogDisplayMixin:
         return format_html('<th style="{}">{}</th>', self.SCOREBOARD_TH_STYLE, text)
 
     @admin.display(description="스탯창 분석 진단 정보 (관리자 전용)")
-    def scoreboard_admin_log_display(self, obj):
+    def scoreboard_admin_log_display(self, obj, follow_link=True):
         """스탯창 분석 진단 정보(metadata.admin_log)를 관리자 전용으로 렌더링한다."""
         metadata = obj.metadata or {}
         log = metadata.get("admin_log")
+        turn_id = obj.turn_id
+        linked_note = None
+        if not log and follow_link and metadata.get("scoreboard_turn_id"):
+            # 질문과 함께 첨부한 스탯창은 분석 로그가 따로 저장된다 — 그쪽 진단 정보를 보여준다.
+            linked = (
+                ChatLog.objects.filter(
+                    turn_id=metadata["scoreboard_turn_id"], intent="scoreboard_analysis",
+                ).only("turn_id", "metadata").first()
+            )
+            if linked:
+                log = (linked.metadata or {}).get("admin_log")
+                turn_id = linked.turn_id
+                linked_note = format_html(
+                    '<p style="margin:0 0 8px;color:#666;">이 질문과 함께 첨부한 스탯창의 분석 결과 '
+                    '(분석 로그 <a href="{}">{}</a>)</p>',
+                    reverse("admin:chat_chatlog_change", args=[linked.pk]) if linked.pk else "#",
+                    turn_id,
+                )
         if not log:
             return "-"
-
-        turn_id = obj.turn_id
 
         def render_missing(rows):
             if not rows:
@@ -442,7 +458,7 @@ class ChatLogDisplayMixin:
             coarse_thumb_html,
         )
 
-        return format_html(
+        body = format_html(
             '<div style="background:#111827; color:#e5e7eb; border:1px solid #374151; '
             'padding:14px; border-radius:8px; font-size:13px; line-height:1.6;">'
             '<div><strong>우리팀 인식:</strong> {}명 중 {}명 · <strong>상대팀 인식:</strong> {}명 중 {}명</div>'
@@ -474,6 +490,51 @@ class ChatLogDisplayMixin:
             "예" if log.get("self_feedback_eligible") else "아니오",
             "예" if log.get("enemy_composition_analysis_allowed") else "아니오",
             "예" if log.get("low_hero_recognition") else "아니오",
+        )
+        body = format_html("{}{}", body, self._render_score_breakdown(log))
+        return format_html("{}{}", linked_note, body) if linked_note else body
+
+    def _render_score_breakdown(self, log):
+        """종합 점수 계산 내역(우리팀 내부 / 상대 같은 포지션 / 최종, 지표별 점수 × 비중)."""
+        rows = log.get("score_breakdown") or []
+        if not rows:
+            return ""
+
+        def fmt(value):
+            return "-" if value is None else f"{value:.2f}"
+
+        def metric_lines(metrics):
+            return format_html_join(
+                "<br>", "{}: 우리팀 {} / 상대 {} × {}%",
+                (
+                    (info.get("label") or key, fmt(info.get("team")), fmt(info.get("enemy")), info.get("weight"))
+                    for key, info in metrics.items()
+                ),
+            )
+
+        body = format_html_join(
+            "", "<tr>{}{}{}{}{}{}{}</tr>",
+            (
+                (
+                    self._sb_td(r["rank"]),
+                    self._sb_td(format_html("{}{}", r["hero"], " (본인)" if r.get("is_me") else "")),
+                    self._sb_td(r["type_label"]),
+                    self._sb_td(fmt(r.get("team_score"))),
+                    self._sb_td(fmt(r.get("enemy_score"))),
+                    self._sb_td(fmt(r.get("final"))),
+                    self._sb_td(metric_lines(r.get("metrics") or {})),
+                )
+                for r in rows
+            ),
+        )
+        return format_html(
+            '<div style="margin-top:10px;"><strong>종합 점수 계산:</strong> {} (지표 점수 50 = 비교 대상과 동등, '
+            '"-"는 평가하지 않음/비교 대상 없음)'
+            '<table style="margin-top:4px;border-collapse:collapse;"><tr>{}{}{}{}{}{}{}</tr>{}</table></div>',
+            log.get("score_basis") or "-",
+            self._sb_th("순위"), self._sb_th("영웅"), self._sb_th("세부 역할"), self._sb_th("우리팀 성능"),
+            self._sb_th("상대팀 성능"), self._sb_th("최종 점수"), self._sb_th("지표별 점수 × 비중"),
+            body,
         )
 
     @admin.display(description="연관 질문")
@@ -646,7 +707,8 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
                 "matchup_card": self.matchup_card_display(log),
                 "recommend_card": self.recommend_card_display(log),
                 "suggested_questions": self.suggested_questions_display(log),
-                "scoreboard_admin_log": self.scoreboard_admin_log_display(log),
+                # 대화 보기에는 분석 로그가 바로 위에 있어 연결된 진단 정보를 반복하지 않는다.
+                "scoreboard_admin_log": self.scoreboard_admin_log_display(log, follow_link=False),
             }
             for log in logs
         ]

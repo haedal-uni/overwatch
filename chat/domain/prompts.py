@@ -93,11 +93,11 @@ STAT_VERDICT_RULE = """- 위 "스탯 판정"은 코드가 같은 유형 영웅�
   답변에 쓰지 마라."""
 
 
-def stat_verdict_block(entries, *, only_me: bool = False) -> str:
+def stat_verdict_block(entries, *, only_me: bool = False, include_ranking: bool = True) -> str:
     """판정 블록 + 사용 규칙. 판정할 영웅이 없으면 빈 문자열."""
     from chat.domain.stat_verdicts import stat_verdict_text
 
-    text = stat_verdict_text(entries, only_me=only_me)
+    text = stat_verdict_text(entries, only_me=only_me, include_ranking=include_ranking)
     if not text:
         return ""
     return f"스탯 판정(같은 유형 영웅끼리 비교):\n{text}\n{STAT_VERDICT_RULE}"

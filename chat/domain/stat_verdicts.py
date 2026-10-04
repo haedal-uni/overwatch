@@ -5,7 +5,7 @@
 
 from typing import Any, Dict, Iterable, List, Optional
 
-from chat.domain.heroes import HERO_TO_ROLE, normalize_hero_name
+from chat.domain.heroes import HERO_TO_ROLE, ROLE_LABELS, normalize_hero_name
 
 METRICS = ["kills", "assists", "deaths", "damage", "healing", "mitigation"]
 METRIC_LABELS = {
@@ -29,7 +29,7 @@ STAT_TYPES: Dict[str, Dict[str, Any]] = {
     },
     "sub_damage": {
         "label": "서브 딜러", "role": "damage",
-        "weights": {"kills": 40, "assists": 15, "damage": 20, "deaths": 25},
+        "weights": {"kills": 35, "assists": 15, "damage": 25, "deaths": 25},
     },
     "main_support": {
         "label": "메인 힐러", "role": "support",
@@ -58,8 +58,10 @@ MIN_GAP = {
     "damage": 1500, "healing": 1500, "mitigation": 1500,
 }
 
-# 종합 점수에서 한 지표의 평균 대비 비율 상한.
-SCORE_RATIO_CAP = 2.0
+# 종합 점수에서 우리팀 내부 비교의 몫(나머지는 상대 같은 포지션 비교).
+TEAM_SCORE_SHARE = 0.5
+# 같은 포지션 팀원이 없을 때 팀 전체와 비교해도 되는, 역할과 무관한 지표.
+ROLE_NEUTRAL_METRICS = ("kills", "deaths")
 
 # 힐할 기회 보정: 받은 피해 대비 치유 비율이 상대의 이 비율 이상이면 받은 피해가 적었던 것.
 HEALING_OPPORTUNITY_RATIO = 0.85
@@ -84,12 +86,19 @@ def hero_stat_type(hero: str) -> Optional[str]:
     return DEFAULT_TYPE_BY_ROLE.get(role) if role else None
 
 
-def make_entry(hero: str, team: str, stats: Dict[str, Any], *, is_me: bool = False) -> Optional[Dict[str, Any]]:
-    """판정 단위 하나. 영웅을 모르면 None."""
-    name = normalize_hero_name(hero)
-    stat_type = hero_stat_type(name)
+def make_entry(
+    hero: str, team: str, stats: Dict[str, Any], *, is_me: bool = False, role: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """판정 단위 하나. 영웅을 모르면 역할(role) 기본 유형으로, 역할도 모르면 None."""
+    name = normalize_hero_name(hero) if hero and hero != "unknown" else hero
+    stat_type = hero_stat_type(name) if name and name != "unknown" else None
     if not stat_type:
-        return None
+        role = role or stats.get("role")
+        stat_type = DEFAULT_TYPE_BY_ROLE.get(role)
+        if not stat_type:
+            return None
+        if not name or name == "unknown":
+            name = f"미확인 {ROLE_LABELS[role]}"
     values = {}
     for metric in METRICS:
         value = stats.get(metric)
@@ -131,16 +140,21 @@ def entries_from_scoreboard_rows(
     """스탯창 행(hero, kda, damage, healing, mitigation, is_me)을 판정 단위로."""
     entries = []
     for team, rows in (("my", my_team), ("enemy", enemy_team)):
+        unknown_counts: Dict[str, int] = {}
         for row in rows:
-            if row.get("hero") in (None, "unknown"):
-                continue
+            hero = row.get("hero")
+            role = row.get("role_code")
+            if hero in (None, "unknown") and role in ROLE_LABELS:
+                # 채팅 쪽 스탯 dict(_build_stat_dict)와 같은 이름을 쓴다.
+                unknown_counts[role] = unknown_counts.get(role, 0) + 1
+                hero = f"미확인 {ROLE_LABELS[role]}{unknown_counts[role]}"
             kda = row.get("kda") or {}
             stats = {
                 "kills": kda.get("kill"), "deaths": kda.get("death"), "assists": kda.get("assist"),
                 "damage": row.get("damage"), "healing": row.get("healing"),
                 "mitigation": row.get("mitigation"),
             }
-            entry = make_entry(row["hero"], team, stats, is_me=row.get("is_me") is True)
+            entry = make_entry(hero, team, stats, is_me=row.get("is_me") is True, role=role)
             if entry:
                 entries.append(entry)
     return entries
@@ -295,53 +309,142 @@ def _score_value(entry, metric, context) -> Optional[float]:
     return value
 
 
+def _pair_score(metric: str, value: float, reference: float) -> float:
+    """비교 대상 평균과 견준 0~100점(50 = 동등). 데스는 낮을수록 높다."""
+    if value + reference <= 0:
+        return 50.0
+    if metric == "deaths":
+        return reference / (value + reference) * 100
+    return value / (value + reference) * 100
+
+
+def _score_peers(entry, entries, metric, team, *, solo_fallback: bool) -> List[Dict[str, Any]]:
+    """점수 비교 대상: 그 팀의 같은 포지션(본인 제외). 경감량은 같은 유형끼리만.
+
+    solo_fallback이면 같은 포지션이 없을 때 역할과 무관한 지표(처치·데스)만 팀 전체와 비교한다.
+    """
+    candidates = [
+        e for e in entries
+        if e is not entry and e["team"] == team and e["stats"][metric] is not None
+    ]
+    if metric == "mitigation":
+        return [e for e in candidates if e["type"] == entry["type"]]
+    same_role = [e for e in candidates if e["role"] == entry["role"]]
+    if same_role or not solo_fallback or metric not in ROLE_NEUTRAL_METRICS:
+        return same_role
+    return candidates
+
+
+def _component_score(entry, entries, context, team, *, solo_fallback: bool):
+    """한 비교 축(우리팀 내부 / 상대 같은 포지션)의 가중 점수와 지표별 점수."""
+    weights = STAT_TYPES[entry["type"]]["weights"]
+    per_metric: Dict[str, float] = {}
+    for metric, weight in weights.items():
+        value = _score_value(entry, metric, context)
+        if value is None:
+            continue
+        peers = _score_peers(entry, entries, metric, team, solo_fallback=solo_fallback)
+        if not peers:
+            continue
+        score = _pair_score(metric, value, _mean([_score_value(e, metric, context) for e in peers]))
+        if weight <= BONUS_ONLY_WEIGHT and score < 50:
+            continue
+        per_metric[metric] = score
+    weight_sum = sum(weights[m] for m in per_metric)
+    if not weight_sum:
+        return None, per_metric
+    return sum(weights[m] * s for m, s in per_metric.items()) / weight_sum, per_metric
+
+
+def score_breakdown(
+    entries: List[Dict[str, Any]], context: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[int, Dict[str, Any]]:
+    """{id(entry): {team, enemy, final, metrics}} — 우리팀 영웅만. 50 = 비교 대상과 동등.
+
+    final = 우리팀 내부 50% + 상대 같은 포지션 50%. 상대 쪽을 계산할 수 없으면 우리팀 내부 100%.
+    """
+    result: Dict[int, Dict[str, Any]] = {}
+    has_enemy = any(e["team"] == "enemy" for e in entries)
+    for entry in entries:
+        if entry["team"] != "my":
+            continue
+        team_score, team_metrics = _component_score(entry, entries, context, "my", solo_fallback=True)
+        enemy_score, enemy_metrics = (
+            _component_score(entry, entries, context, "enemy", solo_fallback=False)
+            if has_enemy else (None, {})
+        )
+        if team_score is not None and enemy_score is not None:
+            final = team_score * TEAM_SCORE_SHARE + enemy_score * (1 - TEAM_SCORE_SHARE)
+        else:
+            final = team_score if team_score is not None else enemy_score
+        if final is None:
+            continue
+        weights = STAT_TYPES[entry["type"]]["weights"]
+        result[id(entry)] = {
+            "team": team_score, "enemy": enemy_score, "final": final,
+            "metrics": {
+                m: {"weight": w, "team": team_metrics.get(m), "enemy": enemy_metrics.get(m)}
+                for m, w in weights.items()
+            },
+        }
+    return result
+
+
 def composite_scores(
     entries: List[Dict[str, Any]], context: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[int, float]:
-    """{id(entry): 종합 점수}. 같은 유형 평균 = 100."""
-    scores: Dict[int, float] = {}
-    for entry in entries:
-        weights = STAT_TYPES[entry["type"]]["weights"]
-        total = 0.0
-        weight_sum = 0
-        for metric, weight in weights.items():
-            value = _score_value(entry, metric, context)
-            if value is None:
-                continue
-            group = [
-                v for v in (_score_value(e, metric, context) for e in entries if e["type"] == entry["type"])
-                if v is not None
-            ]
-            mean = _mean(group)
-            if metric == "deaths":
-                ratio = (mean + 1) / (value + 1)
-            elif mean > 0:
-                ratio = value / mean
-            else:
-                ratio = 1.0
-            total += weight * min(ratio, SCORE_RATIO_CAP)
-            weight_sum += weight
-        if weight_sum:
-            scores[id(entry)] = round(total / weight_sum * 100)
-    return scores
+    """{id(entry): 최종 점수} — 우리팀 영웅만(score_breakdown의 final)."""
+    return {key: info["final"] for key, info in score_breakdown(entries, context).items()}
 
 
-def format_score_ranking(entries: List[Dict[str, Any]], scores: Dict[int, float]) -> str:
-    """팀별 종합 점수 순위 줄."""
-    lines = []
-    for team in ("my", "enemy"):
-        ranked = sorted(
-            (e for e in entries if e["team"] == team and id(e) in scores),
-            key=lambda e: scores[id(e)], reverse=True,
-        )
-        if not ranked:
-            continue
-        parts = [
-            f"{rank}위 {e['hero']}({STAT_TYPES[e['type']]['label']}) {scores[id(e)]:.0f}"
-            for rank, e in enumerate(ranked, 1)
-        ]
-        lines.append(f"- {TEAM_LABELS[team]} 종합 점수 순위(같은 유형 평균 = 100): " + ", ".join(parts))
-    return "\n".join(lines)
+def _tie_break_key(entry, info):
+    """동점이면 그 유형의 핵심 지표 점수 → 데스가 적은 쪽 → 나머지 지표 평균."""
+    metrics = info["metrics"]
+    top_metric = max(metrics, key=lambda m: metrics[m]["weight"])
+
+    def _avg(m):
+        values = [v for v in (metrics[m]["team"], metrics[m]["enemy"]) if v is not None]
+        return sum(values) / len(values) if values else 0.0
+
+    deaths = entry["stats"]["deaths"]
+    rest = [_avg(m) for m in metrics if m != top_metric]
+    return (
+        round(info["final"], 2), _avg(top_metric),
+        -(deaths if deaths is not None else 0), sum(rest) / len(rest) if rest else 0.0,
+    )
+
+
+def ranked_scores(
+    entries: List[Dict[str, Any]], context: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """우리팀 순위 목록: [{rank, entry, team, enemy, final, metrics}]."""
+    breakdown = score_breakdown(entries, context)
+    ranked = sorted(
+        (e for e in entries if id(e) in breakdown),
+        key=lambda e: _tie_break_key(e, breakdown[id(e)]), reverse=True,
+    )
+    return [{"rank": i, "entry": e, **breakdown[id(e)]} for i, e in enumerate(ranked, 1)]
+
+
+def score_basis_label(entries: List[Dict[str, Any]]) -> str:
+    if any(e["team"] == "enemy" for e in entries):
+        return "우리팀 내부 50% + 상대 같은 포지션 50%"
+    return "상대 정보 없음 — 우리팀 내부 100%"
+
+
+def format_score_ranking(entries: List[Dict[str, Any]], context=None) -> str:
+    """우리팀 최종 점수 순위 줄."""
+    ranked = ranked_scores(entries, context)
+    if not ranked:
+        return ""
+    parts = [
+        f"{r['rank']}위 {r['entry']['hero']}({STAT_TYPES[r['entry']['type']]['label']}) {r['final']:.1f}"
+        for r in ranked
+    ]
+    return (
+        f"- {TEAM_LABELS['my']} 종합 점수 순위(50 = 비교 대상과 동등, {score_basis_label(entries)}): "
+        + ", ".join(parts)
+    )
 
 
 def _fmt(value: Optional[float]) -> str:
@@ -382,7 +485,9 @@ def _format_entry_verdicts(entry, verdicts) -> str:
     return f"- {entry['hero']}({TEAM_LABELS[entry['team']]}, {label}{me}): " + " / ".join(parts)
 
 
-def stat_verdict_text(entries: List[Dict[str, Any]], *, only_me: bool = False) -> str:
+def stat_verdict_text(
+    entries: List[Dict[str, Any]], *, only_me: bool = False, include_ranking: bool = True,
+) -> str:
     """팀 상황 + 종합 점수 순위 + 영웅별 판정. only_me면 본인 판정만(순위 생략)."""
     if not entries:
         return ""
@@ -395,10 +500,25 @@ def stat_verdict_text(entries: List[Dict[str, Any]], *, only_me: bool = False) -
     context_line = format_team_context(context)
     if context_line:
         lines.append(context_line)
-    if not only_me:
-        ranking = format_score_ranking(entries, composite_scores(entries, context))
+    if not only_me and include_ranking:
+        ranking = format_score_ranking(entries, context)
         if ranking:
             lines.append(ranking)
     for entry in targets:
         lines.append(_format_entry_verdicts(entry, judge_entry(entry, entries, context)))
     return "\n".join(lines)
+
+
+def score_report_rows(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """스탯창 순위 표·관리자 진단용 직렬화 결과(우리팀, 순위순)."""
+    rows = []
+    for r in ranked_scores(entries, team_context(entries)):
+        entry = r["entry"]
+        rows.append({
+            "rank": r["rank"], "hero": entry["hero"], "type_label": STAT_TYPES[entry["type"]]["label"],
+            "is_me": entry["is_me"], "team_score": r["team"], "enemy_score": r["enemy"], "final": r["final"],
+            "metrics": {
+                metric: {**info, "label": METRIC_LABELS[metric]} for metric, info in r["metrics"].items()
+            },
+        })
+    return rows
