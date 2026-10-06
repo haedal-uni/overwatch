@@ -27,6 +27,13 @@ MAX_MESSAGE_LENGTH = 500
 MAX_FEEDBACK_REASON_LENGTH = 1000
 
 # content_type은 클라이언트가 보내는 값이라 화이트리스트로 검증한다.
+# 스탯창 한 장이 정하는 판 단위 세션 값(새 스탯창이 오면 함께 갈아끼운다).
+SCOREBOARD_MATCH_KEYS = (
+    "enemy_team", "ally_team", "ally_team_ts", "my_team_stats", "enemy_stats", "my_stats",
+    "has_stats", "high_threat_enemy", "current_hero", "current_hero_ts", "compared_heroes",
+    "focus_heroes", "target_enemy",
+)
+
 ALLOWED_IMAGE_TYPES = {
     "image/png",
     "image/jpeg",
@@ -144,6 +151,8 @@ def chat_api(request):
         if roster_size not in (5, 6):
             roster_size = None
         reset = bool(data.get("reset", False))
+        # 질문과 함께 첨부한 스탯창의 분석 로그 turn_id(관리자 페이지 연결용).
+        scoreboard_turn_id = (data.get("scoreboard_turn_id") or "").strip()[:64] or None
 
         # 알 수 없는 값이면 None으로 넘겨 세션 값을 쓰게 한다.
         answer_style = data.get("answer_style")
@@ -245,6 +254,9 @@ def chat_api(request):
                 else f"[역할 선택: {role_label}]"
             )
 
+        if scoreboard_turn_id:
+            user_log_message = f"[스탯창 첨부] {user_log_message}"
+
         save_chat_log(
             log_session_id=log_session_id,
             turn_id=turn_id,
@@ -257,6 +269,7 @@ def chat_api(request):
                 "role_filter": role_filter,
                 "roster_size": roster_size,
                 "context_before": context_before,
+                **({"scoreboard_turn_id": scoreboard_turn_id} if scoreboard_turn_id else {}),
             },
         )
 
@@ -299,6 +312,7 @@ def chat_api(request):
                     "matchup_card": result.get("matchup_card"),
                     "recommend_card": result.get("recommend_card"),
                     **({"source": "canned_response"} if is_canned else {}),
+                    **({"scoreboard_turn_id": scoreboard_turn_id} if scoreboard_turn_id else {}),
                 },
             )
 
@@ -440,6 +454,10 @@ def chat_scoreboard_ocr(request):
         my_stats = result.get("my_stats") or {}
         if enemy_team or ally_team or my_team_stats or enemy_team_stats or my_stats:
             conversation_context = request.session.get("coach_context", {})
+            # 새 스탯창은 새 판이다. 앞 판(또는 채팅)에서 남은 값이 이번 스탯창 값과 섞이지 않게
+            # 판 단위 값을 먼저 비운다 — 본인 행 영웅을 인식 못 했을 때 옛 current_hero가 남으면 안 된다.
+            for key in SCOREBOARD_MATCH_KEYS:
+                conversation_context.pop(key, None)
             if enemy_team:
                 conversation_context["enemy_team"] = enemy_team
             if ally_team:
