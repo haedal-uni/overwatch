@@ -19,6 +19,14 @@ COLLECTION_NAME = "overwatch_docs"
 # 검색 인덱스에서 통째로 빼는 섹션(H1 기준). 답변 근거가 없으면서 상위 k를
 # 차지하는 절이라 뺐다. 고치면 벡터스토어를 다시 만들어야 반영된다.
 EXCLUDED_H1_SECTIONS = {"6. 영웅 수 검증"}
+# VectorStore를 만들 때 한 번에 임베딩해 넣는 chunk 수
+INSERT_BATCH_SIZE = 200
+
+
+def header_path(metadata):
+    """chunk 본문 앞에 붙일 제목 경로("H1 > H2 > H3")."""
+    return " > ".join(metadata[h] for h in ("H1", "H2", "H3") if metadata.get(h))
+
 
 class ChatBot:
     """벡터스토어/LLM 빌더. 싱글턴으로 공유되므로 대화 상태를 두지 않는다."""
@@ -94,6 +102,10 @@ class ChatBot:
         )
         docs = char_splitter.split_documents(header_docs)
         docs = [doc for doc in docs if doc.page_content.strip()]
+        for doc in docs:
+            path = header_path(doc.metadata)
+            if path:
+                doc.page_content = f"{path}\n{doc.page_content}"
 
         logger.info("헤더 분할: %s개 섹션", len(header_docs))
         logger.info("최종 chunk: %s개", len(docs))
@@ -125,12 +137,14 @@ class ChatBot:
         if reset and os.path.exists(self.db_path):
             shutil.rmtree(self.db_path)
 
-        vectorstore = Chroma.from_documents(
-            documents=docs,
-            embedding=self.get_embeddings(),
+        vectorstore = Chroma(
             collection_name=self.collection_name,
+            embedding_function=self.get_embeddings(),
             persist_directory=self.db_path,
         )
+        for start in range(0, len(docs), INSERT_BATCH_SIZE):
+            vectorstore.add_documents(docs[start:start + INSERT_BATCH_SIZE])
+            logger.info("%s/%s개 chunk 저장", min(start + INSERT_BATCH_SIZE, len(docs)), len(docs))
 
         logger.info("%s개 chunk를 '%s'에 저장했습니다.", len(docs), self.db_path)
         return vectorstore
