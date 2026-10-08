@@ -52,6 +52,10 @@ class ChatLogDisplayMixin:
         # 로그는 읽기 전용이다(목록/상세 조회는 별도 권한이라 가능).
         return False
 
+    def log_deletions(self, request, queryset):
+        # 로그 삭제는 정리 작업이라 관리자 홈 "최근 활동"에 남기지 않는다.
+        return []
+
     def history_view(self, request, object_id, extra_context=None):
         """기본 "히스토리" 버튼을 세션 대화 전체보기로 리다이렉트한다."""
         obj = self.get_object(request, object_id)
@@ -800,6 +804,12 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
     # is_resolved/resolution_note만 편집 가능한 예외(다른 로그는 읽기 전용).
     def has_change_permission(self, request, obj=None):
         return True
+
+    def log_change(self, request, obj, message):
+        # 바뀐 필드 없이 저장만 누른 경우는 "최근 활동"에 남기지 않는다.
+        if not message:
+            return None
+        return super().log_change(request, obj, message)
 
     readonly_fields = (
         "created_at",
