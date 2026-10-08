@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import time
 from typing import Any, Dict, List
 
@@ -11,6 +12,7 @@ from chat.graph.state import ChatbotGraphState
 from chat.domain.heroes import (
     ROLE_HEROES,
     ROLE_LABELS,
+    hero_mentioned_in_text,
     normalize_hero_name,
 )
 from chat.domain.prompts import ally_team_prompt_text
@@ -66,6 +68,27 @@ def resolve_perk_hero(state: ChatbotGraphState) -> Any:
     return state.get("current_hero") or (focus_heroes[0] if focus_heroes else None)
 
 
+# 단독으로 쓴 "궁"(+조사). 궁합·궁금처럼 뒤에 글자가 붙은 말은 제외한다.
+_ULT_ABBREVIATION_RE = re.compile(r"(?<![가-힣])궁(으로|은|는|이|가|을|를|도|만|에|의)?(?![가-힣])")
+_ULT_PARTICLE_FIX = {"은": "는", "이": "가", "을": "를", "으로": "로"}
+
+
+def expand_ult_abbreviation(text: str) -> str:
+    """검색어의 줄임말 "궁"을 문서 표기인 "궁극기"로 바꾼다."""
+    return _ULT_ABBREVIATION_RE.sub(
+        lambda m: "궁극기" + _ULT_PARTICLE_FIX.get(m.group(1) or "", m.group(1) or ""), text
+    )
+
+
+def inherited_query_hero(state: ChatbotGraphState) -> Any:
+    """질문에 이름이 없는데 앞 턴에서 이어받은 영웅(자기 영웅, 없으면 하나뿐인 주제 영웅)."""
+    focus_heroes = state.get("focus_heroes") or []
+    hero = state.get("current_hero") or (focus_heroes[0] if len(focus_heroes) == 1 else None)
+    if not hero or hero_mentioned_in_text(hero, state.get("message", "")):
+        return None
+    return hero
+
+
 def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
     message = state.get("message", "")
     intent = state.get("intent") or "general"
@@ -82,6 +105,10 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
     side_text = "공격" if side == "attack" else "수비" if side == "defense" else ""
     queries = [message]
+    # 결과는 검색어 순서로 합쳐 앞 12개만 쓰므로, 영웅을 붙인 질문을 맨 앞에 둔다.
+    inherited_hero = inherited_query_hero(state)
+    if inherited_hero:
+        queries.insert(0, f"{inherited_hero} {message}")
 
     if high_threat_enemy and enemy_named_this_turn:
         queries.append(f"{high_threat_enemy} 카운터 영웅 상대법 견제")
@@ -148,6 +175,7 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
         enemies = " ".join(state.get("enemy_team") or [])
         queries.append(f"{enemies} 조합 상대 포커싱 우선순위 운영")
 
+    queries = [expand_ult_abbreviation(q) for q in queries]
     unique_queries = [q.strip() for q in dict.fromkeys(queries) if q.strip()]
     logger.info("[RAG 검색 쿼리] %s", unique_queries)
     return {"retrieval_queries": unique_queries}
