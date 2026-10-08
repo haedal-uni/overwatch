@@ -18,13 +18,27 @@ HEROES = [
     "라인하르트", "윈스턴", "디바", "자리야", "오리사", "시그마", "라마트라",
     "레킹볼", "둠피스트", "로드호그", "정커퀸", "마우가", "해저드", "도미나",
     "아나", "키리코", "모이라", "루시우", "브리기테", "젠야타", "바티스트",
-    "메르시", "일리아리", "라이프위버", "주노", "제트팩 캣", "우양", "미즈키", "디몬"
+    "메르시", "일리아리", "라이프위버", "주노", "제트팩 캣", "우양", "미즈키", "디몬", "독트린"
 ]
 
 # 표준 이름은 아이콘 파일명과 같아야 한다. 표기 차이는 별칭으로 흡수한다.
 HERO_ALIASES = {
+    # 탱
     "둠피": "둠피스트",
     "둠": "둠피스트",
+    "D.Va": "디바",
+    "디바": "디바",
+    "호그" : "로드호그",
+    "해자드" : "해저드",
+    "라인": "라인하르트",
+    "D.Mon" : "디몬",
+    "디몬(D.Mon)" : "디몬",
+    "디먼" : "디몬",
+    "DMON" : "디몬",
+    "퀸" : "정커퀸",
+    "저드" : "해저드",
+
+    # 딜
     "솔저": "솔저76",
     "솔져": "솔저76",
     "솔저: 76": "솔저76",
@@ -34,26 +48,23 @@ HERO_ALIASES = {
     "솔져:76": "솔저76",
     "솔져 76": "솔저76",
     "솔져76": "솔저76",
-    "D.Va": "디바",
-    "디바": "디바",
     "바스" : "바스티온",
     "시메": "시메트라",
-    "라인": "라인하르트",
     "정크" : "정크랫",
     "정크렛": "정크랫",
-    "브리" : "브리기테",
     "위도우" : "위도우메이커", 
-    "호그" : "로드호그",
+    "트레" : "트레이서",
+    "톨비" : "토르비욘",
+
+    # 힐
+    "브리" : "브리기테",
+    "제트팩캣" : "제트팩 캣",
     "제트팩" : "제트팩 캣",
     "캣" : "제트팩 캣",
-    "트레" : "트레이서",
     "일리야리" : "일리아리",
-    "젠" : "젠야타",
-    "해자드" : "해저드",
-    "제트팩캣" : "제트팩 캣",
-    "D.Mon" : "디몬",
-    "디몬(D.Mon)" : "디몬",
-    "디먼" : "디몬",
+    "일리" : "일리아리",
+    "위버" : "라이프위버",
+    "라위" : "라이프위버",
 }
 
 MAPS = [
@@ -79,14 +90,14 @@ ROLE_HEROES: Dict[str, List[str]] = {
         "도미나", "해저드", "디몬"
     ],
     "damage": [
-        "겐지", "트레이서", "솜브라", "리퍼", "캐서디", "애쉬", "위도우메이커", "한조",
+        "겐지", "트레이서", "리퍼", "캐서디", "애쉬", "위도우메이커", "한조",
         "소전", "솔저76", "파라", "에코", "메이", "토르비욘", "정크랫",
         "바스티온", "시메트라", "벤처", "벤데타", "시에라", "안란", "엠레", "프레야", "시온"
     ],
     "support": [
         "아나", "키리코", "모이라", "루시우", "브리기테", "젠야타",
         "바티스트", "메르시", "일리아리", "라이프위버", "주노", "미즈키", "우양",
-        "제트팩 캣"
+        "제트팩 캣", "솜브라", "독트린"
     ],
 }
 
@@ -168,35 +179,60 @@ _HERO_NAMES_LONGEST_FIRST = sorted(
     HERO_NAME_TO_CANONICAL, key=lambda n: (-len(n), n)
 )
 
+# 이 길이 이하의 표기는 단어 첫머리에서만 영웅으로 본다.
+SHORT_HERO_NAME_MAX_LEN = 2
+_WORD_CHAR_BEFORE = r"(?<![가-힣A-Za-z0-9])"
 
-def _scan_hero_mentions(text: str) -> List[tuple]:
-    """텍스트에서 영웅 표기를 전부 찾아 (등장 위치, 표준 이름) 목록으로 돌려준다."""
+
+def hero_name_regex(name: str) -> str:
+    """영웅 표기 하나를 텍스트에서 찾는 정규식 조각(짧은 표기는 단어 첫머리만)."""
+    escaped = re.escape(name)
+    if len(name) <= SHORT_HERO_NAME_MAX_LEN:
+        return _WORD_CHAR_BEFORE + escaped
+    return escaped
+
+
+_HERO_NAME_PATTERNS = [
+    (re.compile(hero_name_regex(name)), name) for name in _HERO_NAMES_LONGEST_FIRST
+]
+_MAP_NAMES_LONGEST_FIRST = sorted(MAPS, key=len, reverse=True)
+
+
+def _scan_hero_mention_spans(text: str) -> List[tuple]:
+    """텍스트에서 영웅 표기를 전부 찾아 (시작, 끝, 표준 이름) 목록으로 돌려준다."""
     if not text:
         return []
 
-    # 매치 구간을 같은 길이로 마스킹해 두 번 잡히지 않게 한다.
+    # 맵 이름과 이미 잡힌 구간을 같은 길이로 마스킹해 두 번 잡히지 않게 한다.
     masked = text
-    mentions = []
+    for map_name in _MAP_NAMES_LONGEST_FIRST:
+        masked = masked.replace(map_name, "\x00" * len(map_name))
 
-    for name in _HERO_NAMES_LONGEST_FIRST:
-        start = 0
-        while True:
-            idx = masked.find(name, start)
-            if idx == -1:
-                break
-            mentions.append((idx, HERO_NAME_TO_CANONICAL[name]))
-            masked = masked[:idx] + ("\x00" * len(name)) + masked[idx + len(name):]
-            start = idx + len(name)
+    spans = []
+    for pattern, name in _HERO_NAME_PATTERNS:
+        if name not in masked:
+            continue
+        for match in list(pattern.finditer(masked)):
+            start, end = match.span()
+            if "\x00" in masked[start:end]:
+                continue
+            spans.append((start, end, HERO_NAME_TO_CANONICAL[name]))
+            masked = masked[:start] + ("\x00" * (end - start)) + masked[end:]
 
-    mentions.sort(key=lambda item: item[0])
-    return mentions
+    spans.sort(key=lambda item: item[0])
+    return spans
+
+
+def _scan_hero_mentions(text: str) -> List[tuple]:
+    """텍스트에서 영웅 표기를 전부 찾아 (등장 위치, 표준 이름) 목록으로 돌려준다."""
+    return [(start, canonical) for start, _, canonical in _scan_hero_mention_spans(text)]
 
 
 def strip_hero_mentions(text: str) -> str:
-    """텍스트에서 영웅 표기를 모두 지운 나머지(긴 표기부터 지운다)."""
+    """텍스트에서 영웅 표기를 모두 지운 나머지."""
     stripped = text or ""
-    for name in _HERO_NAMES_LONGEST_FIRST:
-        stripped = stripped.replace(name, "")
+    for start, end, _ in reversed(_scan_hero_mention_spans(stripped)):
+        stripped = stripped[:start] + stripped[end:]
     return stripped
 
 
@@ -212,17 +248,10 @@ def hero_mentioned_in_text(hero: Optional[str], text: str) -> bool:
         return False
 
     normalized = normalize_hero_name(hero)
+    if normalized not in HERO_TO_ROLE:
+        return normalized in text
 
-    if normalized and normalized in text:
-        return True
-
-    for h in HEROES:
-        if normalize_hero_name(h) == normalized and h in text:
-            return True
-
-    for alias, canonical in HERO_ALIASES.items():
-        if canonical == normalized and alias in text:
-            return True
+    return any(canonical == normalized for _, canonical in _scan_hero_mentions(text))
 
 
 def find_all_heroes(text: str) -> List[str]:
