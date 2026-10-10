@@ -393,14 +393,16 @@ def fix_skill_keys(text: str, skill_keys: Dict[str, Dict[str, str]]) -> str:
 _DOC_ROLE_TO_LABEL = {"돌격": "탱커", "공격": "딜러", "지원": "힐러", "지원가": "힐러"}
 _DOC_ROLE_PAREN_RE = re.compile(r"\(\s*(돌격|공격|지원가|지원)(?:\s*영웅)?\s*(,[^)]*)?\)")
 _DOC_ROLE_HERO_WORD_RE = re.compile(r"(?<![가-힣])(돌격|공격|지원)\s*영웅")
+_DOC_ROLE_GROUP_WORD_RE = re.compile(r"(?<![가-힣])(돌격|공격|지원)군(?![가-힣])")
 
 
 def unify_role_labels(text: str) -> str:
-    """"(돌격)"·"공격 영웅"·"지원가" 같은 문서 역할 표기를 탱커/딜러/힐러로 바꾼다."""
+    """"(돌격)"·"공격 영웅"·"지원군"·"지원가" 같은 문서 역할 표기를 탱커/딜러/힐러로 바꾼다."""
     if not text:
         return text
     text = _DOC_ROLE_PAREN_RE.sub(lambda m: f"({_DOC_ROLE_TO_LABEL[m.group(1)]}{m.group(2) or ''})", text)
     text = _DOC_ROLE_HERO_WORD_RE.sub(lambda m: f"{_DOC_ROLE_TO_LABEL[m.group(1)]} 영웅", text)
+    text = _DOC_ROLE_GROUP_WORD_RE.sub(lambda m: _DOC_ROLE_TO_LABEL[m.group(1)], text)
     return text.replace("지원가", "힐러")
 
 
@@ -460,15 +462,66 @@ def _surfaces_for(heroes: List[str]) -> List[str]:
     return sorted(set(surfaces) | wanted, key=len, reverse=True)
 
 
-def replace_in_recommendation_lines(answer: str, surfaces: List[str], replacement: str) -> str:
-    """추천 줄에 있는 영웅 표기만 replacement로 바꾼다."""
-    lines = []
+def _list_head(line: str) -> str:
+    return re.sub(r"^\s*(?:[-*•]|\d+[.)])?\s*", "", line)
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def remove_from_recommendation_lines(answer: str, heroes: List[str]) -> str:
+    """추천 줄에서 heroes(표준 이름)를 뺀다.
+
+    그 영웅이 이끄는 목록 줄은 하위 설명 줄과 함께 지우고, 쉼표로 나열한 줄에서는 그 항목만 지운다.
+    문장 속에 섞여 항목만 떼어낼 수 없으면 줄을 지운다.
+    """
+    from chat.domain.heroes import find_all_heroes
+
+    removed = set(heroes)
+    if not removed:
+        return answer
+    surfaces = _surfaces_for(list(removed))
+    item_re = re.compile(
+        r"(?:\s*[,/·]\s*)?(?:" + "|".join(re.escape(s) for s in surfaces) + r")"
+        r"(?:\s*\([^)]*\))?(?=\s*(?:[,/·]|$))"
+    )
+    out: List[str] = []
+    emptied_after: set = set()
+    skip_deeper_than: Optional[int] = None
     for line in (answer or "").split("\n"):
-        if _is_recommendation_line(line, surfaces):
-            for surface in surfaces:
-                line = line.replace(surface, replacement)
-        lines.append(line)
-    return "\n".join(lines)
+        if skip_deeper_than is not None:
+            if line.strip() and _indent(line) > skip_deeper_than:
+                continue
+            skip_deeper_than = None
+        if not removed & set(find_all_heroes(line)) or not _is_recommendation_line(line, surfaces):
+            out.append(line)
+            continue
+        head = _list_head(line)
+        led_by_removed = any(
+            head.startswith(s) and re.match(r"\s*(?:\(|—|-|:|,|$)", head[len(s):]) for s in surfaces
+        )
+        # 그 영웅이 이끄는 목록 줄은 하위 설명과 함께 지운다(여러 영웅을 쉼표로 나열한 줄은 항목만 뺀다).
+        if led_by_removed and not re.match(r"[^—:\n]*,", head):
+            skip_deeper_than = _indent(line)
+            emptied_after.add(len(out) - 1)
+            continue
+        stripped = item_re.sub("", line)
+        stripped = re.sub(r"^(\s*(?:[^:\n]*:\s*)?)[,/·]\s*", r"\1", stripped)
+        remaining = set(find_all_heroes(stripped))
+        if removed & remaining or not remaining:
+            emptied_after.add(len(out) - 1)
+            continue
+        out.append(stripped)
+    # 아래 항목이 모두 지워져 홀로 남은 "…:" 제목 줄도 지운다.
+    out = [
+        line for i, line in enumerate(out)
+        if not (
+            i in emptied_after and line.rstrip().endswith(":")
+            and (i + 1 >= len(out) or not out[i + 1].strip())
+        )
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip("\n")
 
 
 _RANK_LINE_RE = re.compile(r"^\s*(\d+)\s*위\s*")
