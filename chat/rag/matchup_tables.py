@@ -47,6 +47,9 @@ _VERDICT_LABELS_LONGEST_FIRST = sorted(_VERDICT_SCORES, key=lambda label: -len(l
 _VERDICT_SEGMENT_SEPARATOR = "/"
 _INVERT_PLACEHOLDER = "\x00"
 
+# 역할이 바뀌어 다른 영웅 표의 판정이 옛 킷 기준인 영웅. 자기 표에 적힌 판정만 화면에 띄운다.
+SELF_TABLE_ONLY_HEROES = frozenset({"솜브라"})
+
 _chart_cache: Optional[Dict[str, Dict[str, Any]]] = None
 _summary_cache: Optional[Dict[str, str]] = None
 
@@ -71,11 +74,14 @@ def _load_summaries() -> Dict[str, str]:
 # 문서 작성자용 메모는 사용자에게 보여줄 내용이 아니다.
 _EDITOR_NOTE_RE = re.compile(r"\([^)]*(?:문서|역방향)[^)]*\)")
 _DASH_RE = re.compile(r"\s*[—–]\s*")
+# 이유가 없다는 자리표시 문장은 설명이 아니라 빈칸이다(요약이 표현을 바꿔 써서 문장 단위로 뺀다).
+_NO_REASON_SENTENCE_RE = re.compile(r"[^.]*자료가\s*없[^.]*\.?")
 
 
 def clean_note(text: str) -> str:
-    """화면에 띄울 설명에서 편집 메모와 줄표를 걷어낸다."""
-    text = _EDITOR_NOTE_RE.sub(" ", text or "")
+    """화면에 띄울 설명에서 편집 메모와 줄표, 이유 없음 문장을 걷어낸다."""
+    text = _NO_REASON_SENTENCE_RE.sub(" ", text or "")
+    text = _EDITOR_NOTE_RE.sub(" ", text)
     text = _DASH_RE.sub(", ", text)
     return re.sub(r"\s{2,}", " ", text).strip(" ,")
 
@@ -209,15 +215,17 @@ def _build_chart() -> Dict[str, Dict[str, Any]]:
 
     chart: Dict[str, Dict[str, Any]] = {}
     for hero in HERO_TO_ROLE:
-        # 직접 판정이 역방향 판정을 이긴다.
+        # 직접 판정이 역방향 판정을 이긴다. 자기 표만 믿는 영웅은 그 표가 양쪽 판정의 유일한 출처다.
         merged: Dict[str, Tuple[str, str, str, Optional[str]]] = {}
         for other, rows in direct.items():
-            if other == hero:
+            if other == hero or hero in SELF_TABLE_ONLY_HEROES:
                 continue
             row = rows.get(hero)
             if row:
                 merged[other] = (_invert_verdict(row[0]), row[1], f"{other}|{hero}", other)
         for opponent, (verdict, reason) in direct.get(hero, {}).items():
+            if opponent in SELF_TABLE_ONLY_HEROES:
+                continue
             merged[opponent] = (verdict, reason, f"{hero}|{opponent}", None)
 
         # 중립은 화면에 안 띄우지만 우선 타겟 정렬에 쓴다.
