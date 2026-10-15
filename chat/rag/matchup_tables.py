@@ -26,7 +26,7 @@ SUMMARY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "matchup
 
 _HERO_HEADING_RE = re.compile(r"^##\s+(?!#)(.+?)\s*$")
 _ANY_H1_H2_RE = re.compile(r"^#{1,2}(?!#)\s")
-_MATCHUP_HEADING_RE = re.compile(r"^####\s*상성\s*[—–-]\s*(돌격|공격|지원)\s*$")
+_MATCHUP_HEADING_RE = re.compile(r"^####\s*상성\s*[—–-]\s*(탱커|딜러|힐러)\s*$")
 _ANY_HEADING_RE = re.compile(r"^#{1,6}\s")
 _TABLE_SEPARATOR_CHARS = set("-: |")
 
