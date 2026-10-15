@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
 from urllib.parse import urlencode
 
 from django import forms
@@ -11,6 +12,7 @@ from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils.html import format_html, format_html_join
 
+from chat.domain.heroes import role_filter_label
 from chat.graph.pipeline import ROLE_LABELS
 from chat.vision.debug_images import (
     SCOREBOARD_DEBUG_TURN_ID_RE,
@@ -31,6 +33,114 @@ ROLE_BADGE_STYLES = {
     "AI": ("#dcfce7", "#166534", "AI 응답"),
     "ERROR": ("#fee2e2", "#991b1b", "❌ 오류"),
 }
+
+
+def _is_table_line(line):
+    stripped = line.strip()
+    return stripped.startswith("|") and stripped.endswith("|")
+
+
+def _render_markdown_table(lines):
+    """마크다운 표 줄들을 HTML 표로 바꾼다(두 번째 줄은 구분선)."""
+    def cells(line):
+        return [c.strip() for c in line.strip().strip("|").split("|")]
+
+    td = "padding:4px 10px; border:1px solid #e5e7eb; white-space:nowrap;"
+    header = format_html_join("", '<th style="{} background:#f3f4f6; text-align:left;">{}</th>',
+                              ((td, c) for c in cells(lines[0])))
+    body_lines = [l for l in lines[1:] if not set(l.replace("|", "").strip()) <= set("-: ")]
+    body = format_html_join(
+        "", "<tr>{}</tr>",
+        ((format_html_join("", '<td style="{}">{}</td>', ((td, c) for c in cells(l))),) for l in body_lines),
+    )
+    return format_html(
+        '<div style="overflow-x:auto; white-space:normal;"><table style="border-collapse:collapse; '
+        'font-size:13px; margin:4px 0 8px;"><thead><tr>{}</tr></thead><tbody>{}</tbody></table></div>',
+        header, body,
+    )
+
+
+# 관리자 "대화 문맥" 표에 보여줄 세션 문맥 키와 이름(순서대로 표시).
+CONTEXT_SUMMARY_FIELDS = (
+    ("current_hero", "내 영웅"),
+    ("current_hero_role", "내 역할"),
+    ("focus_heroes", "주제 영웅"),
+    ("ally_team", "아군 조합"),
+    ("enemy_team", "상대 조합"),
+    ("target_enemy", "대상 상대"),
+    ("high_threat_enemy", "위협 상대"),
+    ("compared_heroes", "비교 영웅"),
+    ("map_name", "맵"),
+    ("side", "공수"),
+    ("role_filter", "역할 필터"),
+    ("roster_size", "인원수(직접 밝힘)"),
+    ("my_stats", "내 스탯"),
+    ("my_team_stats", "우리팀 스탯"),
+    ("enemy_stats", "상대 스탯"),
+    ("last_intent", "직전 intent"),
+    ("last_effective_message", "직전에 답한 질문"),
+    ("pending_question", "되묻기 대기 질문"),
+    ("pending_question_intent", "대기 질문 intent"),
+    ("no_enemy_turn_count", "상대 미언급 턴 수"),
+    ("answer_style", "답변 스타일"),
+    ("ally_team_ts", "아군 조합 들은 시각"),
+    ("current_hero_ts", "내 영웅 밝힌 시각"),
+    ("last_message_ts", "마지막 메시지 시각"),
+)
+
+# 같은 표 아래에 붙는 이번 응답 정보.
+RESPONSE_SUMMARY_FIELDS = (
+    ("role_filter", "적용 역할 필터"),
+    ("roster_size", "적용 인원수"),
+    ("has_stats", "스탯 근거 사용"),
+    ("recommendation_type", "추천 종류"),
+    ("recommended_heroes", "추천 영웅"),
+    ("choice_buttons", "붙은 버튼"),
+    ("source", "응답 경로"),
+)
+
+
+def _is_blank(value):
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _format_context_value(key, value):
+    """문맥 값 하나를 사람이 읽기 쉬운 문자열로 바꾼다."""
+    if _is_blank(value):
+        return "-"
+    if key.endswith("_ts") and isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value).strftime("%m-%d %H:%M:%S")
+    if key == "role_filter":
+        return role_filter_label(value)
+    if key == "answer_style":
+        return {"simple": "간단히", "detailed": "자세히"}.get(value, value)
+    if key == "choice_buttons" and isinstance(value, list):
+        return ", ".join(str(b.get("label", b)) if isinstance(b, dict) else str(b) for b in value)
+    if isinstance(value, bool):
+        return "예" if value else "아니오"
+    if isinstance(value, dict):
+        # 스탯 dict는 영웅 이름만 보여준다(수치는 JSON에서).
+        return ", ".join(str(k) for k in value.keys())
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
+
+def render_message_with_tables(text):
+    """메시지 속 마크다운 표만 HTML 표로 바꾸고 나머지 줄은 글자 그대로 둔다."""
+    parts = []
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        if _is_table_line(lines[i]) and i + 1 < len(lines) and _is_table_line(lines[i + 1]):
+            start = i
+            while i < len(lines) and _is_table_line(lines[i]):
+                i += 1
+            parts.append(_render_markdown_table(lines[start:i]))
+        else:
+            parts.append(format_html("{}\n", lines[i]))
+            i += 1
+    return format_html_join("", "{}", ((part,) for part in parts))
 
 
 class ChatLogDisplayMixin:
@@ -160,7 +270,7 @@ class ChatLogDisplayMixin:
             '<div style="white-space:pre-wrap; word-break:break-word; '
             'background:{}; border:1px solid {}; padding:14px; '
             'border-radius:8px; line-height:1.6; font-size:14px;">{}</div>',
-            bg, border, obj.message,
+            bg, border, render_message_with_tables(obj.message),
         )
 
     @admin.display(description="메타데이터")
@@ -174,6 +284,65 @@ class ChatLogDisplayMixin:
             'border-radius:8px; max-height:600px; overflow:auto; '
             'font-size:12px; line-height:1.5;">{}</pre>',
             pretty,
+        )
+
+    @admin.display(description="대화 문맥")
+    def context_summary_display(self, obj):
+        """세션 문맥(턴 전/후)과 응답 정보를 항목별 표로 보여준다."""
+        metadata = obj.metadata or {}
+        before = metadata.get("context_before")
+        after = metadata.get("context_after")
+        if not isinstance(before, dict) and not isinstance(after, dict):
+            return "-"
+        before = before if isinstance(before, dict) else {}
+        has_after = isinstance(after, dict)
+        after = after if has_after else {}
+
+        td = "padding:5px 10px; border:1px solid #e5e7eb; vertical-align:top;"
+        th = td + " background:#f3f4f6; text-align:left; white-space:nowrap;"
+        changed_td = td + " background:#fef9c3;"
+
+        rows = []
+        for key, label in CONTEXT_SUMMARY_FIELDS:
+            old, new = before.get(key), after.get(key)
+            if _is_blank(old) and (not has_after or _is_blank(new)):
+                continue
+            cells = [format_html('<th style="{}">{}</th>', th, label),
+                     format_html('<td style="{}">{}</td>', td, _format_context_value(key, old))]
+            if has_after:
+                style = changed_td if old != new else td
+                cells.append(format_html('<td style="{}">{}</td>', style, _format_context_value(key, new)))
+            rows.append(format_html_join("", "{}", ((c,) for c in cells)))
+
+        header = format_html('<th style="{}">항목</th><th style="{}">턴 시작 전</th>', th, th)
+        if has_after:
+            header = format_html('{}<th style="{}">이번 턴 후</th>', header, th)
+        if rows:
+            body = format_html_join("", "<tr>{}</tr>", ((r,) for r in rows))
+            context_table = format_html(
+                '<table style="border-collapse:collapse; font-size:13px;"><thead><tr>{}</tr></thead>'
+                '<tbody>{}</tbody></table>', header, body,
+            )
+        else:
+            context_table = format_html('<div style="color:#6b7280;">{}</div>', "세션에 남은 문맥이 없습니다(새 대화).")
+
+        response_rows = []
+        for key, label in RESPONSE_SUMMARY_FIELDS:
+            value = metadata.get(key)
+            if _is_blank(value):
+                continue
+            response_rows.append((label, _format_context_value(key, value)))
+        response_html = ""
+        if response_rows:
+            response_html = format_html(
+                '<table style="border-collapse:collapse; font-size:13px; margin-top:10px;"><tbody>{}</tbody></table>',
+                format_html_join("", '<tr><th style="' + th + '">{}</th><td style="' + td + '">{}</td></tr>', response_rows),
+            )
+
+        note = "노란 칸은 이번 턴에 바뀐 값입니다." if has_after else "사용자 로그에는 턴 시작 전 문맥만 남습니다(이후 값은 AI 응답 로그에서)."
+        return format_html(
+            '<div style="overflow-x:auto;">{}{}<div style="color:#6b7280; font-size:12px; margin-top:6px;">{}</div></div>',
+            context_table, response_html, note,
         )
 
     @admin.display(description="상대 조합")
@@ -307,16 +476,19 @@ class ChatLogDisplayMixin:
             linked = (
                 ChatLog.objects.filter(
                     turn_id=metadata["scoreboard_turn_id"], intent="scoreboard_analysis",
-                ).only("turn_id", "metadata").first()
+                ).only("turn_id", "metadata", "message").first()
             )
             if linked:
                 log = (linked.metadata or {}).get("admin_log")
                 turn_id = linked.turn_id
                 linked_note = format_html(
                     '<p style="margin:0 0 8px;color:#666;">이 질문과 함께 첨부한 스탯창의 분석 결과 '
-                    '(분석 로그 <a href="{}">{}</a>)</p>',
+                    '(분석 로그 <a href="{}">{}</a>)</p>'
+                    '<div style="white-space:pre-wrap; background:#f9fafb; border:1px solid #e5e7eb; '
+                    'padding:10px 14px; border-radius:8px; margin-bottom:10px; font-size:14px;">{}</div>',
                     reverse("admin:chat_chatlog_change", args=[linked.pk]) if linked.pk else "#",
                     turn_id,
+                    render_message_with_tables(linked.message or ""),
                 )
         if not log:
             return "-"
@@ -613,6 +785,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         "current_hero",
         "target_enemy",
         "enemy_team_display",
+        "context_summary_display",
         "message_box",
         "matchup_card_display",
         "recommend_card_display",
@@ -629,7 +802,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
             "fields": ("created_at", "role_badge", "role", "log_session_id", "turn_id"),
         }),
         ("분석 정보", {
-            "fields": ("intent", "current_hero", "target_enemy", "enemy_team_display"),
+            "fields": ("intent", "current_hero", "target_enemy", "enemy_team_display", "context_summary_display"),
         }),
         ("메시지", {
             "fields": ("related_question", "message_box", "matchup_card_display", "recommend_card_display", "suggested_questions_display"),
@@ -756,6 +929,7 @@ class ErrorChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         "current_hero",
         "target_enemy",
         "enemy_team_display",
+        "context_summary_display",
         "message_box",
         "metadata_pretty",
     )
@@ -765,7 +939,7 @@ class ErrorChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
             "fields": ("created_at", "log_session_id", "turn_id"),
         }),
         ("분석 정보", {
-            "fields": ("intent", "current_hero", "target_enemy", "enemy_team_display"),
+            "fields": ("intent", "current_hero", "target_enemy", "enemy_team_display", "context_summary_display"),
         }),
         ("오류 내용", {
             "fields": ("message_box",),
@@ -819,6 +993,7 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         "current_hero",
         "target_enemy",
         "enemy_team_display",
+        "context_summary_display",
         "related_question",
         "message_box",
         "matchup_card_display",
@@ -831,7 +1006,7 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
 
     fieldsets = (
         ("기본 정보", {
-            "fields": ("created_at", "log_session_id", "turn_id", "intent", "current_hero", "target_enemy", "enemy_team_display"),
+            "fields": ("created_at", "log_session_id", "turn_id", "intent", "current_hero", "target_enemy", "enemy_team_display", "context_summary_display"),
         }),
         ("질문 / AI 답변", {
             "fields": ("related_question", "message_box", "matchup_card_display", "recommend_card_display", "suggested_questions_display", "scoreboard_admin_log_display"),
