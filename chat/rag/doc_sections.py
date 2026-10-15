@@ -8,7 +8,7 @@ import os
 import re
 from typing import Dict, List, Optional
 
-from chat.domain.heroes import HERO_TO_ROLE, normalize_hero_name, resolve_hero_name
+from chat.domain.heroes import HERO_TO_ROLE, ROLE_LABELS, normalize_hero_name, resolve_hero_name
 from chat.rag.vectorstore import MD_PATH
 
 logger = logging.getLogger(__name__)
@@ -236,6 +236,82 @@ def get_skill_keys() -> Dict[str, Dict[str, str]]:
     if _skill_keys_cache is None:
         _skill_keys_cache = _build_skill_keys()
     return _skill_keys_cache
+
+
+# 스킬 줄의 이름과 태그 부분("- 다이너마이트(E): 광역 | 자가 피해; 재사용 …").
+_SKILL_TAG_LINE_RE = re.compile(r"^\s*-\s+([^:;|]{1,40}?)\s*:\s*([^;]+);")
+_TAG_DETAIL_RE = re.compile(r"\(.*?\)")
+_skill_tag_cache: Optional[Dict[str, Dict[str, List[str]]]] = None
+
+
+def _build_skill_tag_index() -> Dict[str, Dict[str, List[str]]]:
+    index: Dict[str, Dict[str, List[str]]] = {}
+    for hero, body in _hero_section_bodies().items():
+        for line in body:
+            match = _SKILL_TAG_LINE_RE.match(line)
+            # 스킬 줄은 이름에 단축키 괄호가 있거나 태그가 둘 이상이다.
+            if not match or ("(" not in match.group(1) and "|" not in match.group(2)):
+                continue
+            for raw in re.split(r"[|·,/]", _TAG_DETAIL_RE.sub("", match.group(2))):
+                # "투사체(낙차 있음, 폭발형, 자가 피해 없음)"의 괄호는 태그가 아니라 세부 설명이다.
+                tag = raw.strip()
+                if not tag or len(tag) > 12 or re.search(r"[\d:]", tag):
+                    continue
+                skills = index.setdefault(tag, {}).setdefault(hero, [])
+                if match.group(1) not in skills:
+                    skills.append(match.group(1))
+    return index
+
+
+# 이보다 적은 영웅에게 붙은 태그는 문서에 드물게만 붙어 있어(밀쳐내기는 267번 나오지만 태그는 1개) 목록으로 쓰지 않는다.
+SKILL_TAG_MIN_HEROES = 3
+
+
+def listable_skill_tags() -> List[str]:
+    """영웅 목록 질문에 쓸 태그(붙은 영웅이 많은 순)."""
+    index = get_skill_tag_index()
+    tags = [tag for tag, heroes in index.items() if len(heroes) >= SKILL_TAG_MIN_HEROES]
+    return sorted(tags, key=lambda t: -len(index[t]))
+
+
+def get_skill_tag_index() -> Dict[str, Dict[str, List[str]]]:
+    """{태그: {영웅: [스킬 이름]}} — 원본 문서 스킬 줄의 태그 기준."""
+    global _skill_tag_cache
+    if _skill_tag_cache is None:
+        _skill_tag_cache = _build_skill_tag_index()
+    return _skill_tag_cache
+
+
+def skill_tag_section(tag: Optional[str]) -> Optional[str]:
+    """그 태그가 붙은 스킬을 영웅별로 나열한 글(검색 결과 앞에 넣는다)."""
+    heroes = get_skill_tag_index().get(tag or "")
+    if not heroes:
+        return None
+    lines = [
+        f"- {hero}({ROLE_LABELS.get(HERO_TO_ROLE.get(hero), '')}): {', '.join(skills)}"
+        for hero, skills in heroes.items()
+    ]
+    return f"'{tag}' 태그가 붙은 스킬(원본 문서 전체, {len(heroes)}명)\n" + "\n".join(lines)
+
+
+_source_lines_cache: Optional[List[str]] = None
+# 목록 항목의 이름 부분("- 마이크로 미사일(E): ..."의 "마이크로 미사일(E)").
+_LIST_ITEM_LABEL_RE = re.compile(r"^\s*-\s+([^:;|\n]{1,40}?)\s*:")
+
+
+def continued_line_label(chunk_body: str) -> Optional[str]:
+    """줄 중간부터 시작하는 chunk면 그 줄의 항목 이름(chunk 경계에서 잘려 이름이 앞 조각에 남은 경우)."""
+    global _source_lines_cache
+    if _source_lines_cache is None:
+        _source_lines_cache = (read_source_markdown() or "").split("\n")
+    first = (chunk_body or "").lstrip().split("\n", 1)[0].strip()[:60]
+    if len(first) < 10:
+        return None
+    containing = [line for line in _source_lines_cache if first in line]
+    if not containing or any(line.lstrip().startswith(first) for line in containing):
+        return None
+    match = _LIST_ITEM_LABEL_RE.match(containing[0])
+    return match.group(1).strip() if match else None
 
 
 # 영웅을 가리킨다고 볼 스킬 이름의 최소 길이(공백 제외, "돌진" 같은 일반어 제외).
