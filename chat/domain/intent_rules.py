@@ -1003,8 +1003,10 @@ def is_hero_list_followup(message: str, previous_question: str) -> bool:
 _MEANING_QUESTION_RE = re.compile(
     r"무슨\s*(말|뜻|의미)|뭔\s*(말|뜻)|(뜻|의미)\s*(가|이)?\s*(뭐|머)|(다는|라는|란|이란)\s*(게|건|거|말)"
 )
-# 이유를 묻거나 사실을 확인하는 표현("왜 ~야?", "~지 않아?", "~맞아?").
-_CHECK_QUESTION_RE = re.compile(r"왜|어째서|(지|잖)\s*않아|잖아|아니지|아니야|아닌가|맞아\?|맞지")
+# 이유를 묻거나 사실을 확인·반박하는 표현("왜 ~야?", "~지 않아?", "~맞아?", "~있다며", "내가 알기론").
+_CHECK_QUESTION_RE = re.compile(
+    r"왜|어째서|(지|잖)\s*않아|잖아|아니지|아니야|아닌가|맞아\?|맞지|[다라]며(?![가-힣])|알기로|알기론"
+)
 # 챗봇이 앞에서 한 말을 가리키는 표현("왜 그렇게 적은거야?", "아까 넣었잖아").
 _ANSWER_REFERENCE_RE = re.compile(
     r"적은|적었|썼|쓴\s*거|말한|말했|넣은|넣었|뺀|뺐|추천한|추천했|아까|방금|위에서|내\s*말은|그게\s*아니라|그\s*말이\s*아니라"
@@ -1092,7 +1094,7 @@ def should_ask_hero_context(state: ChatbotGraphState) -> bool:
     """자기 영웅도 상대 영웅도 모르는 상황 질문이라 영웅부터 되물어야 하는지."""
     if state.get("role_filter") or role_filter_from_text(state.get("message", "")):
         return False
-    if state.get("intent") not in HERO_CONTEXT_CLARIFICATION_INTENTS:
+    if state.get("intent") not in HERO_CONTEXT_CLARIFICATION_INTENTS or state.get("role_neutral_question"):
         return False
     known = (
         state.get("current_hero") or state.get("target_enemy") or state.get("enemy_team")
@@ -1120,6 +1122,9 @@ def should_ask_role_filter(state: ChatbotGraphState) -> bool:
         return False
     # 앞 목록 질문이나 앞 답변을 이어 묻는 말이라 그 질문과 같은 기준으로 답한다.
     if state.get("is_hero_list_followup") or state.get("is_answer_followup"):
+        return False
+    # 조건에 맞는 영웅 목록이나 사실을 묻는 질문은 사용자 역할과 무관하다.
+    if state.get("role_neutral_question"):
         return False
 
     intent = state.get("intent")
