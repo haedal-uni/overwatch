@@ -25,6 +25,7 @@ from chat.domain.heroes import (
     josa_eul_reul,
     make_role_filter,
     normalize_hero_name,
+    resolve_hero_name,
     role_filter_label,
 )
 from chat.domain.intent_rules import (
@@ -48,7 +49,6 @@ from chat.domain.intent_rules import (
     analyze_team_comp,
     infer_current_hero,
     infer_intent_by_rule,
-    infer_target_enemy,
     is_composition_reask,
     is_ellipsis_followup,
     is_performance_comparison_question,
@@ -56,6 +56,8 @@ from chat.domain.intent_rules import (
     is_perk_question,
     TOPIC_HERO_INTENTS,
     mentions_hero_kit,
+    is_explanation_question,
+    is_hero_enumeration_request,
     is_hero_list_followup,
     is_previous_answer_followup,
     is_hero_only_followup,
@@ -70,7 +72,7 @@ from chat.domain.intent_rules import (
     side_unclear_heroes,
     wants_composition_recommendation,
 )
-from chat.rag.doc_sections import find_heroes_by_skill_name
+from chat.rag.doc_sections import find_heroes_by_skill_name, listable_skill_tags
 from chat.rag.llm_utils import call_llm_text, safe_json_loads
 from chat.rag.matchup_tables import rank_opponents
 
@@ -160,10 +162,14 @@ def parse_stats_from_text_node(state: ChatbotGraphState) -> ChatbotGraphState:
         high_threat_enemy: Optional[str] = None
         max_score = -1
         for hero, stats in enemy_stats.items():
+            # "힐러 1"처럼 영웅이 아닌 이름은 위협 영웅 후보에서 뺀다.
+            hero_name = resolve_hero_name(hero)
+            if not hero_name:
+                continue
             score = (stats.get("damage") or 0) + (stats.get("kills") or 0) * 500
             if score > max_score:
                 max_score = score
-                high_threat_enemy = hero
+                high_threat_enemy = hero_name
 
         has_stats = bool(enemy_stats or my_stats or my_team_stats)
 
@@ -245,6 +251,9 @@ def llm_parse_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
             for role, heroes in ROLE_HEROES.items()
         )
 
+        skill_tags = listable_skill_tags()
+        skill_tag_text = ", ".join(skill_tags)
+
         prompt = f"""
 너는 오버워치2 코칭 챗봇의 문맥 파악 모듈이다.
 사용자 메시지와 이전 대화 기록을 읽고 아래 항목을 JSON으로 추출해라.
@@ -273,8 +282,12 @@ def llm_parse_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
   "current_hero_role": "tank | damage | support 또는 null",
   "target_enemy": "카운터하거나 상대해야 할 적 영웅 이름 또는 null",
   "enemy_team": ["적팀 영웅1", "적팀 영웅2"],
-  "ally_team": ["우리팀(아군) 영웅1", "우리팀(아군) 영웅2"]
+  "ally_team": ["우리팀(아군) 영웅1", "우리팀(아군) 영웅2"],
+  "skill_tag": "아래 스킬 태그 중 하나 또는 null"
 }}
+
+스킬 태그(원본 문서가 스킬마다 붙인 성질):
+{skill_tag_text}
 
 intent 분류 기준 (각 항목의 예시를 참고해라):
 
@@ -395,6 +408,11 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
 15. "이전 아군 조합"에 있는 영웅이 이번 메시지에 "상대", "적" 같은 적대 표현 없이
     다시 나오면 그 영웅은 여전히 아군이다 — ally_team에 넣고 target_enemy/
     enemy_team에는 넣지 마라("시온만 킬하고"는 아군 시온이 킬을 낸다는 뜻이다).
+16. skill_tag는 사용자가 어떤 성질을 가진 스킬이나 그런 스킬을 가진 영웅을 물을 때만 그 성질에 맞는
+    태그 하나를 위 목록에서 그대로 골라 채운다(예: "본인에게도 피해를 받는 영웅은?" → "자가 피해",
+    "날 수 있는 영웅 뭐 있어?" → "비행"). 태그 이름이 질문의 성질과 같은 뜻일 때만 고르고, 비슷하거나
+    일부만 겹치는 태그로 대신하지 마라(예: 넉백을 물었는데 "위치 변경"이나 "충격파"를 고르지 마라).
+    맞는 태그가 없거나 그런 질문이 아니면 null로 둬라.
 
 예시:
 - "메르시가 힐을 안할건데 뭘로 힐을 많이 해야할까" → intent: performance_improve,
@@ -526,6 +544,14 @@ X를 유지한 상태에서 상대 조합을 이기는 운영법을 원하는 �
                     verified_team.append(n)
             if verified_team:
                 result["llm_enemy_team"] = verified_team
+
+        # 특정 영웅의 스킬을 묻는 질문은 영웅 목록 질문이 아니다(목록을 묻거나 영웅 이름이 없을 때만 받는다).
+        skill_tag = parsed.get("skill_tag")
+        if (
+            isinstance(skill_tag, str) and skill_tag.strip() in skill_tags
+            and (is_pick_request(message) or not find_all_heroes(message))
+        ):
+            result["llm_skill_tag"] = skill_tag.strip()
 
         logger.info("[LLM_PARSE_CONTEXT] %s", result)
         return result
@@ -735,6 +761,16 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     # LLM은 덧붙인 영웅들을 아군 조합으로 읽기 쉽다. 앞 질문의 의도를 따른다.
     if hero_list_followup or answer_followup:
         intent = context.get("last_intent") or "general"
+        # 이어 묻는 말 속 영웅은 질문의 주제다. 상대 표지가 없으면 LLM의 상대 분류를 버린다.
+        if (llm_target_enemy or llm_enemy_team) and not (
+            extract_enemy_team(message) or find_enemy_mentioned_hero(message)
+        ):
+            logger.info(
+                "[FOLLOWUP NOT ENEMY] 후속 질문 속 영웅을 LLM이 상대(%s / %s)로 잡아 버림: %s",
+                llm_target_enemy, llm_enemy_team, message,
+            )
+            llm_target_enemy = None
+            llm_enemy_team = None
     # 되묻기 답만 보면 의도가 흐려지므로 원래 질문의 의도를 따른다.
     if hero_context_reply_consumed and context.get("pending_question_intent"):
         intent = context["pending_question_intent"]
@@ -777,7 +813,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     if not current_hero and not session_timed_out:
         # 이전 영웅을 사용자로 가정한 LLM의 아군·상대 분류는 믿지 않는다.
         llm_sides = [] if llm_hero_was_stale else (
-            (state.get("llm_ally_team") or []) + (state.get("llm_enemy_team") or [])
+            (state.get("llm_ally_team") or []) + (llm_enemy_team or [])
         )
         side_heroes = {
             normalize_hero_name(h) for h in (
@@ -1089,9 +1125,19 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         intent in TOPIC_HERO_INTENTS and not current_hero and not ally_team_this_turn
         and any(h not in enemy_team for h in find_all_heroes(effective_message))
     )
+    # 조건에 맞는 영웅 목록이나 영웅·스킬 사실을 묻는 질문도 사용자 자리와 무관하다(역할을 좁히거나 고정하지 않는다).
+    role_neutral_question = bool(
+        not is_team_comp_question
+        and (
+            answer_followup
+            or bool(state.get("llm_skill_tag"))
+            or is_hero_enumeration_request(effective_message)
+            or (intent == "general" and is_explanation_question(effective_message))
+        )
+    )
     team_comp_analysis = (
         analyze_team_comp(ally_team, effective_roster_size)
-        if len(ally_team) >= 2 and ally_comp_fresh and not topic_hero_question
+        if len(ally_team) >= 2 and ally_comp_fresh and not topic_hero_question and not role_neutral_question
         else None
     )
     # 정원이 찬 조합은 역할을 좁히지 않고 추천 카드 대신 조합 평가로 보낸다.
@@ -1169,19 +1215,14 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         logger.info("[TARGET PRIORITY] intent %s → stay로 교정 (상대 조합: %s)", intent, enemy_team)
         intent = "stay"
 
-    context_for_enemy = {
-        **context, "current_hero": current_hero, "ally_team_this_turn": ally_team_this_turn,
-        "enemy_team_this_turn": list(llm_enemy_team or rule_based_enemy_team or []),
-    }
-    rule_based_target_enemy = infer_target_enemy(effective_message, context_for_enemy, intent)
-    target_enemy = llm_target_enemy or rule_based_target_enemy
+    # target은 LLM 값만 쓰고, 아래에서 아군·자기 영웅이면 지우기만 한다.
+    target_enemy = llm_target_enemy
     ally_set = {normalize_hero_name(h) for h in ally_team}
     enemy_set = {normalize_hero_name(h) for h in enemy_team}
     if target_enemy and normalize_hero_name(target_enemy) in ally_set - enemy_set:
         logger.info("[TARGET ENEMY IS ALLY] '%s'는 아군 조합 %s에 있어 target_enemy에서 제거함", target_enemy, ally_team)
         target_enemy = None
         llm_target_enemy = None
-        rule_based_target_enemy = None
 
     # 자기 영웅과 같거나 자기 선언 패턴에 걸리면 상대에서 버린다.
     if target_enemy and (
@@ -1196,7 +1237,6 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         )
         target_enemy = None
         llm_target_enemy = None
-        rule_based_target_enemy = None
 
     # 상대를 하나로 좁혔는지(되묻기 문구를 그 하나로 맞춘다).
     enemy_focus_hero = find_enemy_mentioned_hero(effective_message)
@@ -1214,7 +1254,6 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         llm_target_enemy
         or llm_enemy_team
         or rule_based_enemy_team
-        or (rule_based_target_enemy and rule_based_target_enemy in mentioned_heroes_in_message)
     )
 
     high_threat_enemy = state.get("high_threat_enemy") or context.get("high_threat_enemy")
@@ -1309,7 +1348,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 {"label": ROLE_LABELS[role], "value": role, "type": "role_filter"}
                 for role in ordered_candidates
             )
-    elif ally_comp_stale and not explicit_role_filter and not current_hero_role:
+    elif ally_comp_stale and not explicit_role_filter and not current_hero_role and not role_neutral_question:
         role_basis_note = "이전에 말씀하신 아군 조합 기준으로 답변드립니다."
 
     # 인원수 정정 버튼. 조합을 기준으로 답한 턴이면 역할 좁히기 여부와 무관하게
@@ -1324,21 +1363,16 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "type": "roster_size",
             })
 
+    # 이름 없는 후속 질문은 직전 상대를 이어받는다(LLM은 이번 메시지에 이름이 있을 때만 target을 준다).
     if intent in ["counter", "stay", "performance_improve"] and not target_enemy:
         previous_target_enemy = context.get("target_enemy")
-
-        # 유지 의사를 밝힌 경우 직전 상대를 이어받는다(아군이 된 영웅은 제외).
         if (
             previous_target_enemy
             and normalize_hero_name(previous_target_enemy) not in ally_set - enemy_set
             and normalize_hero_name(previous_target_enemy) != current_hero
         ):
             target_enemy = previous_target_enemy
-
-            if intent == "counter":
-                enemy_named_this_turn = True
-            elif intent == "stay":
-                # 이름을 다시 말하지 않아도 직전 상대 기준으로 운영법을 설명한다.
+            if intent in ["counter", "stay"]:
                 enemy_named_this_turn = True
 
     # focus_heroes: 이번 질문이 다루는 주제 영웅(자기 영웅이 아니어도 된다).
@@ -1360,7 +1394,11 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 h for h in find_heroes_by_skill_name(effective_message) if h not in ally_team_this_turn
             ]
             skill_name_focus = bool(focus_heroes)
-        if not focus_heroes and is_ellipsis_followup(effective_message):
+        # 영웅을 골라 달라거나 스킬 성질로 영웅을 찾는 질문은 앞 영웅을 생략한 후속 질문이 아니다.
+        if (
+            not focus_heroes and not state.get("llm_skill_tag") and not is_pick_request(effective_message)
+            and is_ellipsis_followup(effective_message)
+        ):
             if len(previous_focus_heroes) == 1:
                 focus_heroes = list(previous_focus_heroes)
             else:
@@ -1389,6 +1427,10 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "enemy_named_this_turn": enemy_named_this_turn,
         "current_hero_uncertain": current_hero_uncertain,
     }
+
+    # LLM만 상대를 알아본 턴도 상대를 말한 턴이다.
+    if llm_target_enemy or llm_enemy_team:
+        no_enemy_turn_count = 0
 
     context_patch: Dict[str, Any] = {
         "last_user_message": message,
@@ -1529,6 +1571,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "is_hero_kit_question": skill_name_focus or mentions_hero_kit(effective_message),
         "is_hero_list_followup": hero_list_followup,
         "is_answer_followup": answer_followup,
+        "role_neutral_question": role_neutral_question,
         "previous_answer": (context.get("last_answer") or "") if (answer_followup or hero_list_followup) else "",
         # 역할 후보와 그 조합이 최근 것인지. fresh면 되묻지 않는다.
         "role_candidates": team_comp_role_candidates,
