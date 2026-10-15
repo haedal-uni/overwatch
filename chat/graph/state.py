@@ -83,6 +83,10 @@ class ChatbotGraphState(TypedDict, total=False):
     # 앞 답변에 나온 표현의 뜻·이유를 묻는 후속 질문인지와 그 답변.
     is_answer_followup: bool
     previous_answer: str
+    # 사용자 역할과 무관한 질문인지(영웅 목록·사실 질문 — 역할을 좁히거나 고정하지 않는다).
+    role_neutral_question: bool
+    # 질문이 묻는 스킬 성질(원본 문서의 스킬 태그, 문맥 파악 LLM이 고른다).
+    llm_skill_tag: Optional[str]
     focus_heroes: List[str]
     focus_hero_pick: Optional[str]
     needs_focus_hero_clarify: bool
