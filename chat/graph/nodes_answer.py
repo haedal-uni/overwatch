@@ -45,7 +45,7 @@ from chat.domain.intent_rules import (
     roster_role_quota_text,
     roster_size_label,
 )
-from chat.rag.doc_sections import get_hero_teamplay, get_skill_keys, skill_key_reference
+from chat.rag.doc_sections import get_hero_teamplay, get_skill_keys, get_skill_tag_index, skill_key_reference
 from chat.rag.llm_utils import call_llm_text, call_llm_text_creative, safe_json_loads
 from chat.domain.prompts import (
     SUGGESTED_QUESTIONS_INLINE_RULES,
@@ -128,6 +128,11 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         pick_role = requested_pick_role(state.get("message") or "") if pick_request else None
         # 몇 명을 골라달라는 게 아니라 조건에 맞는 영웅을 모두 물었다.
         hero_enumeration = is_hero_enumeration_request(state.get("message") or "")
+        # 스킬 성질로 영웅을 묻는 질문은 그 성질을 가진 영웅을 모두 답한다.
+        skill_tag = state.get("llm_skill_tag")
+        if skill_tag:
+            pick_request = True
+            hero_enumeration = True
         if pick_role and not role_filter_explicit and not current_hero_role:
             role_filter = pick_role
 
@@ -140,6 +145,12 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "상황에 맞는 영웅이나 조합을 자유롭게 제안해라."
             )
             answer_allowed_hero_set: Optional[set] = None
+        elif state.get("role_neutral_question") and not role_filter_explicit and not pick_role:
+            allowed_heroes_text = (
+                "이 질문은 사용자가 플레이할 영웅을 고르는 질문이 아니라 영웅·스킬에 대한 사실을 묻는 질문이다. "
+                "역할과 무관하게 질문 조건에 맞는 영웅만 다루고, 조건과 상관없는 영웅을 추천하지 마라."
+            )
+            answer_allowed_hero_set = None
         elif parse_role_filter(role_filter):
             # 복합 필터면 두 역할 영웅이 함께 허용된다.
             filter_roles = parse_role_filter(role_filter)
@@ -424,7 +435,14 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "첫 줄은 어떤 영웅이 왜 맞는지에 대한 결론 1문장(예: \"근접 싸움을 같이 해줄 딜러가 "
                 "잘 맞음\" — \"~조합이 유리\", \"~의 강점과 운영 방식\" 같은 제목형 문장은 쓰지 마라), "
                 "빈 줄, "
-                + ("질문의 조건에 맞는 영웅을 참고 문서와 게임 지식에서 빠짐없이 찾아(인원 제한 없음) "
+                + (f"참고 문서의 '{skill_tag}' 태그 스킬 목록이 조건에 맞는 영웅 전체다. 목록의 영웅을 한 명도 "
+                   "빼지 말고 목록에 없는 영웅은 넣지 말고"
+                   + (f"(질문이 정한 {role_filter_label(pick_role)} 영웅만)" if pick_role else "")
+                   + ", 목록에 적힌 스킬 이름과 함께 "
+                   if hero_enumeration and skill_tag else
+                   "질문의 조건에 맞는 영웅을 참고 문서와 게임 지식에서 빠짐없이 찾아(인원 제한 없음) "
+                   "조건을 만족하는 스킬 이름과 함께 "
+                   "(그 영웅의 다른 스킬과 섞지 말고, 조건을 만족하는 스킬이 없는 영웅은 넣지 마라) "
                    if hero_enumeration else "추천 영웅 3명 안팎을 ")
                 + "한 줄에 하나씩 \"영웅 — 이유\"로. 이유는 "
                 + ("20자 안팎" if is_simple_style else "1~2문장")
@@ -905,6 +923,14 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
                     f"위 추천은 {role_label_kor} 영웅 기준으로 제한되었습니다."
                 )
                 answer = answer + notice
+
+        # 스킬 태그 목록 질문은 문서 태그 표에 없는 영웅 줄을 지운다(LLM이 비슷한 성질의 영웅을 덧붙인다).
+        if skill_tag and hero_enumeration:
+            tag_heroes = set(get_skill_tag_index().get(skill_tag, {}))
+            off_tag = [h for h in recommended_heroes_in_answer(answer) if h not in tag_heroes]
+            if tag_heroes and off_tag:
+                logger.info("[SKILL TAG] '%s' 태그 표에 없는 영웅 줄 제거: %s", skill_tag, off_tag)
+                answer = remove_from_recommendation_lines(answer, off_tag)
 
         retrieved_docs = state.get("retrieved_docs", [])
         used_docs = [doc for doc in retrieved_docs if int(doc.get("doc_id", -1)) in used_doc_ids]
