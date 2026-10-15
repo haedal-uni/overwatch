@@ -7,6 +7,8 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
+from chat.domain.heroes import HERO_NAME_TO_CANONICAL, HERO_TO_ROLE
+
 logger = logging.getLogger(__name__)
 
 
@@ -177,6 +179,8 @@ _POLITE_ENDING_RULES = [
     (re.compile(r"없습니다\.?$"), "없음"),
     (re.compile(r"좋습니다\.?$"), "좋음"),
     (re.compile(r"됩니다\.?$"), "됨"),
+    # 띄어 쓴 보조 용언("해야 합니다")은 지우면 문장이 끊기므로 "함"으로 줄인다.
+    (re.compile(r"(?<![가-힣])합니다\.?$"), "함"),
     (re.compile(r"[가-힣]*합니다\.?$"), lambda m: m.group(0).replace("합니다", "").rstrip(".")),
     # 명사 뒤 "입니다"만 뗀다(앞이 한 글자면 동사 어미라 건드리지 않는다).
     (re.compile(r"([가-힣]{2,})입니다\.?$"), r"\1"),
@@ -339,6 +343,8 @@ def _format_stat_text(stats: Dict[str, Any], label: str = "") -> str:
             parts.append(f"딜량 {s['damage']}")
         if s.get("healing") is not None:
             parts.append(f"힐량 {s['healing']}")
+        if s.get("mitigation") is not None:
+            parts.append(f"경감량 {s['mitigation']}")
         lines.append(f"- {hero}: {', '.join(parts)}")
     return "\n".join(lines)
 
@@ -380,3 +386,220 @@ def fix_skill_keys(text: str, skill_keys: Dict[str, Dict[str, str]]) -> str:
         return f"{name}({shown})"
 
     return pattern.sub(_replace, text)
+
+
+# 원본 문서의 역할 표기(돌격/공격/지원)를 화면 용어(탱커/딜러/힐러)에 맞춘다.
+# 괄호 표기와 "OO 영웅"만 바꾸고 "공격하다"·"지원하다" 같은 동사는 건드리지 않는다.
+_DOC_ROLE_TO_LABEL = {"돌격": "탱커", "공격": "딜러", "지원": "힐러", "지원가": "힐러"}
+_DOC_ROLE_PAREN_RE = re.compile(r"\(\s*(돌격|공격|지원가|지원)(?:\s*영웅)?\s*(,[^)]*)?\)")
+_DOC_ROLE_HERO_WORD_RE = re.compile(r"(?<![가-힣])(돌격|공격|지원)\s*영웅")
+_DOC_ROLE_GROUP_WORD_RE = re.compile(r"(?<![가-힣])(돌격|공격|지원)군(?![가-힣])")
+
+
+def unify_role_labels(text: str) -> str:
+    """"(돌격)"·"공격 영웅"·"지원군"·"지원가" 같은 문서 역할 표기를 탱커/딜러/힐러로 바꾼다."""
+    if not text:
+        return text
+    text = _DOC_ROLE_PAREN_RE.sub(lambda m: f"({_DOC_ROLE_TO_LABEL[m.group(1)]}{m.group(2) or ''})", text)
+    text = _DOC_ROLE_HERO_WORD_RE.sub(lambda m: f"{_DOC_ROLE_TO_LABEL[m.group(1)]} 영웅", text)
+    text = _DOC_ROLE_GROUP_WORD_RE.sub(lambda m: _DOC_ROLE_TO_LABEL[m.group(1)], text)
+    return text.replace("지원가", "힐러")
+
+
+_ROLE_LABEL_TO_KEY = {"탱커": "tank", "딜러": "damage", "힐러": "support"}
+_HERO_ROLE_LABEL_RE = re.compile(
+    r"(?<![가-힣A-Za-z])("
+    + "|".join(re.escape(n) for n in sorted(HERO_NAME_TO_CANONICAL, key=len, reverse=True))
+    + r")\s*\((탱커|딜러|힐러)\)"
+)
+
+
+def drop_single_role_labels(answer: str) -> str:
+    """영웅 이름 뒤 "(역할)" 표기가 모두 같은 역할이면 괄호를 지운다."""
+    if not answer:
+        return answer
+    matches = [
+        m for m in _HERO_ROLE_LABEL_RE.finditer(answer)
+        if HERO_TO_ROLE.get(HERO_NAME_TO_CANONICAL[m.group(1)]) == _ROLE_LABEL_TO_KEY[m.group(2)]
+    ]
+    if not matches or len({_ROLE_LABEL_TO_KEY[m.group(2)] for m in matches}) > 1:
+        return answer
+    for m in reversed(matches):
+        answer = answer[:m.start()] + m.group(1) + answer[m.end():]
+    return answer
+
+
+# 영웅을 추천·교체 대상으로 드는 줄의 표지.
+_RECOMMEND_LINE_WORDS = ("추천", "바꾼다면", "바꾸", "바꿔", "교체", "픽", "고르", "골라", "선택")
+
+
+def _is_recommendation_line(line: str, hero_surfaces: List[str]) -> bool:
+    if any(w in line for w in _RECOMMEND_LINE_WORDS):
+        return True
+    # "영웅 — 이유", "영웅: ~", "- 영웅(딜러)" 처럼 줄 첫머리에 영웅을 세운 목록 줄.
+    head = re.sub(r"^\s*(?:[-*•]|\d+[.)])?\s*", "", line)
+    return any(
+        head.startswith(s) and re.match(r"\s*(?:\(|—|-|:|,|$)", head[len(s):])
+        for s in hero_surfaces
+    )
+
+
+def recommended_heroes_in_answer(answer: str) -> List[str]:
+    """추천·교체 대상으로 등장한 영웅(등장 순서, 표준 이름)."""
+    from chat.domain.heroes import find_all_heroes
+
+    result: List[str] = []
+    for line in (answer or "").split("\n"):
+        heroes = find_all_heroes(line)
+        if heroes and _is_recommendation_line(line, _surfaces_for(heroes)):
+            result.extend(heroes)
+    return result
+
+
+def _surfaces_for(heroes: List[str]) -> List[str]:
+    wanted = set(heroes)
+    surfaces = [s for s, c in HERO_NAME_TO_CANONICAL.items() if c in wanted]
+    return sorted(set(surfaces) | wanted, key=len, reverse=True)
+
+
+def _list_head(line: str) -> str:
+    return re.sub(r"^\s*(?:[-*•]|\d+[.)])?\s*", "", line)
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def remove_from_recommendation_lines(answer: str, heroes: List[str]) -> str:
+    """추천 줄에서 heroes(표준 이름)를 뺀다.
+
+    그 영웅이 이끄는 목록 줄은 하위 설명 줄과 함께 지우고, 쉼표로 나열한 줄에서는 그 항목만 지운다.
+    문장 속에 섞여 항목만 떼어낼 수 없으면 줄을 지운다.
+    """
+    from chat.domain.heroes import find_all_heroes
+
+    removed = set(heroes)
+    if not removed:
+        return answer
+    surfaces = _surfaces_for(list(removed))
+    item_re = re.compile(
+        r"(?:\s*[,/·]\s*)?(?:" + "|".join(re.escape(s) for s in surfaces) + r")"
+        r"(?:\s*\([^)]*\))?(?=\s*(?:[,/·]|$))"
+    )
+    out: List[str] = []
+    emptied_after: set = set()
+    skip_deeper_than: Optional[int] = None
+    for line in (answer or "").split("\n"):
+        if skip_deeper_than is not None:
+            if line.strip() and _indent(line) > skip_deeper_than:
+                continue
+            skip_deeper_than = None
+        if not removed & set(find_all_heroes(line)) or not _is_recommendation_line(line, surfaces):
+            out.append(line)
+            continue
+        head = _list_head(line)
+        led_by_removed = any(
+            head.startswith(s) and re.match(r"\s*(?:\(|—|-|:|,|$)", head[len(s):]) for s in surfaces
+        )
+        # 그 영웅이 이끄는 목록 줄은 하위 설명과 함께 지운다(여러 영웅을 쉼표로 나열한 줄은 항목만 뺀다).
+        if led_by_removed and not re.match(r"[^—:\n]*,", head):
+            skip_deeper_than = _indent(line)
+            emptied_after.add(len(out) - 1)
+            continue
+        stripped = item_re.sub("", line)
+        stripped = re.sub(r"^(\s*(?:[^:\n]*:\s*)?)[,/·]\s*", r"\1", stripped)
+        remaining = set(find_all_heroes(stripped))
+        if removed & remaining or not remaining:
+            emptied_after.add(len(out) - 1)
+            continue
+        out.append(stripped)
+    # 아래 항목이 모두 지워져 홀로 남은 "…:" 제목 줄도 지운다.
+    out = [
+        line for i, line in enumerate(out)
+        if not (
+            i in emptied_after and line.rstrip().endswith(":")
+            and (i + 1 >= len(out) or not out[i + 1].strip())
+        )
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip("\n")
+
+
+_RANK_LINE_RE = re.compile(r"^\s*(\d+)\s*위\s*")
+
+
+def enforce_ranking_order(answer: str, ranked_heroes: List[str]) -> str:
+    """"N위 영웅…" 문단들을 코드가 계산한 순위 순서로 다시 놓고 번호를 고친다.
+
+    순위 문단 앞에서 영웅을 둘 이상 늘어놓은 요약 줄은 순서가 어긋날 수 있어 지운다.
+    순위 문단의 영웅을 하나라도 못 알아보면 손대지 않는다.
+    """
+    from chat.domain.heroes import find_all_heroes, normalize_hero_name
+
+    if not answer or not ranked_heroes:
+        return answer
+    order = {normalize_hero_name(h) or h: i for i, h in enumerate(ranked_heroes)}
+    lines = answer.split("\n")
+    rank_starts = [i for i, line in enumerate(lines) if _RANK_LINE_RE.match(line)]
+    if len(rank_starts) < 2:
+        return answer
+
+    def _ranked_names(text):
+        names = [h for h in find_all_heroes(text) if h in order]
+        names += [n for n in re.findall(r"미확인 \S+?\d", text) if n in order]
+        return names
+
+    # 순위 문단 = 순위 줄 + 뒤따르는 내용 줄(빈 줄은 문단 사이 구분으로 따로 본다).
+    blocks = []
+    separator_blank = False
+    for n, start in enumerate(rank_starts):
+        limit = rank_starts[n + 1] if n + 1 < len(rank_starts) else len(lines)
+        end = start + 1
+        while end < limit and lines[end].strip():
+            # 마지막 순위 문단 뒤의 다른 내용("다음 판에 해볼 것…")은 들여쓰기·목록 줄만 이어 붙인다.
+            if n + 1 == len(rank_starts) and not lines[end].startswith((" ", "-", "\t")):
+                break
+            end += 1
+        if n + 1 < len(rank_starts):
+            between = lines[end:limit]
+            if any(line.strip() for line in between):
+                return answer
+            separator_blank = separator_blank or bool(between)
+        blocks.append((start, end))
+
+    keys = []
+    for start, _ in blocks:
+        names = _ranked_names(_RANK_LINE_RE.sub("", lines[start]))
+        if not names:
+            return answer
+        keys.append(order[names[0]])
+
+    head = [
+        line for line in lines[:rank_starts[0]]
+        if len(set(_ranked_names(line))) < 2
+    ]
+    while head and not head[0].strip():
+        head.pop(0)
+    while head and not head[-1].strip():
+        head.pop()
+    if head:
+        head.append("")
+
+    ordered = [b for _, b in sorted(zip(keys, blocks), key=lambda kb: kb[0])]
+    rebuilt: List[str] = []
+    for rank, (start, end) in enumerate(ordered, 1):
+        block_lines = lines[start:end]
+        block_lines[0] = _RANK_LINE_RE.sub(lambda m: m.group(0).replace(m.group(1), str(rank), 1), block_lines[0])
+        if rebuilt and separator_blank:
+            rebuilt.append("")
+        rebuilt.extend(block_lines)
+    return "\n".join(head + rebuilt + lines[blocks[-1][1]:])
+
+
+_QUICK_ACTIONS_HEADER_RE = re.compile(r"^(\s*)바로\s*(?:적용)?할\s*것\s*3가지", re.MULTILINE)
+
+
+def relabel_quick_actions_for_review(answer: str) -> str:
+    """스탯 복기 답변의 "바로 할 것 3가지" 머리줄을 "다음 판에 해볼 것 3가지"로 바꾼다."""
+    if not answer:
+        return answer
+    return _QUICK_ACTIONS_HEADER_RE.sub(r"\1다음 판에 해볼 것 3가지", answer)

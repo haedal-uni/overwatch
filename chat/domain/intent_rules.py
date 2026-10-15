@@ -21,6 +21,9 @@ from chat.domain.heroes import (
     find_side,
     make_role_filter,
     normalize_hero_name,
+    hero_mentioned_in_text,
+    hero_name_regex,
+    strip_hero_mentions,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,7 +71,7 @@ def hero_listed_in_ally_comp(hero: Optional[str], text: str) -> bool:
     # 등장 위치마다 보고, 나열이 아닌 등장이 하나라도 있으면 False.
     found_any = False
     for name in names:
-        for match in re.finditer(re.escape(name), text):
+        for match in re.finditer(hero_name_regex(name), text):
             found_any = True
             prefix = re.sub(rf"{_COMP_LIST_SEPARATOR}$", "", text[: match.start()])
             if not any(prefix.endswith(other) for other in other_names):
@@ -86,7 +89,7 @@ def hero_negated_as_self(hero: Optional[str], text: str) -> bool:
     if not normalized or not text:
         return False
     return any(
-        re.search(rf"{re.escape(name)}{_SELF_NEGATION_SUFFIX}", text)
+        re.search(rf"{hero_name_regex(name)}{_SELF_NEGATION_SUFFIX}", text)
         for name in _hero_name_variants(normalized)
     )
 
@@ -102,9 +105,9 @@ def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
     names = _hero_name_variants(normalized)
 
     for name in names:
-        escaped = re.escape(name)
+        escaped = hero_name_regex(name)
         # 앞에 한글 음절이 없을 때만(영웅 이름 속 음절 오탐 방지).
-        if re.search(rf"(?<![가-힣])(?:난|나는|나|저는|제가|내가)\s*{escaped}", text):
+        if re.search(rf"(?<![가-힣])(?:난|나는|나|저는|제가|내가)\s*{re.escape(name)}", text):
             return True
         if re.search(rf"{escaped}\s*(?:로|으로)\s*(?:플레이|하고|하는|할|가|갈|쓰|쓸|이기|즐기)", text):
             return True
@@ -219,7 +222,65 @@ _COMPOSITION_RECOMMEND_REQUEST_PATTERN = re.compile(
 def wants_composition_recommendation(message: str) -> bool:
     if any(w in message for w in _COMPOSITION_RECOMMEND_REQUEST_WORDS):
         return True
+    if is_pick_request(message):
+        return True
     return bool(_COMPOSITION_RECOMMEND_REQUEST_PATTERN.search(message))
+
+
+_PICK_ROLE_NOUNS = {"탱커": "tank", "딜러": "damage", "힐러": "support", "영웅": None}
+# "꾸밈말 + 역할 명사 + (조사) + 의문사/추천" 구조.
+_PICK_ROLE_JOIN = r"\s*(?:랑|이랑|와|과|하고|이나|나|,|/|\+)\s*"
+_PICK_QUESTION_RE = re.compile(
+    r"(\S+)\s*(탱커|딜러|힐러|영웅)((?:" + _PICK_ROLE_JOIN + r"(?:탱커|딜러|힐러))*)"
+    r"\s*(은|는|이|가|을|를|으로|로)?\s*(뭐|뭘|무엇|누구|누가|추천|알려|말해)"
+)
+
+
+def _ends_with_nieun(word: str) -> bool:
+    last = word[-1] if word else ""
+    return "가" <= last <= "힣" and (ord(last) - 0xAC00) % 28 == 4
+
+
+# 의문 꾸밈말이 붙으면 뒤 표현과 상관없이 픽 질문이다("어떤 힐러가 좋아?").
+_WHICH_ROLE_RE = re.compile(r"(어떤|무슨|어느)\s*(탱커|딜러|힐러|영웅)")
+
+
+def _pick_question_match(message: str):
+    which = _WHICH_ROLE_RE.search(message)
+    if which:
+        return which
+    for match in _PICK_QUESTION_RE.finditer(message):
+        if _ends_with_nieun(match.group(1)):
+            return match
+    return None
+
+
+def is_pick_request(message: str) -> bool:
+    """"잘 어울리는 딜러는 뭐야?"처럼 영웅 픽을 골라달라는 질문인지."""
+    return _pick_question_match(message or "") is not None
+
+
+# 조건에 맞는 영웅을 빠짐없이 묻는 표현("뭐가 있어", "누가 있어", "누구누구").
+_HERO_ENUMERATION_RE = re.compile(r"(뭐|무엇|누가|누구)\s*(가|이)?\s*있|누구\s*누구|다\s*알려|말해|전부|모두")
+
+
+def is_hero_enumeration_request(message: str) -> bool:
+    """픽 질문 중 몇 명을 골라달라는 게 아니라 조건에 맞는 영웅을 모두 묻는 질문인지."""
+    return is_pick_request(message) and bool(_HERO_ENUMERATION_RE.search(message or ""))
+
+
+def requested_pick_role(message: str) -> Optional[str]:
+    """픽 질문이 요구한 역할(탱커/딜러/힐러, 둘 이상이면 복합 필터). "영웅"이면 None."""
+    match = _pick_question_match(message or "")
+    if not match:
+        return None
+    roles = [_PICK_ROLE_NOUNS.get(match.group(2))]
+    if match.re is _PICK_QUESTION_RE:
+        roles += [_PICK_ROLE_NOUNS[w] for w in re.findall(r"탱커|딜러|힐러", match.group(3) or "")]
+    roles = list(dict.fromkeys(r for r in roles if r))
+    if not roles:
+        return None
+    return roles[0] if len(roles) == 1 else make_role_filter(roles)
 
 
 # 조합을 다시 나열하지 않고 추천만 재요청하는 질문.
@@ -229,9 +290,37 @@ def is_composition_reask(message: str) -> bool:
     return wants_composition_recommendation(message)
 
 
+# 이름을 댄 아군 중 누구에게 스킬을 쓸지 묻는 질문("누구한테 나노를 줘?").
+_ALLY_TARGET_CHOICE_RE = re.compile(
+    r"(누구\s*(한테|에게|를|부터)|누굴)\s*(먼저\s*)?[^?\n]{0,15}?"
+    r"(주|줘|쓰|써|걸|붙|넣|살리|살려|지키|지켜|케어|보호|힐|묶)"
+)
+_PICK_VERB_WORDS = ("추천", "골라", "고르", "픽", "뽑", "바꿔", "교체")
+
+
+def is_ally_target_choice_question(message: str) -> bool:
+    if not message or any(w in message for w in _PICK_VERB_WORDS):
+        return False
+    return bool(_ALLY_TARGET_CHOICE_RE.search(message)) and len(find_all_heroes(message)) >= 2
+
+
+# 영웅의 스킬·궁극기·특전을 가리키는 표현.
+_HERO_KIT_PATTERN = re.compile(
+    r"궁(?!금|합)|스킬|특전|퍼크|좌클|우클|쉬프트|시프트"
+    r"|(?<![A-Za-z])(?:[QqEe]|[Ss]hift)(?![A-Za-z])"
+)
+
+
+def mentions_hero_kit(message: str) -> bool:
+    return bool(message and _HERO_KIT_PATTERN.search(message))
+
+
 # 아군의 실제 활약을 비교해달라는 질문.
 _PERFORMANCE_COMPARISON_PATTERN = re.compile(
     r"누(가|구)\s*(더|제일|가장)?\s*(잘\s*(했|하|한)|못\s*(했|하|한)|나은|나아|잘함|못함)"
+    # 이름 없이 순서만 묻는 팀 순위 질문("잘한 순서 알려줘", "순위 매겨줘").
+    r"|(잘|못)\s*한\s*(순|사람|영웅|팀원)|(?<!우선)순위|등수|랭킹|mvp",
+    re.IGNORECASE,
 )
 
 
@@ -455,7 +544,7 @@ def detect_stay_with_named_hero(text: str) -> bool:
 
     names = list(HEROES) + list(HERO_ALIASES.keys())
     for name in names:
-        if re.search(rf"{re.escape(name)}\s*(?:로|으로)", text):
+        if re.search(rf"{hero_name_regex(name)}\s*(?:로|으로)", text):
             return True
     return False
 
@@ -693,9 +782,17 @@ def is_hero_usage_guide_question(text: str) -> bool:
     )
 
 
+# 이름만 나온 영웅을 상대로 추측하지 않는 intent(플레이·운영 질문).
+TOPIC_HERO_INTENTS = ("performance_improve", "general", "map_strategy")
+
+
 def infer_target_enemy(message: str, context: Dict[str, Any], intent: str) -> Optional[str]:
     text = message.strip()
     current_hero = normalize_hero_name(context.get("current_hero"))
+
+    # 상대를 여럿 나열만 한 문장은 특정 대상을 정하지 않는다(첫 영웅은 대상이 아니라 나열 순서일 뿐이다).
+    if len(context.get("enemy_team_this_turn") or extract_enemy_team(text)) >= 2:
+        return None
 
     enemy_mentioned = find_enemy_mentioned_hero(text)
     if enemy_mentioned and enemy_mentioned != current_hero:
@@ -707,6 +804,11 @@ def infer_target_enemy(message: str, context: Dict[str, Any], intent: str) -> Op
 
     if is_hero_usage_guide_question(text):
         return None
+
+    # 플레이·운영을 묻는 질문에 이름만 나온 영웅은 주제 영웅이지 상대가 아니다.
+    if intent in TOPIC_HERO_INTENTS:
+        new_situation = bool(find_map(text) or find_side(text) or extract_enemy_team(text))
+        return None if new_situation or find_all_heroes(text) else context.get("target_enemy")
 
     # 최후 수단: 아군으로 분류되지 않은 첫 영웅을 상대로 본다.
     complaint_hero = find_ally_complaint_hero(text)
@@ -794,7 +896,7 @@ _SELF_ROLE_PATTERN = re.compile(
 _MULTI_ROLE_PATTERN = re.compile(
     r"(탱커|딜러|힐러|지원가)\s*(?:랑|이랑|나|이나|와|과|하고|,|/|\+)\s*"
     r"(탱커|딜러|힐러|지원가)\s*"
-    r"(?:로만|으로만|만|로|으로|기준|중에서|중)"
+    r"(?:로만|으로만|만|로|으로|기준|중에서|중|추천|알려|뭐|뭘|누구)"
 )
 
 
@@ -861,6 +963,84 @@ def is_pure_role_correction(message: str) -> bool:
     return not remainder
 
 
+# 영웅 이름을 빼면 "(이랑)은 어때?"만 남는 짧은 후속 질문의 나머지.
+_HERO_ONLY_FOLLOWUP_REMAINDER = re.compile(
+    r"(?:이랑|랑|하고|와|과)?(?:은|는)?"
+    r"(?:어때|어떄|어떰|어때요|어떤가요|어떨까|어떨까요|괜찮아|괜찮아요|괜찮을까|괜찮을까요)?"
+)
+
+
+def is_hero_only_followup(message: str) -> bool:
+    """영웅 이름만 바꿔 앞 질문을 다시 묻는 짧은 메시지인지("X랑은 어때?", "X는?")."""
+    if not message or not find_all_heroes(message):
+        return False
+    remainder = re.sub(r"[\s,.!?~？]+", "", strip_hero_mentions(message))
+    return bool(_HERO_ONLY_FOLLOWUP_REMAINDER.fullmatch(remainder))
+
+
+# 받은 목록에 더 있는지 묻는 표현("4명밖에 없어?", "더 있어?", "그게 다야?").
+_MORE_ITEMS_FOLLOWUP_RE = re.compile(
+    r"밖에|뿐|(그게|이게)\s*다|다야|전부|나머지|다른\s*(영웅|애)|더\s*(있|없|알려|말해|추천)|또\s*(있|누|뭐)"
+)
+_SIDE_MARKER_PATTERN = re.compile(r"우리\s*팀|아군|상대|적팀|조합|(?<![가-힣])적(?![가-힣])")
+
+
+def is_hero_list_followup(message: str, previous_question: str) -> bool:
+    """영웅 목록을 물은 직후 "X도 되지 않아?"/"X는?"/"더 있어?"처럼 그 목록을 이어 묻는 메시지인지."""
+    if not message or not previous_question or not is_pick_request(previous_question):
+        return False
+    if _SIDE_MARKER_PATTERN.search(message) or mentions_self(message):
+        return False
+    if is_hero_only_followup(message):
+        return True
+    if not find_all_heroes(message) and len(message.strip()) <= 20 and _MORE_ITEMS_FOLLOWUP_RE.search(message):
+        return True
+    surfaces = {s for h in find_all_heroes(message) for s in _hero_name_variants(h)}
+    return any(re.search(rf"{hero_name_regex(s)}\s*도(?![가-힣])", message) for s in surfaces)
+
+
+# 앞 말의 뜻을 묻는 표현("~다는 게 무슨 말이야?").
+_MEANING_QUESTION_RE = re.compile(
+    r"무슨\s*(말|뜻|의미)|뭔\s*(말|뜻)|(뜻|의미)\s*(가|이)?\s*(뭐|머)|(다는|라는|란|이란)\s*(게|건|거|말)"
+)
+# 이유를 묻거나 사실을 확인·반박하는 표현("왜 ~야?", "~지 않아?", "~맞아?", "~있다며", "내가 알기론").
+_CHECK_QUESTION_RE = re.compile(
+    r"왜|어째서|(지|잖)\s*않아|잖아|아니지|아니야|아닌가|맞아\?|맞지|[다라]며(?![가-힣])|알기로|알기론"
+)
+# 챗봇이 앞에서 한 말을 가리키는 표현("왜 그렇게 적은거야?", "아까 넣었잖아").
+_ANSWER_REFERENCE_RE = re.compile(
+    r"적은|적었|썼|쓴\s*거|말한|말했|넣은|넣었|뺀|뺐|추천한|추천했|아까|방금|위에서|내\s*말은|그게\s*아니라|그\s*말이\s*아니라"
+)
+_KOREAN_WORD_RE = re.compile(r"[가-힣A-Za-z]{2,}")
+_TRAILING_JOSA_RE = re.compile(r"(이라는|라는|다는|이란|이|가|은|는|을|를|의|에|로|으로|도|게|건)$")
+
+
+def is_explanation_question(message: str) -> bool:
+    """할 일이 아니라 뜻·이유·사실 여부를 묻는 질문인지("3가지"를 붙이지 않는다)."""
+    return bool(message and (_MEANING_QUESTION_RE.search(message) or _CHECK_QUESTION_RE.search(message)))
+
+
+def is_previous_answer_followup(message: str, previous_answer: str) -> bool:
+    """직전 답변에 나온 말의 뜻·이유를 묻거나 그 내용에 이의를 다는 말인지."""
+    if not message or not previous_answer:
+        return False
+    heroes = find_all_heroes(message)
+    if _MEANING_QUESTION_RE.search(message) and not heroes:
+        return True
+    if not _CHECK_QUESTION_RE.search(message):
+        return False
+    # 이유·확인 질문은 챗봇이 한 말을 가리키거나, 직전 답변의 영웅·표현을 가져왔을 때만 그 답변을 묻는 것으로 본다.
+    if _ANSWER_REFERENCE_RE.search(message):
+        return True
+    if heroes and any(hero_mentioned_in_text(h, previous_answer) for h in heroes):
+        return True
+    for word in _KOREAN_WORD_RE.findall(message):
+        stem = _TRAILING_JOSA_RE.sub("", word)
+        if len(stem) >= 3 and stem in previous_answer:
+            return True
+    return False
+
+
 # 사용자 자신을 가리키는 1인칭 표현.
 _FIRST_PERSON_PATTERN = re.compile(
     r"(?<![가-힣])(?:난|나는|나도|나랑|나를|나한테|내가|내|나|저는|제가|저도|저랑|저를|제|저)(?![가-힣])"
@@ -882,7 +1062,7 @@ def is_self_hero_negation_correction(message: str) -> bool:
     remainder = message
     for hero in heroes:
         for name in sorted(_hero_name_variants(hero), key=len, reverse=True):
-            remainder = re.sub(rf"{re.escape(name)}{_SELF_NEGATION_SUFFIX}", "", remainder)
+            remainder = re.sub(rf"{hero_name_regex(name)}{_SELF_NEGATION_SUFFIX}", "", remainder)
     remainder = _ROLE_CORRECTION_FILLER_PATTERN.sub("", remainder)
     remainder = re.sub(r"(아니|말고|진짜|그게|그거|라니까|라고|다고|구|요)", "", remainder)
     remainder = re.sub(r"[\s,.!?~]+", "", remainder)
@@ -895,6 +1075,36 @@ ROLE_CLARIFICATION_INTENTS = {
 }
 
 
+# 영웅 대 영웅으로 답해야 하는 상황 서술형 intent.
+HERO_CONTEXT_CLARIFICATION_INTENTS = {"situation", "stay", "performance_improve"}
+
+
+_ENEMY_MARKER_PATTERN = re.compile(r"상대|적팀|(?<![가-힣])적(?![가-힣])")
+
+
+def side_unclear_heroes(message: str) -> List[str]:
+    """영웅 이름만 있고 내 영웅인지 상대인지 표지("나", "상대")가 없으면 그 영웅들을 돌려준다."""
+    heroes = find_all_heroes(message)
+    if not heroes or mentions_self(message) or _ENEMY_MARKER_PATTERN.search(message):
+        return []
+    return heroes
+
+
+def should_ask_hero_context(state: ChatbotGraphState) -> bool:
+    """자기 영웅도 상대 영웅도 모르는 상황 질문이라 영웅부터 되물어야 하는지."""
+    if state.get("role_filter") or role_filter_from_text(state.get("message", "")):
+        return False
+    if state.get("intent") not in HERO_CONTEXT_CLARIFICATION_INTENTS or state.get("role_neutral_question"):
+        return False
+    known = (
+        state.get("current_hero") or state.get("target_enemy") or state.get("enemy_team")
+        or state.get("focus_heroes") or state.get("ally_team") or state.get("my_team_stats")
+    )
+    if known or state.get("role_candidates_fresh"):
+        return False
+    return not find_all_heroes(state.get("message", ""))
+
+
 def should_ask_role_filter(state: ChatbotGraphState) -> bool:
     """역할을 알아낼 방법이 없어 4버튼으로 먼저 되물어야 하는지."""
     role_filter = state.get("role_filter")
@@ -903,6 +1113,18 @@ def should_ask_role_filter(state: ChatbotGraphState) -> bool:
 
     message = state.get("message", "")
     if role_filter_from_text(message):
+        return False
+    # "어떤 힐러가 좋아?"처럼 고를 역할을 질문이 이미 정했다.
+    if requested_pick_role(message):
+        return False
+    # 이름을 댄 아군 중 스킬 대상을 고르는 질문은 답이 사용자 역할과 무관하다.
+    if state.get("is_ally_target_choice"):
+        return False
+    # 앞 목록 질문이나 앞 답변을 이어 묻는 말이라 그 질문과 같은 기준으로 답한다.
+    if state.get("is_hero_list_followup") or state.get("is_answer_followup"):
+        return False
+    # 조건에 맞는 영웅 목록이나 사실을 묻는 질문은 사용자 역할과 무관하다.
+    if state.get("role_neutral_question"):
         return False
 
     intent = state.get("intent")
@@ -921,7 +1143,19 @@ def should_ask_role_filter(state: ChatbotGraphState) -> bool:
         return False
 
     # focus_heroes가 곧 설명 대상인 intent면 역할을 몰라도 답할 수 있다.
-    focus_hero_sufficient = intent in ("performance_improve", "stay") and bool(state.get("focus_heroes"))
+    focus_heroes = state.get("focus_heroes") or []
+    enemies = set(state.get("enemy_team") or []) | {state.get("target_enemy")}
+    focus_hero_sufficient = (
+        (intent == "stay" and bool(focus_heroes))
+        # 플레이·운영 질문의 주제 영웅이 상대가 아니면 그 영웅 이야기이지 사용자 역할 이야기가 아니다.
+        or (intent in TOPIC_HERO_INTENTS and any(h not in enemies for h in focus_heroes))
+        or (intent == "performance_improve" and bool(focus_heroes))
+    )
+    # 상대가 아닌 영웅 한 명의 스킬 사용법, 또는 그 스킬에 대응하는 영웅 목록은 사용자 역할과 무관하다.
+    if state.get("is_hero_kit_question") and len(focus_heroes) == 1 and (
+        focus_heroes[0] not in enemies or is_pick_request(message)
+    ):
+        focus_hero_sufficient = True
     if not state.get("current_hero") and not focus_hero_sufficient and intent in ROLE_CLARIFICATION_INTENTS:
         return True
 
