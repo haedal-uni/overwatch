@@ -15,8 +15,15 @@ from chat.domain.heroes import (
     hero_mentioned_in_text,
     normalize_hero_name,
 )
+from chat.domain.intent_rules import is_hero_enumeration_request
 from chat.domain.prompts import ally_team_prompt_text
-from chat.rag.doc_sections import get_hero_perk_section, get_hero_profile
+from chat.rag.doc_sections import (
+    continued_line_label,
+    get_hero_perk_section,
+    get_hero_profile,
+    skill_tag_section,
+)
+from chat.rag.vectorstore import header_path
 from chat.rag.llm_utils import (
     call_llm_text,
     document_to_dict,
@@ -89,6 +96,10 @@ def inherited_query_hero(state: ChatbotGraphState) -> Any:
     return hero
 
 
+# 지금 영웅으로 할 플레이를 묻는 intent. 다른 영웅을 고르는 검색어는 붙이지 않는다.
+_OWN_PLAY_INTENTS = {"performance_improve", "stay", "situation", "map_strategy"}
+
+
 def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
     message = state.get("message", "")
     intent = state.get("intent") or "general"
@@ -104,9 +115,13 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
     enemy_named_this_turn = state.get("enemy_named_this_turn", False)
 
     side_text = "공격" if side == "attack" else "수비" if side == "defense" else ""
+    # 조건에 맞는 영웅을 모두 묻는 질문은 자기 영웅 검색어가 다른 영웅 조각을 밀어낸다.
+    hero_enumeration = is_hero_enumeration_request(message)
+    if hero_enumeration:
+        current_hero = None
     queries = [message]
     # 결과는 검색어 순서로 합쳐 앞 12개만 쓰므로, 영웅을 붙인 질문을 맨 앞에 둔다.
-    inherited_hero = inherited_query_hero(state)
+    inherited_hero = None if hero_enumeration else inherited_query_hero(state)
     if inherited_hero:
         queries.insert(0, f"{inherited_hero} {message}")
 
@@ -131,7 +146,10 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
     if enemy_team and enemy_named_this_turn:
         queries.append(f"상대 조합 {' '.join(enemy_team)} 대응 영웅 추천")
 
-    if role_filter and role_filter != "all":
+    if (
+        role_filter and role_filter != "all" and intent not in _OWN_PLAY_INTENTS
+        and not state.get("role_neutral_question")
+    ):
         queries.append(f"{ROLE_LABELS.get(role_filter)} 역할 카운터 영웅 추천")
 
     ally_team = state.get("ally_team", [])
@@ -141,10 +159,14 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
             queries.append(f"{' '.join(ally_team)} 조합으로 {' '.join(enemy_team)} 상대하기")
 
     if intent == "performance_improve":
-        queries.append(f"{current_hero or ''} 딜량 올리는 방법 포지션 타이밍 스킬")
-        queries.append(f"{current_hero or ''} 생존법 죽지 않는 운영")
-        if has_stats:
-            queries.append(f"{current_hero or ''} 데스 줄이기 생존 운영")
+        # 영웅 없는 일반 검색어는 아무 영웅의 조각이나 끌어오므로 만들지 않는다.
+        focus_heroes = state.get("focus_heroes") or []
+        play_hero = current_hero or (focus_heroes[0] if len(focus_heroes) == 1 else None)
+        if play_hero:
+            queries.append(f"{play_hero} 딜량 올리는 방법 포지션 타이밍 스킬")
+            queries.append(f"{play_hero} 생존법 죽지 않는 운영")
+            if has_stats:
+                queries.append(f"{play_hero} 데스 줄이기 생존 운영")
     elif intent == "swap":
         if enemy_named_this_turn and enemy_team:
             queries.append(
@@ -181,6 +203,17 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
     return {"retrieval_queries": unique_queries}
 
 
+def label_continued_chunk(content: str, metadata: Dict[str, Any]) -> str:
+    """스킬 설명 중간에서 시작하는 조각에 그 스킬 이름을 붙인다(이름 없이 넘기면 LLM이 다른 스킬로 짐작한다)."""
+    path = header_path(metadata)
+    body = content[len(path) + 1:] if path and content.startswith(path + "\n") else content
+    label = continued_line_label(body)
+    if not label:
+        return content
+    marked = f"({label} 설명의 이어지는 부분)\n{body}"
+    return f"{path}\n{marked}" if path else marked
+
+
 def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
     if state.get("error"):
         return state
@@ -207,6 +240,7 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 if content_key in seen_contents:
                     continue
                 seen_contents.add(content_key)
+                doc_dict["content"] = label_continued_chunk(content, doc_dict.get("metadata") or {})
                 doc_dict["query"] = query
                 all_docs.append(doc_dict)
 
@@ -236,6 +270,16 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
                     "query": f"{enemy} 기본 위치·취약한 상대(원문 직접 조회)",
                 })
             logger.info("[TARGET PRIORITY] 상대 %s 프로필을 검색 결과 앞에 추가", state.get("enemy_team"))
+
+        # 스킬 성질로 영웅을 찾는 질문은 검색으로 다 모이지 않아 문서 태그 표를 직접 넣는다.
+        tag_section = skill_tag_section(state.get("llm_skill_tag"))
+        if tag_section:
+            all_docs.insert(0, {
+                "content": tag_section,
+                "metadata": {"H3": f"스킬 태그 {state['llm_skill_tag']}"},
+                "query": f"{state['llm_skill_tag']} 태그(원문 직접 조회)",
+            })
+            logger.info("[SKILL TAG] '%s' 태그 스킬 목록을 검색 결과 맨 앞에 추가", state["llm_skill_tag"])
 
         all_docs = all_docs[:12]
         numbered_docs = [{**doc, "doc_id": idx} for idx, doc in enumerate(all_docs, start=1)]
