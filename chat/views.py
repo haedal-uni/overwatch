@@ -473,7 +473,7 @@ def chat_scoreboard_ocr(request):
             request.session["coach_context"] = conversation_context
             request.session.modified = True
 
-        return JsonResponse({"report": result["report"], "turn_id": turn_id})
+        return JsonResponse({"report": result["report"], "turn_id": turn_id, "match": result.get("match")})
 
     except ScoreboardAnalysisError as e:
         logger.warning("chat_scoreboard_ocr 분석 실패: %s", e)
