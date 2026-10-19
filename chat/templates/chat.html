@@ -604,6 +604,8 @@
       border-radius: 14px;
       padding: 0 14px;
       font-weight: 800;
+      white-space: nowrap;
+      flex-shrink: 0;
       transition: .16s;
     }
 
@@ -1879,6 +1881,99 @@
       overflow-x: auto
     }
 
+    /* 영웅으로 묻기(hero_ask.js) */
+    .hero-ask-row { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+    .hero-ask-btn, .hero-again-btn { height: 38px; border-radius: 999px; font-weight: 800; font-size: 13px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+    .hero-ask-btn { padding: 0 14px 0 8px; border: 1.5px solid var(--line-strong); background: var(--primary-soft); color: var(--primary); }
+    .hero-ask-btn:hover { border-color: var(--primary); }
+    .hero-again-btn { padding: 0 14px 0 6px; border: 1px solid var(--line); background: var(--card-solid); color: var(--muted); }
+    .hero-again-btn[hidden] { display: none; }
+    .ha-faces { display: inline-flex; }
+    .ha-face-ph { width: 22px; height: 22px; }
+    .ha-face { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--card-solid); object-fit: cover; }
+    .ha-face + .ha-face { margin-left: -9px; }
+    @media (max-width: 360px) {
+      .hero-ask-btn, .hero-again-btn { font-size: 12px; gap: 4px; }
+      .hero-ask-btn { padding: 0 10px 0 6px; }
+      .hero-again-btn { padding: 0 10px 0 5px; }
+      .ha-face ~ .ha-face { display: none; }
+    }
+    .ha-bubble-faces { align-self: flex-end; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; margin-bottom: 4px; border-radius: 999px; background: var(--card-solid); border: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+    .ha-bf { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+    .ha-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(19, 32, 51, 0); display: flex; align-items: flex-end; justify-content: center; transition: background .2s; }
+    .ha-overlay.show { background: rgba(19, 32, 51, .42); }
+    .ha-sheet { width: 100%; max-width: 560px; height: min(88dvh, 760px); box-sizing: border-box; padding: 10px 16px calc(16px + env(safe-area-inset-bottom)); border-radius: 28px 28px 0 0; background: var(--card-solid); color: var(--text); display: flex; flex-direction: column; gap: 12px; transform: translateY(40px); opacity: 0; transition: transform .22s, opacity .22s; }
+    .ha-overlay.show .ha-sheet { transform: none; opacity: 1; }
+    .ha-grip { align-self: center; width: 44px; height: 5px; border-radius: 99px; background: var(--line); flex: none; }
+    .ha-head { display: flex; align-items: center; gap: 8px; }
+    .ha-head h3 { margin: 0; flex: 1; font-size: 18px; }
+    .ha-icon-btn { width: 40px; height: 40px; flex: none; border: 0; border-radius: 12px; background: var(--soft); color: var(--muted); display: grid; place-items: center; cursor: pointer; }
+    .ha-icon-btn svg { width: 18px; height: 18px; }
+    .ha-bars { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; flex: none; }
+    .ha-bars i { height: 6px; border-radius: 99px; background: var(--line); }
+    .ha-bars i.on { background: var(--primary); }
+    .ha-title { display: flex; flex-direction: column; gap: 1px; }
+    .ha-title small { font-size: 12px; font-weight: 800; color: var(--primary); }
+    .ha-title b { font-size: 21px; }
+    .ha-title em { font-style: normal; font-size: 12.5px; color: var(--muted); }
+    .ha-summary { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 16px; background: var(--soft); flex-wrap: wrap; }
+    .ha-me { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border-radius: 99px; background: var(--primary-soft); color: var(--primary); font-size: 13px; font-weight: 800; }
+    .ha-me-ico { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+    .ha-vs { font-size: 12px; color: var(--muted); }
+    .ha-foe-ico { width: 32px; height: 32px; border-radius: 10px; object-fit: cover; box-shadow: 0 0 0 2px var(--accent); }
+    .ha-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 14px; background: var(--soft); flex: none; }
+    .ha-tabs button { height: 38px; border: 0; border-radius: 11px; background: transparent; color: var(--muted); font-weight: 700; font-size: 14px; cursor: pointer; }
+    .ha-tabs button.on { background: var(--card-solid); color: var(--primary); font-weight: 800; box-shadow: 0 2px 6px rgba(33, 74, 132, .12); }
+    .ha-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 2px; }
+    .ha-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 12px 8px; }
+    .ha-hero { border: 0; padding: 0; background: transparent; color: var(--text); display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; font-size: 12.5px; font-weight: 700; min-width: 0; }
+    .ha-hero span { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ha-hero-ico { width: 64px; height: 64px; border-radius: 18px; padding: 3px; box-sizing: border-box; background: var(--primary-soft); object-fit: cover; }
+    .ha-hero.on .ha-hero-ico { background: var(--primary); box-shadow: 0 6px 14px rgba(37, 99, 235, .3); }
+    .ha-sheet:has(.ha-summary) .ha-hero.on .ha-hero-ico { background: var(--accent); box-shadow: 0 6px 14px rgba(255, 159, 28, .35); }
+    .ha-sits { display: flex; flex-direction: column; gap: 8px; }
+    .ha-sit { min-height: 52px; padding: 8px 14px; border-radius: 16px; border: 1px solid var(--line); background: var(--card-solid); color: var(--text); text-align: left; display: flex; flex-direction: column; justify-content: center; gap: 1px; cursor: pointer; }
+    .ha-sit b { font-size: 15px; }
+    .ha-sit span { font-size: 12px; color: var(--muted); }
+    .ha-sit.on { border: 2px solid var(--primary); background: var(--primary-soft); }
+    .ha-preview { padding: 10px 14px; border-radius: 16px; border: 1.5px dashed var(--line-strong); background: var(--soft); }
+    .ha-preview small { font-size: 12px; font-weight: 700; color: var(--muted); }
+    .ha-preview p { margin: 4px 0 0; font-size: 15px; line-height: 1.55; }
+    .ha-extra { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 700; color: var(--muted); }
+    .ha-extra input { height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--card-solid); color: var(--text); font: inherit; font-size: 14px; font-weight: 400; }
+    .ha-next { height: 52px; flex: none; border: 0; border-radius: 16px; background: var(--primary); color: #fff; font-size: 16px; font-weight: 800; cursor: pointer; }
+    .ha-next:disabled { background: var(--line-strong); cursor: default; }
+
+    /* 결과 카드 · 내 기록(my_records.js) */
+    .rec-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .rec-chip { height: 36px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--primary-soft); color: var(--primary); font-weight: 800; font-size: 13px; cursor: pointer; white-space: nowrap; }
+    .rec-chip:hover { border-color: var(--primary); }
+    .rec-modal { height: min(680px, 90vh); }
+    .rec-body { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+    .rec-empty { padding: 40px 10px; text-align: center; color: var(--muted); line-height: 1.7; }
+    .rec-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .rec-tile { padding: 12px 14px; border-radius: 16px; background: var(--soft); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .rec-tile span { font-size: 12px; color: var(--muted); }
+    .rec-tile b { font-size: 18px; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rec-tile-ico { width: 26px; height: 26px; border-radius: 8px; object-fit: cover; }
+    .rec-sec { font-size: 13px; font-weight: 800; color: var(--muted); margin-top: 4px; }
+    .rec-trend { padding: 12px 14px; border-radius: 16px; background: var(--primary-soft); display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+    .rec-trend .rec-sec { margin: 0 0 2px; }
+    .rec-heroes, .rec-list { display: flex; flex-direction: column; gap: 6px; }
+    .rec-hero, .rec-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 14px; border: 1px solid var(--line); background: var(--card-solid); }
+    .rec-hero-ico, .rec-row-ico { width: 40px; height: 40px; border-radius: 10px; object-fit: cover; flex: none; }
+    .rec-row-ico.none, .rec-hero-ico.none { display: grid; place-items: center; background: var(--soft); color: var(--muted); font-weight: 800; }
+    .rec-hero-main, .rec-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .rec-hero-main span, .rec-row-main span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rec-hero-kda { font-weight: 800; font-size: 14px; white-space: nowrap; }
+    .rec-rank { font-style: normal; font-size: 12px; padding: 1px 7px; border-radius: 99px; background: var(--primary-soft); color: var(--primary); margin-left: 4px; }
+    .rec-mini { flex: none; height: 30px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--soft); color: var(--text); font-weight: 700; font-size: 12px; cursor: pointer; }
+    .rec-clear { align-self: center; margin: 6px 0 4px; border: 0; background: none; color: var(--muted); font-size: 12px; text-decoration: underline; cursor: pointer; }
+    .rec-card-img { width: 100%; max-width: 420px; align-self: center; border-radius: 16px; box-shadow: var(--shadow); }
+    .rec-card-actions { display: flex; justify-content: center; gap: 8px; }
+    .rec-btn { height: 42px; padding: 0 18px; border-radius: 14px; border: 1px solid var(--line-strong); background: var(--card-solid); color: var(--text); font-weight: 800; font-size: 14px; display: inline-flex; align-items: center; text-decoration: none; cursor: pointer; }
+    .rec-btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+
     .composer-hint {
       display: flex;
       justify-content: space-between;
@@ -2213,6 +2308,36 @@
     }
 
     @media(max-width:420px) {
+      /* 좁은 휴대폰: 제목이 한 글자씩 꺾이지 않게 버튼을 조금 줄인다 */
+      .topbar {
+        padding: 10px;
+        gap: 8px
+      }
+
+      .title-wrap h1 {
+        font-size: 15px;
+        word-break: keep-all
+      }
+
+      .actions {
+        gap: 4px
+      }
+
+      .icon-btn {
+        width: 34px;
+        height: 34px
+      }
+
+      .plain-btn,
+      .mx-open-btn {
+        height: 34px;
+        padding: 0 8px
+      }
+
+      .mx-open-btn {
+        gap: 3px
+      }
+
       .bubble-wrap {
         max-width: 92%
       }
@@ -2224,6 +2349,18 @@
 
       .select-list {
         max-height: 210px
+      }
+    }
+
+    @media(max-width:380px) {
+      /* 아주 좁은 화면: 상성표는 아이콘만(버튼 title에 이름이 남는다) */
+      .mx-open-label {
+        display: none
+      }
+
+      .icon-btn {
+        width: 32px;
+        height: 32px
       }
     }
 
@@ -2327,7 +2464,10 @@
         <div class="actions">
           <button type="button" class="mx-open-btn" id="matchupBtn" title="영웅별 상성표 보기">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l9 9"/><path d="M20 4l-9 9"/><path d="M3 8V4h4"/><path d="M21 8V4h-4"/><path d="M9 15l-4 5"/><path d="M15 15l4 5"/></svg>
-            상성표
+            <span class="mx-open-label">상성표</span>
+          </button>
+          <button class="icon-btn" id="recordsBtn" title="내 기록" aria-label="내 기록">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg>
           </button>
           <button class="icon-btn" id="themeBtn" title="테마 변경">🌙</button>
           <button class="icon-btn" id="saveChatBtn" title="대화 저장">
@@ -2391,6 +2531,10 @@
           <span class="attach-name" id="attachName"></span>
           <button type="button" class="attach-remove" id="attachRemove" title="첨부 취소" aria-label="첨부 취소">×</button>
         </div>
+        <div class="hero-ask-row">
+          <button type="button" class="hero-ask-btn" id="heroAskBtn"><svg class="ha-face-ph" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 19 Q4.5 13 11 13 Q17.5 13 18.5 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span id="heroAskLabel">영웅으로 묻기</span></button>
+          <button type="button" class="hero-again-btn" id="heroAgainBtn" hidden><span class="ha-faces" id="heroAgainFaces"></span>같은 영웅으로 묻기</button>
+        </div>
         <div class="input-box">
           <textarea id="userInput" rows="1" placeholder="질문을 입력하세요. Enter 전송, Shift+Enter 줄바꿈"></textarea>
           <input type="file" id="screenshotInput" accept="image/png,image/jpeg,image/webp" hidden>
@@ -2405,6 +2549,8 @@
     </main>
   </div>
 
+  <script src="{% static 'chat/my_records.js' %}"></script>
+  <script src="{% static 'chat/hero_ask.js' %}"></script>
   <script>
     const maps = [
       { group: '전체', name: '맵 선택 없이 질문하기', mode: 'none' },
@@ -2451,6 +2597,17 @@
     const $ = (id) => document.getElementById(id);
     const messages = $('messages');
     const HERO_ICON_BASE = '{% static "chat/hero_icons/" %}';
+    window.MatchRecords?.init({ iconBase: HERO_ICON_BASE, escapeHtml: (t) => escapeHtml(t) });
+    window.HeroAsk?.init({
+      iconBase: HERO_ICON_BASE,
+      escapeHtml: (t) => escapeHtml(t),
+      loadRoles: async () => {
+        if (!matchupCache.roles) matchupCache.roles = (await fetchMatchups()).roles;
+        return matchupCache.roles;
+      },
+      isBusy: () => state.busy,
+      send: (text, heroes) => { input.value = text; autoResize(); pendingHeroes = heroes; sendMessage(); },
+    });
     function heroIcon(name) { return `${HERO_ICON_BASE}${encodeURIComponent(name || '')}.png`; }
     const input = $('userInput');
     const sendBtn = $('sendBtn');
@@ -2689,14 +2846,14 @@
         const board = await requestScoreboard(file, !text);
         if (!text) {
           removeTyping();
-          addMessage('ai', formatScoreboardResult(board), { turnId: board.turn_id });
+          addMessage('ai', formatScoreboardResult(board), { turnId: board.turn_id, match: board.match, matchId: board.turn_id });
           return;
         }
         const body = buildRequestBody(text);
         body.scoreboard_turn_id = board.turn_id;
         const data = await requestChat(body);
         removeTyping();
-        addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card, scoreboardTable: board.report });
+        addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card, scoreboardTable: board.report, match: board.match, matchId: board.turn_id });
       } catch (err) {
         removeTyping(); showError(err.message || '이미지 분석에 실패했습니다.');
       } finally {
@@ -2889,6 +3046,7 @@
     }
 
     $('matchupBtn')?.addEventListener('click', openMatchupModal);
+    $('recordsBtn')?.addEventListener('click', () => window.MatchRecords?.openRecords());
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && matchupOverlay) closeMatchupModal(); });
 
     function disableOldChoiceButtons() {
@@ -2951,11 +3109,17 @@
           const card = buildRecommendCard(options.recommendCard);
           if (card) bubble.appendChild(card);
         }
+        // 스탯창 분석 결과: 내 기록에 쌓고 결과 카드 버튼을 붙인다.
+        if (options.match && window.MatchRecords) {
+          const bar = MatchRecords.actionBar(options.match, options.matchId);
+          if (bar) bubble.appendChild(bar);
+        }
         const buttons = buildResponseButtons(options);
         if (buttons) bubble.appendChild(buttons);
         if (options.turnId) bubble.appendChild(buildFeedbackUI(options.turnId));
       }
       wrap.appendChild(meta); wrap.appendChild(bubble);
+      if (role === 'user' && options.heroes && window.HeroAsk) bubble.insertAdjacentHTML('beforebegin', HeroAsk.bubbleFaces(options.heroes));
       row.appendChild(avatar); row.appendChild(wrap);
       messages.appendChild(row);
       if (role === 'ai') revealAiMessage(row); else messages.scrollTop = messages.scrollHeight;
@@ -3141,13 +3305,17 @@
       if (!res.ok || data.error) throw new Error(data.error || '응답 중 오류가 발생했습니다.');
       return data;
     }
+    // "영웅으로 묻기"가 만든 질문이면 말풍선 위에 고른 영웅 얼굴을 붙인다.
+    let pendingHeroes = null;
     async function sendMessage() {
       const text = input.value.trim();
       if (state.busy) return;
+      const heroes = pendingHeroes;
+      pendingHeroes = null;
       if (pendingImage) { sendWithImage(pendingImage, text); return; }
       if (!text) return;
       const ctx = contextLabel();
-      addMessage('user', text, { stats: hasStats(text), context: ctx, recent: true });
+      addMessage('user', text, { stats: hasStats(text), context: ctx, recent: true, heroes });
       input.value = ''; autoResize();
       state.busy = true; sendBtn.disabled = true; addTyping();
       try {
