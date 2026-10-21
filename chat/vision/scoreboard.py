@@ -120,6 +120,9 @@ STRUCTURAL_MIN_COL_RUN_RATIO = 0.15
 STRUCTURAL_HEADER_SEARCH_RATIO = 0.35
 # 색 team_box가 구조 박스와 이 IoU 미만으로 겹치면 구조 박스로 교체한다.
 STRUCTURAL_FALLBACK_MIN_IOU = 0.75
+# 구조 박스가 스탯창 모양일 때만 교체한다: 두 팀 높이 비율과 가로 겹침 비율의 하한.
+STRUCTURAL_MIN_TEAM_HEIGHT_RATIO = 0.7
+STRUCTURAL_MIN_TEAM_X_OVERLAP_RATIO = 0.8
 
 # 파란/빨간 후보 쌍 평가 기준 — 전부 실패하면 그 쌍은 후보에서 제외한다.
 PAIR_MIN_X_OVERLAP_RATIO = 0.5
@@ -155,6 +158,8 @@ HERO_ICON_SIZE_RATIO = 1.15
 HERO_ICON_X_OFFSET_RATIO = 0.0
 
 ICON_TEMPLATE_SIZE = (64, 64)
+# 템플릿 가장자리를 이만큼 떼고 crop 안에서 밀어 가며 비교한다(자르는 위치가 캡처마다 몇 px 어긋남).
+ICON_MATCH_SLIDE_MARGIN = 6
 CLAHE_CLIP_LIMIT = 2.0
 CLAHE_TILE_GRID_SIZE = (8, 8)
 PREPROCESS_BLUR_KERNEL = (3, 3)
@@ -400,9 +405,11 @@ def _match_hero_icon(
 
     crop_variants = _preprocess_icon_variants(cv2, gray_region)
 
+    m = ICON_MATCH_SLIDE_MARGIN
+
     def _match(a, b) -> float:
         try:
-            score = float(cv2.matchTemplate(a, b, cv2.TM_CCOEFF_NORMED)[0][0])
+            score = float(cv2.matchTemplate(a, b[m:-m, m:-m], cv2.TM_CCOEFF_NORMED).max())
         except Exception:
             return 0.0
         return 0.0 if np.isnan(score) else score
@@ -1529,11 +1536,24 @@ def _box_iou(a: Optional[Dict[str, int]], b: Optional[Dict[str, int]]) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def _structural_boxes_plausible(ally: Dict[str, int], enemy: Dict[str, int]) -> bool:
+    """두 구조 박스가 스탯창의 아군/상대 패널처럼 높이가 비슷하고 좌우로 겹치는지 본다."""
+    ally_h, enemy_h = ally["y1"] - ally["y0"], enemy["y1"] - enemy["y0"]
+    if min(ally_h, enemy_h) <= 0 or min(ally_h, enemy_h) / max(ally_h, enemy_h) < STRUCTURAL_MIN_TEAM_HEIGHT_RATIO:
+        return False
+    overlap = min(ally["x1"], enemy["x1"]) - max(ally["x0"], enemy["x0"])
+    narrower = min(ally["x1"] - ally["x0"], enemy["x1"] - enemy["x0"])
+    return narrower > 0 and overlap / narrower >= STRUCTURAL_MIN_TEAM_X_OVERLAP_RATIO
+
+
 def _maybe_replace_with_structural(cv2, np, image, layout: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """색 team_box가 구조 박스와 충분히 안 겹치면 구조 기반 박스로 교체한다."""
     diag: Dict[str, Any] = {"available": False, "used": False, "ally_iou": None, "enemy_iou": None}
     structural = _detect_structural_table_boxes(cv2, np, image)
     if structural is None:
+        return layout, diag
+    if not _structural_boxes_plausible(*structural):
+        diag["rejected"] = "구조 박스가 스탯창 모양이 아님(두 팀 높이·가로 위치 불일치)"
         return layout, diag
     diag["available"] = True
     struct_by_team = {"ally": structural[0], "enemy": structural[1]}
@@ -2282,6 +2302,36 @@ def _build_stat_dict(team: List[Dict[str, Any]]) -> Dict[str, Any]:
     return result
 
 
+def build_match_summary(
+    my_team: List[Dict[str, Any]], enemy_team: List[Dict[str, Any]],
+    self_row_idx: Optional[int], self_known: bool, score_rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """화면의 결과 카드와 "내 기록"이 쓰는 판 요약(숫자만, 피드백 문장 없음)."""
+    def player(e: Dict[str, Any], is_self: bool) -> Dict[str, Any]:
+        kda = e["kda"]
+        return {
+            "hero": None if e["hero"] == "unknown" else e["hero"],
+            "role": e.get("role_code"),
+            "kills": kda["kill"], "deaths": kda["death"], "assists": kda["assist"],
+            "damage": e.get("damage"), "healing": e.get("healing"), "mitigation": e.get("mitigation"),
+            "is_self": is_self,
+        }
+
+    ally = [player(e, self_known and i == self_row_idx) for i, e in enumerate(my_team)]
+    ranking = [
+        {"rank": r["rank"], "hero": r["hero"], "type_label": r["type_label"], "final": round(r["final"], 1), "is_me": bool(r.get("is_me"))}
+        for r in score_rows
+    ]
+    me = next((r for r in ranking if r["is_me"]), None)
+    return {
+        "ally": ally,
+        "enemy": [player(e, False) for e in enemy_team],
+        "ranking": ranking,
+        "self_hero": ally[self_row_idx]["hero"] if self_known and self_row_idx is not None else None,
+        "self_rank": me["rank"] if me else None,
+    }
+
+
 def _rank_table(score_rows: List[Dict[str, Any]]) -> str:
     lines = ["| 순위 | 영웅 | 세부 역할 | 최종 점수 |", "|---|---|---|---|"]
     for r in score_rows:
@@ -2480,4 +2530,5 @@ def analyze_scoreboard_image(
         "my_team_stats": _build_stat_dict(my_team),
         "enemy_team_stats": _build_stat_dict(enemy_team),
         "my_stats": _build_stat_dict([my_team[self_row_idx]]) if self_known else {},
+        "match": build_match_summary(my_team, enemy_team, self_row_idx, self_known, score_rows),
     }
