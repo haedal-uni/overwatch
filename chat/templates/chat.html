@@ -29,6 +29,10 @@
       --success: #16a34a;
       --shadow: 0 22px 60px rgba(33, 74, 132, .14);
       --radius: 28px;
+      --tint-orange-bg: #fff3e2;
+      --tint-orange: #c2410c;
+      --tint-green-bg: #e7f6ec;
+      --tint-green: #15803d;
     }
 
     html[data-theme="dark"] {
@@ -48,6 +52,10 @@
       --danger: #ff6b6b;
       --success: #5ee087;
       --shadow: 0 22px 60px rgba(0, 0, 0, .35);
+      --tint-orange-bg: rgba(255, 159, 28, .14);
+      --tint-orange: #ffb84d;
+      --tint-green-bg: rgba(94, 224, 135, .13);
+      --tint-green: #5ee087;
     }
 
     * {
@@ -277,10 +285,19 @@
 
     .chat-shell {
       border-radius: var(--radius);
-      display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      display: flex;
+      flex-direction: column;
       min-width: 0;
       overflow: hidden;
+    }
+
+    .chat-shell>* {
+      flex: none
+    }
+
+    .chat-shell>.messages {
+      flex: 1;
+      min-height: 0
     }
 
     .topbar {
@@ -322,6 +339,7 @@
       top: calc(100% + 10px);
       right: 0;
       z-index: 60;
+      width: max-content;
       max-width: 240px;
       background: var(--card-solid);
       color: var(--text);
@@ -354,6 +372,103 @@
       border-left: 1px solid var(--line-strong);
       border-top: 1px solid var(--line-strong);
       transform: rotate(45deg);
+    }
+
+    /* 첫 화면에서는 상성표·내 기록·영웅으로 묻기가 본문 카드로 나와서 위·아래 버튼을 숨긴다. */
+    .chat-shell:has(#welcome) .chat-only,
+    .chat-shell:has(#welcome) .hero-ask-row {
+      display: none
+    }
+
+    #matchupBtn {
+      border-color: transparent;
+      background: var(--tint-orange-bg);
+      color: var(--tint-orange)
+    }
+
+    #recordsBtn {
+      border-color: transparent;
+      background: var(--tint-green-bg);
+      color: var(--tint-green)
+    }
+
+    /* 더보기(⋯) 메뉴: 야간 모드, 대화 저장, 사용법 */
+    .more-wrap {
+      position: relative
+    }
+
+    .more-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      z-index: 70;
+      width: 220px;
+      padding: 6px;
+      border-radius: 18px;
+      background: var(--card-solid);
+      border: 1px solid var(--line-strong);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .more-menu[hidden] {
+      display: none
+    }
+
+    .more-item {
+      height: 46px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 12px;
+      background: transparent;
+      color: var(--text);
+      font-size: 14.5px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-align: left;
+    }
+
+    .more-item:hover {
+      background: var(--soft)
+    }
+
+    .more-item svg {
+      flex: none;
+      color: var(--muted)
+    }
+
+    .more-item>span:first-of-type {
+      flex: 1
+    }
+
+    .more-switch {
+      width: 38px;
+      height: 22px;
+      padding: 3px;
+      border-radius: 99px;
+      background: var(--line-strong);
+      display: flex;
+      transition: .16s;
+    }
+
+    .more-switch::after {
+      content: '';
+      width: 16px;
+      height: 16px;
+      border-radius: 99px;
+      background: #fff;
+      transition: .16s;
+    }
+
+    .more-item[aria-checked="true"] .more-switch {
+      background: var(--primary)
+    }
+
+    .more-item[aria-checked="true"] .more-switch::after {
+      transform: translateX(16px)
     }
 
     /* ── 사용법 투어 ──
@@ -624,18 +739,13 @@
       background: var(--primary-soft)
     }
 
-    .context-wrap {
-      padding: 14px 22px;
-      border-bottom: 1px solid var(--line);
-      display: grid;
-      grid-template-columns: minmax(240px, 1fr) auto auto;
-      gap: 10px;
+    /* 입력창 위 한 줄: 맵 선택 · 공격/수비 · 간단히/자세히 */
+    .composer-tools {
+      display: flex;
       align-items: center;
-      background: rgba(255, 255, 255, .22);
-    }
-
-    html[data-theme="dark"] .context-wrap {
-      background: rgba(255, 255, 255, .02)
+      gap: 6px;
+      margin-bottom: 8px;
+      min-width: 0;
     }
 
     .custom-select {
@@ -643,43 +753,60 @@
       min-width: 0
     }
 
-    .select-trigger {
-      width: 100%;
-      min-height: 48px;
-      border: 1.5px solid var(--line-strong);
-      background: var(--card-solid);
-      color: var(--text);
-      border-radius: 18px;
-      padding: 0 48px 0 16px;
-      display: flex;
-      align-items: center;
-      text-align: left;
-      font-weight: 700;
-      transition: .16s;
-      position: relative;
+    /* 좁은 화면에서는 맵 이름이 줄어들고(…) 공격/수비·간단히/자세히는 그대로 둔다. */
+    .composer-tools .custom-select {
+      flex: 0 1 auto;
+      max-width: 220px
     }
 
-    .select-trigger::after {
-      content: '⌄';
-      position: absolute;
-      right: 16px;
-      top: 50%;
-      transform: translateY(-54%);
-      color: var(--primary);
-      font-size: 22px;
+    .composer-tools>*:not(.custom-select) {
+      flex: none
+    }
+
+    .select-trigger {
+      max-width: 100%;
+      height: 36px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 700;
+      transition: .16s;
+    }
+
+    .select-trigger svg {
+      flex: none
+    }
+
+    .select-trigger span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap
+    }
+
+    .select-trigger.has-map {
+      border-color: var(--line-strong);
+      background: var(--primary-soft);
+      color: var(--primary)
     }
 
     .select-trigger:hover,
     .custom-select.open .select-trigger {
       border-color: var(--primary);
-      box-shadow: 0 0 0 4px rgba(37, 99, 235, .10)
+      color: var(--primary)
     }
 
+    /* 입력창 바로 위에 있어서 위로 펼친다. */
     .select-menu {
       position: absolute;
       left: 0;
-      right: 0;
-      top: calc(100% + 8px);
+      width: min(340px, calc(100vw - 24px));
+      bottom: calc(100% + 8px);
       z-index: 50;
       background: var(--card-solid);
       border: 1px solid var(--line-strong);
@@ -785,13 +912,14 @@
     }
 
     .side-btn {
-      height: 44px;
+      height: 36px;
       border: 1px solid var(--line);
       background: var(--card-solid);
       color: var(--muted);
-      border-radius: 15px;
-      padding: 0 15px;
-      font-weight: 900;
+      border-radius: 999px;
+      padding: 0 12px;
+      font-size: 13px;
+      font-weight: 800;
     }
 
     .side-btn.active {
@@ -800,31 +928,28 @@
       color: var(--primary)
     }
 
+    /* 맵 이름은 맵 선택 버튼에 보이므로 여기서는 지우기(×) 버튼만 보여준다. */
     .context-pill {
-      min-height: 42px;
-      display: none;
-      align-items: center;
-      gap: 8px;
-      border: 1px solid var(--line);
-      background: var(--soft);
-      color: var(--primary);
-      border-radius: 999px;
-      padding: 0 12px;
-      font-size: 13px;
-      font-weight: 800;
-      white-space: nowrap;
+      display: none
     }
 
     .context-pill.show {
       display: flex
     }
 
+    .context-pill #contextText {
+      display: none
+    }
+
     .context-pill button {
+      width: 32px;
+      height: 32px;
       border: 0;
+      border-radius: 99px;
       background: transparent;
       color: var(--muted);
       font-weight: 900;
-      font-size: 16px
+      font-size: 18px
     }
 
     .messages {
@@ -835,46 +960,188 @@
       gap: 16px;
     }
 
+    /* 첫 화면: 할 수 있는 일(영웅으로 묻기 · 스탯창 · 상성표 · 내 기록)과 예시 질문 */
     .welcome {
       margin: auto;
-      max-width: 680px;
-      text-align: center;
-      padding: 34px 24px;
-    }
-
-    .hero-mark {
-      width: 86px;
-      height: 86px;
-      border-radius: 30px;
-      display: grid;
-      place-items: center;
-      margin: 0 auto 18px;
-      font-size: 40px;
-      background: linear-gradient(135deg, var(--primary), var(--primary2));
-      color: #fff;
-      box-shadow: 0 18px 38px rgba(37, 99, 235, .25);
+      width: 100%;
+      max-width: 560px;
+      padding: 12px 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
     }
 
     .welcome h2 {
-      font-size: 30px;
-      letter-spacing: -.06em;
-      margin-bottom: 10px
+      font-size: 26px;
+      letter-spacing: -.04em;
     }
 
     .welcome p {
-      max-width: 760px;
-      margin: 0 auto;
+      margin-top: -8px;
       color: var(--muted);
-      font-size: 15px;
-      line-height: 1.8;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .wl-hero {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      border: 0;
+      border-radius: 22px;
+      background: var(--primary);
+      color: #fff;
+      text-align: left;
+      box-shadow: 0 12px 28px rgba(37, 99, 235, .28);
+      transition: .16s;
+    }
+
+    .wl-hero:hover {
+      transform: translateY(-1px)
+    }
+
+    .wl-faces {
+      display: flex;
+      flex: none
+    }
+
+    .wl-faces img {
+      width: 40px;
+      height: 40px;
+      border-radius: 99px;
+      border: 2px solid #fff;
+      object-fit: cover;
+      background: var(--primary-soft)
+    }
+
+    .wl-faces img+img {
+      margin-left: -14px
+    }
+
+    .wl-hero-text {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0
+    }
+
+    .wl-hero-text b {
+      font-size: 17px;
+      font-weight: 800
+    }
+
+    .wl-hero-text span {
+      font-size: 13px;
+      opacity: .88
+    }
+
+    .wl-cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .wl-card {
+      min-height: 104px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--card-solid);
+      color: var(--text);
+      text-align: left;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+      transition: .16s;
+    }
+
+    .wl-card:hover {
+      border-color: var(--primary)
+    }
+
+    .wl-card b {
+      font-size: 14px;
+      font-weight: 800
+    }
+
+    .wl-card>span:last-child {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.4
+    }
+
+    .wl-ico {
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 2px;
+    }
+
+    .wl-ico.blue {
+      background: var(--primary-soft);
+      color: var(--primary)
+    }
+
+    .wl-ico.orange {
+      background: var(--tint-orange-bg);
+      color: var(--tint-orange)
+    }
+
+    .wl-ico.green {
+      background: var(--tint-green-bg);
+      color: var(--tint-green)
+    }
+
+    .wl-label {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+      margin-bottom: 8px
     }
 
     .sample-chips {
       display: flex;
-      flex-wrap: wrap;
-      gap: 9px;
-      justify-content: center;
-      margin-top: 22px
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .sample-chips .chip {
+      min-height: 44px;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 500;
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sample-chips .chip[hidden] {
+      display: none
+    }
+
+    .sample-chips .chip:hover {
+      background: var(--primary-soft);
+      border-color: var(--primary);
+      color: var(--text)
+    }
+
+    .wl-more {
+      align-self: flex-start;
+      margin-top: 4px;
+      padding: 6px 0;
+      border: 0;
+      background: none;
+      color: var(--primary);
+      font-size: 13px;
+      font-weight: 700;
     }
 
     .chip {
@@ -1044,7 +1311,7 @@
     .suggestions {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 7px;
       margin-top: 12px;
       padding-top: 12px;
       border-top: 1px solid var(--line)
@@ -1055,8 +1322,8 @@
       background: var(--primary-soft);
       color: var(--primary);
       border-radius: 999px;
-      padding: 8px 12px;
-      font-size: 13px;
+      padding: 7px 11px;
+      font-size: 12.5px;
       font-weight: 800
     }
 
@@ -1685,52 +1952,37 @@
       background: rgba(255, 255, 255, .25);
     }
 
+    /* 간단히/자세히: 맵 선택 줄 오른쪽 끝의 두 칸 버튼 */
     .style-toggle {
+      margin-left: auto;
+      flex: none;
       display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-
-    /* 간단히/자세히 안내 문구. 넓은 화면은 .full, 좁은 화면은 .compact. */
-    .style-toggle-hint {
-      font-size: 11.5px;
-      color: var(--muted);
-      line-height: 1.5;
-    }
-
-    .style-toggle-hint.compact {
-      display: none;
-    }
-
-    .style-toggle-label {
-      font-size: 12px;
-      color: var(--muted);
-      font-weight: 700;
-      margin-right: 2px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--soft);
     }
 
     .style-btn {
-      border: 1px solid var(--line);
-      background: var(--soft);
+      height: 30px;
+      border: 0;
+      background: transparent;
       color: var(--muted);
       border-radius: 999px;
-      padding: 6px 14px;
-      font-size: 12.5px;
-      font-weight: 800;
+      padding: 0 12px;
+      font-size: 13px;
+      font-weight: 700;
       transition: .16s;
     }
 
     .style-btn:hover {
-      border-color: var(--primary);
       color: var(--primary)
     }
 
     .style-btn.active {
-      border-color: var(--primary);
-      background: var(--primary-soft);
-      color: var(--primary)
+      background: var(--primary);
+      color: #fff;
+      font-weight: 800
     }
 
     html[data-theme="dark"] .composer {
@@ -1984,6 +2236,10 @@
       padding: 0 4px
     }
 
+    .composer-hint[hidden] {
+      display: none
+    }
+
     .error {
       border: 1px solid rgba(239, 68, 68, .35);
       background: rgba(239, 68, 68, .08);
@@ -2016,19 +2272,6 @@
 
       .mobile-quick {
         display: flex
-      }
-
-      .context-wrap {
-        grid-template-columns: 1fr auto
-      }
-
-      .context-pill {
-        grid-column: 1/-1;
-        justify-self: start
-      }
-
-      .side-toggle {
-        justify-self: end
       }
     }
 
@@ -2128,22 +2371,6 @@
         display: none !important
       }
 
-      .context-wrap {
-        padding: 10px 14px;
-        grid-template-columns: 1fr
-      }
-
-      .custom-select {
-        width: 100%
-      }
-
-      .select-trigger {
-        min-height: 42px;
-        border-radius: 16px;
-        padding-left: 14px;
-        font-size: 13px
-      }
-
       .select-menu {
         border-radius: 18px
       }
@@ -2164,20 +2391,8 @@
         padding: 10px 12px
       }
 
-      .side-toggle {
-        justify-self: start
-      }
-
       .side-btn {
-        height: 39px;
-        border-radius: 13px;
-        padding: 0 13px;
-        font-size: 13px
-      }
-
-      .context-pill {
-        min-height: 36px;
-        font-size: 12px
+        padding: 0 10px
       }
 
       .messages {
@@ -2201,83 +2416,24 @@
       }
 
       .welcome {
-        max-width: 100%;
-        padding: 24px 10px;
-        text-align: center
-      }
-
-      .hero-mark {
-        width: 76px;
-        height: 76px;
-        border-radius: 27px;
-        font-size: 34px;
-        margin-bottom: 16px
+        margin: 0 auto auto;
+        padding: 4px 0
       }
 
       .welcome h2 {
-        font-size: 22px;
-        line-height: 1.32;
-        margin-bottom: 9px
+        font-size: 23px
       }
 
       .welcome p {
-        font-size: 12.5px;
-        line-height: 1.7;
-        max-width: 100%
-      }
-
-      /* 빠른 버튼은 한 줄로 유지하고, 음수 margin + padding으로 좌우
-         스크롤 여유를 준다. */
-      .sample-chips {
-        flex-wrap: nowrap;
-        justify-content: flex-start;
-        gap: 6px;
-        margin: 17px -8px 0;
-        padding: 0 8px 4px;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-      }
-
-      .sample-chips::-webkit-scrollbar {
-        display: none
-      }
-
-      .chip {
-        flex: 0 0 auto;
-        padding: 7px 10px;
-        font-size: 11px
+        font-size: 13.5px
       }
 
       .composer {
         padding: 11px 12px 12px
       }
 
-      .style-toggle {
-        margin-bottom: 8px
-      }
-
-      .style-toggle-label,
-      .style-toggle-hint.full {
-        display: none
-      }
-
-      /* 좁은 화면에서는 짧은 문구를 버튼 아래 줄에 전체 폭으로 보여준다. */
-      .style-toggle-hint.compact {
-        display: block;
-        flex-basis: 100%;
-        font-size: 11px;
-        line-height: 1.45;
-        margin-top: -2px;
-      }
-
       .style-btn {
-        padding: 5px 11px;
-        font-size: 11.5px
-      }
-
-      .composer-hint {
-        display: none
+        padding: 0 11px
       }
 
       .input-box {
@@ -2308,6 +2464,15 @@
     }
 
     @media(max-width:420px) {
+      .composer-tools {
+        gap: 4px
+      }
+
+      .side-btn,
+      .style-btn {
+        padding: 0 9px
+      }
+
       /* 좁은 휴대폰: 제목이 한 글자씩 꺾이지 않게 버튼을 조금 줄인다 */
       .topbar {
         padding: 10px;
@@ -2409,6 +2574,44 @@
       content: "";
       margin-top: 6px;
     }
+
+    /* 한국어 단어가 줄 끝에서 둘로 쪼개지지 않게 단어 단위로 줄을 바꾼다(표는 예전대로). */
+    .msg .bubble {
+      word-break: keep-all;
+      overflow-wrap: break-word
+    }
+
+    .msg .bubble table {
+      word-break: normal
+    }
+
+    /* 폰에서는 질문과 답변 앞부분이 한 화면에 함께 보이도록 답변 글자와 간격을 줄인다. */
+    @media(max-width:720px) {
+      .msg.ai .bubble {
+        font-size: 14px;
+        line-height: 1.6
+      }
+
+      .msg.ai .bubble p {
+        margin-bottom: 8px
+      }
+
+      .msg.ai .bubble h1,
+      .msg.ai .bubble h2,
+      .msg.ai .bubble h3 {
+        margin: 12px 0 6px
+      }
+
+      .msg.ai .bubble ul,
+      .msg.ai .bubble ol {
+        margin: 2px 0 10px;
+        padding-left: 20px
+      }
+
+      .msg.ai .bubble br {
+        margin-top: 4px
+      }
+    }
   </style>
 </head>
 
@@ -2462,88 +2665,123 @@
           <p>영웅 카운터, 조합, 맵 운영, 스탯 피드백을 질문해보세요.</p>
         </div>
         <div class="actions">
-          <button type="button" class="mx-open-btn" id="matchupBtn" title="영웅별 상성표 보기">
+          <button type="button" class="mx-open-btn chat-only" id="matchupBtn" title="영웅별 상성표 보기">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l9 9"/><path d="M20 4l-9 9"/><path d="M3 8V4h4"/><path d="M21 8V4h-4"/><path d="M9 15l-4 5"/><path d="M15 15l4 5"/></svg>
             <span class="mx-open-label">상성표</span>
           </button>
-          <button class="icon-btn" id="recordsBtn" title="내 기록" aria-label="내 기록">
+          <button class="icon-btn chat-only" id="recordsBtn" title="내 기록" aria-label="내 기록">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg>
           </button>
-          <button class="icon-btn" id="themeBtn" title="테마 변경">🌙</button>
-          <button class="icon-btn" id="saveChatBtn" title="대화 저장">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v6h8V4"/><path d="M8 14h8v6H8z"/></svg>
+          <button class="icon-btn" id="resetBtn" title="처음 화면(새 대화)" aria-label="처음 화면으로, 새 대화 시작">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg>
           </button>
-          <button class="icon-btn" id="helpBtn" title="사용법 보기">?</button>
-          <button class="plain-btn" id="resetBtn">초기화</button>
+          <div class="more-wrap">
+            <button class="icon-btn" id="moreBtn" title="더보기" aria-label="더보기" aria-haspopup="menu" aria-expanded="false">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+            </button>
+            <div class="more-menu" id="moreMenu" role="menu" hidden>
+              <button type="button" class="more-item" id="themeBtn" role="menuitemcheckbox" aria-checked="false">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10z"/></svg>
+                <span>야간 모드</span><span class="more-switch" aria-hidden="true"></span>
+              </button>
+              <button type="button" class="more-item" id="saveChatBtn" role="menuitem">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v6h8V4"/><path d="M8 14h8v6H8z"/></svg>
+                <span>대화 저장</span>
+              </button>
+              <button type="button" class="more-item" id="helpBtn" role="menuitem">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.2h.01"/></svg>
+                <span>사용법 보기</span>
+              </button>
+            </div>
+          </div>
           <div class="help-hint" id="helpHint">
-            <span>처음 오셨나요?<br>? 버튼을 누르면 사용 방법을 볼 수 있어요.</span>
+            <span>처음 오셨나요?<br>⋯ 버튼에서 사용법을 볼 수 있어요.</span>
           </div>
         </div>
       </header>
-
-      <div class="context-wrap">
-        <div class="custom-select" id="mapSelect">
-          <button type="button" class="select-trigger" id="mapTrigger">맵 선택 없이 질문하기</button>
-          <div class="select-menu">
-            <div class="select-search"><input type="text" id="mapSearch" placeholder="맵 이름 검색" autocomplete="off"></div>
-            <div class="select-list" id="mapList"></div>
-          </div>
-        </div>
-
-        <div class="side-toggle" id="sideToggle">
-          <button class="side-btn" data-side="attack">공격</button>
-          <button class="side-btn" data-side="defense">수비</button>
-        </div>
-
-        <div class="context-pill" id="contextPill">
-          <span id="contextText"></span>
-          <button type="button" id="clearContextBtn" aria-label="맵 선택 지우기">×</button>
-        </div>
-      </div>
 
       <div class="mobile-quick" id="mobileQuick"></div>
 
       <section class="messages" id="messages">
         <div class="welcome" id="welcome">
-          <div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div>
-          <h2>게임 상황을 적어주세요</h2>
-          <p>탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지<br>붙여서 써주시면 더 정확하게 이해할 수 있어요.</p>
-          <div class="sample-chips">
-            <button class="chip" data-fill="겐지 카운터 알려줘">카운터</button>
-            <button class="chip" data-fill="상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?">조합 추천</button>
-            <button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button>
-            <button class="chip" data-fill="나는 솔저76인데 킬 4 데스 8 딜 6000이야 어떻게 운영해야해?">스탯 피드백</button>
-            <button class="chip" data-fill="리퍼를 하고 싶은데 상대 아나를 어떻게 처리해야할까?">영웅 유지</button>
+          <h2>지금 판, 뭐가 막혀요?</h2>
+          <p>영웅을 누르거나, 스탯창을 올리거나, 그냥 적어도 돼요.</p>
+          <button type="button" class="wl-hero" data-click="heroAskBtn">
+            <span class="wl-faces" aria-hidden="true">
+              <img src="{% static 'chat/hero_icons/아나.png' %}" alt="">
+              <img src="{% static 'chat/hero_icons/겐지.png' %}" alt="">
+              <img src="{% static 'chat/hero_icons/트레이서.png' %}" alt="">
+            </span>
+            <span class="wl-hero-text"><b>영웅으로 묻기</b><span>타자 없이 아이콘만 눌러서</span></span>
+            <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true"><path d="M7 3 L13 9 L7 15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="wl-cards">
+            <button type="button" class="wl-card" data-click="uploadBtn">
+              <span class="wl-ico blue"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18"/><path d="M9 10v9"/></svg></span>
+              <b>스탯창 분석</b><span>TAB 캡처로 누가 잘했나</span>
+            </button>
+            <button type="button" class="wl-card" data-click="matchupBtn">
+              <span class="wl-ico orange"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l9 9"/><path d="M20 4l-9 9"/><path d="M3 8V4h4"/><path d="M21 8V4h-4"/><path d="M9 15l-4 5"/><path d="M15 15l4 5"/></svg></span>
+              <b>상성표</b><span>영웅별 강한·약한 상대</span>
+            </button>
+            <button type="button" class="wl-card" data-click="recordsBtn">
+              <span class="wl-ico green"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg></span>
+              <b>내 기록</b><span>판 기록·결과 카드</span>
+            </button>
+          </div>
+          <div>
+            <div class="wl-label">이렇게 물어봐도 돼요</div>
+            <div class="sample-chips">
+              <button class="chip" data-fill="겐지 카운터 알려줘">겐지 카운터 알려줘</button>
+              <button class="chip" data-fill="나는 솔저76인데 킬 4 데스 8 딜 6000이야 어떻게 운영해야해?">나는 솔저76인데 킬 4 데스 8 딜 6000이야 어떻게 운영해야해?</button>
+              <button class="chip" data-fill="왕의 길 수비 운영 알려줘">왕의 길 수비 운영 알려줘</button>
+              <button class="chip" hidden data-fill="상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?">상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?</button>
+              <button class="chip" hidden data-fill="리퍼를 하고 싶은데 상대 아나를 어떻게 처리해야할까?">리퍼를 하고 싶은데 상대 아나를 어떻게 처리해야할까?</button>
+            </div>
+            <button type="button" class="wl-more" data-more-examples>예시 더 보기 (조합 추천, 영웅 유지)</button>
           </div>
         </div>
       </section>
 
       <footer class="composer">
-        <div class="style-toggle" id="styleToggle">
-          <span class="style-toggle-label">답변 스타일</span>
-          <button type="button" class="style-btn active" data-style="simple" title="인게임 중 빠르게 볼 핵심 요약">간단히</button>
-          <button type="button" class="style-btn" data-style="detailed" title="복기·학습용 자세한 설명">자세히</button>
-          <span class="style-toggle-hint full">영웅 플레이·스탯 피드백·맵 운영처럼 글로 답하는 질문에 적용돼요 (카운터·조합 추천 카드는 차이가 거의 없어요)</span>
-          <span class="style-toggle-hint compact">영웅 플레이·스탯 피드백·맵 운영에만 적용돼요</span>
+        <div class="hero-ask-row">
+          <button type="button" class="hero-ask-btn" id="heroAskBtn"><svg class="ha-face-ph" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 19 Q4.5 13 11 13 Q17.5 13 18.5 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span id="heroAskLabel">영웅으로 묻기</span></button>
+          <button type="button" class="hero-again-btn" id="heroAgainBtn" hidden><span class="ha-faces" id="heroAgainFaces"></span>같은 영웅으로 묻기</button>
+        </div>
+        <div class="composer-tools">
+          <div class="custom-select" id="mapSelect">
+            <button type="button" class="select-trigger" id="mapTrigger"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg><span id="mapTriggerText">맵 선택</span></button>
+            <div class="select-menu">
+              <div class="select-search"><input type="text" id="mapSearch" placeholder="맵 이름 검색" autocomplete="off"></div>
+              <div class="select-list" id="mapList"></div>
+            </div>
+          </div>
+          <div class="side-toggle" id="sideToggle">
+            <button class="side-btn" data-side="attack">공격</button>
+            <button class="side-btn" data-side="defense">수비</button>
+          </div>
+          <div class="context-pill" id="contextPill">
+            <span id="contextText"></span>
+            <button type="button" id="clearContextBtn" aria-label="맵 선택 지우기">×</button>
+          </div>
+          <div class="style-toggle" id="styleToggle">
+            <button type="button" class="style-btn active" data-style="simple" title="인게임 중 빠르게 볼 핵심 요약">간단히</button>
+            <button type="button" class="style-btn" data-style="detailed" title="복기·학습용 자세한 설명">자세히</button>
+          </div>
         </div>
         <div class="attach-preview" id="attachPreview" hidden>
           <img id="attachThumb" alt="첨부한 스탯창 이미지">
           <span class="attach-name" id="attachName"></span>
           <button type="button" class="attach-remove" id="attachRemove" title="첨부 취소" aria-label="첨부 취소">×</button>
         </div>
-        <div class="hero-ask-row">
-          <button type="button" class="hero-ask-btn" id="heroAskBtn"><svg class="ha-face-ph" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 19 Q4.5 13 11 13 Q17.5 13 18.5 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span id="heroAskLabel">영웅으로 묻기</span></button>
-          <button type="button" class="hero-again-btn" id="heroAgainBtn" hidden><span class="ha-faces" id="heroAgainFaces"></span>같은 영웅으로 묻기</button>
-        </div>
         <div class="input-box">
-          <textarea id="userInput" rows="1" placeholder="질문을 입력하세요. Enter 전송, Shift+Enter 줄바꿈"></textarea>
+          <textarea id="userInput" rows="1" placeholder="질문을 입력하세요" title="Enter 전송, Shift+Enter 줄바꿈"></textarea>
           <input type="file" id="screenshotInput" accept="image/png,image/jpeg,image/webp" hidden>
           <button type="button" class="upload-btn" id="uploadBtn" title="스탯창(TAB) 스크린샷 업로드"></button>
           <button class="send-btn" id="sendBtn">전송</button>
         </div>
-        <div class="composer-hint">
-          <span id="composerHintText">맵을 선택하면 해당 맵 기준으로 답변합니다.</span>
-          <span>스탯은 자유 형식으로 입력해도 됩니다.</span>
+        <div class="composer-hint" id="composerHint" hidden>
+          <span id="composerHintText"></span>
         </div>
       </footer>
     </main>
@@ -2596,6 +2834,8 @@
 
     const $ = (id) => document.getElementById(id);
     const messages = $('messages');
+    // 새 대화를 시작하면 이 첫 화면을 그대로 다시 그린다.
+    const WELCOME_HTML = $('welcome').outerHTML;
     const HERO_ICON_BASE = '{% static "chat/hero_icons/" %}';
     window.MatchRecords?.init({ iconBase: HERO_ICON_BASE, escapeHtml: (t) => escapeHtml(t) });
     window.HeroAsk?.init({
@@ -2711,7 +2951,9 @@
     }
     function updateContext() {
       const hasMap = state.map && state.map.mode !== 'none';
-      $('mapTrigger').textContent = hasMap ? `${state.map.name} (${modeName[state.map.mode]})` : '맵 선택 없이 질문하기';
+      $('mapTriggerText').textContent = hasMap ? state.map.name : '맵 선택';
+      $('mapTrigger').classList.toggle('has-map', !!hasMap);
+      $('mapTrigger').title = hasMap ? `${state.map.name} (${modeName[state.map.mode]})` : '맵을 고르면 그 맵 기준으로 답해요';
       $('sideToggle').classList.toggle('show', hasMap && sideModes.has(state.map.mode));
       document.querySelectorAll('.side-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.side === state.side));
       const label = contextLabel();
@@ -2775,6 +3017,14 @@
     document.addEventListener('click', (e) => {
       const fill = e.target.closest('[data-fill]');
       if (fill) { input.value = fill.dataset.fill; autoResize(); input.focus(); }
+      // 첫 화면 카드는 같은 기능의 버튼(영웅으로 묻기·스탯창·상성표·내 기록)을 대신 누른다.
+      const proxy = e.target.closest('[data-click]');
+      if (proxy) $(proxy.dataset.click)?.click();
+      const more = e.target.closest('[data-more-examples]');
+      if (more) {
+        more.parentElement.querySelectorAll('.chip[hidden]').forEach(c => { c.hidden = false; });
+        more.remove();
+      }
     });
 
     function autoResize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 130) + 'px'; }
@@ -2785,8 +3035,8 @@
     // 이미지를 고르면 입력창 위에 첨부만 해 두고, 전송할 때 질문과 함께 보낸다.
     const uploadBtn = $('uploadBtn');
     const screenshotInput = $('screenshotInput');
+    const composerHint = $('composerHint');
     const composerHintText = $('composerHintText');
-    const composerHintDefault = composerHintText ? composerHintText.textContent : '';
     const attachPreview = $('attachPreview');
     const attachThumb = $('attachThumb');
     const attachName = $('attachName');
@@ -2800,7 +3050,8 @@
       attachThumb.src = pendingImageUrl;
       attachName.textContent = file.name || '스탯창 이미지';
       attachPreview.hidden = false;
-      if (composerHintText) composerHintText.textContent = '🖼 궁금한 점을 적어 함께 보내세요. 비워두고 보내면 전체 분석을 보여드려요.';
+      composerHintText.textContent = '🖼 궁금한 점을 적어 함께 보내세요. 비워두고 보내면 전체 분석을 보여드려요.';
+      composerHint.hidden = false;
       input.focus();
     }
     function clearAttachedImage() {
@@ -2809,7 +3060,7 @@
       attachThumb.removeAttribute('src');
       attachPreview.hidden = true;
       screenshotInput.value = '';
-      if (composerHintText) composerHintText.textContent = composerHintDefault;
+      composerHint.hidden = true;
     }
     $('attachRemove')?.addEventListener('click', () => { clearAttachedImage(); input.focus(); });
 
@@ -3371,7 +3622,7 @@
       document.querySelectorAll('.style-btn').forEach(b => b.classList.toggle('active', b.dataset.style === 'simple'));
       clearContext();
       clearAttachedImage();
-      messages.innerHTML = `<div class="welcome" id="welcome"><div class="hero-mark"><svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7"/><circle cx="12" cy="12" r="4.2"/><line x1="12" y1="5.4" x2="12" y2="8.2"/><line x1="12" y1="15.8" x2="12" y2="18.6"/><line x1="5.4" y1="12" x2="8.2" y2="12"/><line x1="15.8" y1="12" x2="18.6" y2="12"/></svg></div><h2>게임 상황을 적어주세요</h2><p>탱커·딜러·힐러 같은 역할을 말할 때는 “상대 탱커”, “아군 힐러”처럼 누구를 가리키는지<br>붙여서 써주시면 더 정확하게 이해할 수 있어요.</p><div class="sample-chips"><button class="chip" data-fill="겐지 카운터 알려줘">카운터</button><button class="chip" data-fill="상대는 오리사, 리퍼, 파라, 루시우, 아나 이고 우리팀은 라인하르트, 리퍼, 트레이서, 브리기테 인데 나는 뭘 해야할까?">조합 추천</button><button class="chip" data-fill="왕의 길 수비 운영 알려줘">맵 운영</button><button class="chip" data-fill="내 솔저76 킬 4 데스 8 딜 6000인데 뭘 고쳐야 해?">스탯 피드백</button><button class="chip" data-fill="리퍼를 하고 싶은데 상대 아나를 어떻게 처리해야할까?">영웅 유지</button></div></div>`;
+      messages.innerHTML = WELCOME_HTML;
     }
     async function resetServer() {
       try {
@@ -3383,8 +3634,20 @@
       const html = document.documentElement;
       const dark = html.dataset.theme === 'dark';
       html.dataset.theme = dark ? 'light' : 'dark';
-      $('themeBtn').textContent = dark ? '🌙' : '☀️';
+      $('themeBtn').setAttribute('aria-checked', String(!dark));
     });
+
+    // 더보기(⋯) 메뉴. 메뉴 밖을 누르거나 Esc, 메뉴 항목(야간 모드 제외)을 누르면 닫힌다.
+    const moreBtn = $('moreBtn');
+    const moreMenu = $('moreMenu');
+    function setMoreMenu(open) {
+      moreMenu.hidden = !open;
+      moreBtn.setAttribute('aria-expanded', String(open));
+    }
+    moreBtn.addEventListener('click', (e) => { e.stopPropagation(); setMoreMenu(moreMenu.hidden); });
+    moreMenu.addEventListener('click', (e) => { if (e.target.closest('#saveChatBtn, #helpBtn')) setMoreMenu(false); });
+    document.addEventListener('click', (e) => { if (!moreMenu.hidden && !moreMenu.contains(e.target)) setMoreMenu(false); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !moreMenu.hidden) setMoreMenu(false); });
 
     // ── 사용법 투어 ──
     // 처음 접속한 사용자에게만 help 버튼 옆에 말풍선을 5초간 보여준다.
@@ -3436,9 +3699,9 @@
         desc: '인게임에서 Tab을 눌렀을 때 나오는 K/D/A 스탯창 화면을 캡쳐해서 올리면\n전적을 분석해서 코칭해드려요.',
       },
       {
-        target: () => $('saveChatBtn'),
-        title: '대화 저장',
-        desc: '대화 내용을 저장해서 나중에 다시 볼 수 있어요.\n최대 2개까지 저장할 수 있습니다.',
+        target: () => $('moreBtn'),
+        title: '더보기',
+        desc: '야간 모드, 대화 저장, 사용법 보기가 여기 있어요.\n대화는 최대 2개까지 저장할 수 있습니다.',
       },
     ];
 
