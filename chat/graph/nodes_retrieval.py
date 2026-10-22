@@ -15,14 +15,26 @@ from chat.domain.heroes import (
     hero_mentioned_in_text,
     normalize_hero_name,
 )
-from chat.domain.intent_rules import is_hero_enumeration_request
+from chat.domain.intent_rules import (
+    asks_partner_for_self,
+    is_hero_enumeration_request,
+    is_position_question,
+    is_tank_pair,
+    partner_open_roles,
+    requested_pick_role,
+    synergy_pair_ally,
+    two_tanks_allowed,
+)
 from chat.domain.prompts import ally_team_prompt_text
 from chat.rag.doc_sections import (
     continued_line_label,
     get_hero_perk_section,
+    get_hero_position,
     get_hero_profile,
+    get_hero_teamplay,
     skill_tag_section,
 )
+from chat.rag.matchup_tables import get_synergy_note, strip_tank_pair_synergy, top_synergy_rows
 from chat.rag.vectorstore import header_path
 from chat.rag.llm_utils import (
     call_llm_text,
@@ -100,6 +112,14 @@ def inherited_query_hero(state: ChatbotGraphState) -> Any:
 _OWN_PLAY_INTENTS = {"performance_improve", "stay", "situation", "map_strategy"}
 
 
+def _synergy_pair_ally(state: ChatbotGraphState) -> Any:
+    """내 영웅과 이번 메시지의 아군 한 명의 연계 질문이면 그 아군."""
+    return synergy_pair_ally(
+        state.get("message", ""), state.get("current_hero"), state.get("ally_team") or [],
+        bool(state.get("enemy_named_this_turn")),
+    )
+
+
 def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
     message = state.get("message", "")
     intent = state.get("intent") or "general"
@@ -146,9 +166,15 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
     if enemy_team and enemy_named_this_turn:
         queries.append(f"상대 조합 {' '.join(enemy_team)} 대응 영웅 추천")
 
+    pair_ally = _synergy_pair_ally(state)
+    if pair_ally and is_tank_pair(current_hero, pair_ally) and not two_tanks_allowed(state.get("roster_size_effective")):
+        pair_ally = None
+    if pair_ally:
+        queries.insert(1, f"{current_hero} {pair_ally} 궁합 연계")
+
     if (
         role_filter and role_filter != "all" and intent not in _OWN_PLAY_INTENTS
-        and not state.get("role_neutral_question")
+        and not state.get("role_neutral_question") and not pair_ally
     ):
         queries.append(f"{ROLE_LABELS.get(role_filter)} 역할 카운터 영웅 추천")
 
@@ -257,6 +283,58 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 logger.info("[PERK SECTION] %s 특전 절을 검색 결과 맨 앞에 추가", perk_hero)
             else:
                 logger.info("[PERK SECTION] %s의 특전 절이 문서에 없음", perk_hero)
+
+        # 포지션 질문은 검색이 "기본 위치" 줄을 놓칠 때가 있어 직접 꺼낸다.
+        if is_position_question(state.get("message", "")):
+            position_hero = resolve_perk_hero(state)
+            position = get_hero_position(position_hero)
+            if position:
+                all_docs.insert(0, {
+                    "content": f"## {normalize_hero_name(position_hero)}\n{position}",
+                    "metadata": {"H2": normalize_hero_name(position_hero), "H3": "기본 위치"},
+                    "query": f"{position_hero} 기본 위치(원문 직접 조회)",
+                })
+                logger.info("[POSITION] %s 기본 위치를 검색 결과 맨 앞에 추가", position_hero)
+
+        # 탱커가 한 명뿐인 규격이면 탱커끼리 궁합 줄은 근거에서 뺀다.
+        tank_pair_ok = two_tanks_allowed(state.get("roster_size_effective"))
+        if not tank_pair_ok:
+            for doc in all_docs:
+                doc["content"] = strip_tank_pair_synergy(doc["content"])
+
+        # 아군 한 명과의 연계 질문은 두 영웅의 궁합 표 줄과 협업 줄을 직접 꺼낸다.
+        pair_ally = _synergy_pair_ally(state)
+        if pair_ally and not tank_pair_ok and is_tank_pair(state.get("current_hero"), pair_ally):
+            pair_ally = None
+        if pair_ally:
+            me = state.get("current_hero")
+            parts = [get_synergy_note(me, pair_ally)] + [
+                f"{hero} {line}" for hero in (me, pair_ally) for line in (get_hero_teamplay(hero) or "").splitlines()
+            ]
+            text = "\n".join(p for p in parts if p)
+            if text:
+                all_docs.insert(0, {
+                    "content": f"## {me} · {pair_ally} 궁합\n{text}",
+                    "metadata": {"H2": f"{me} · {pair_ally}", "H3": "궁합"},
+                    "query": f"{me} {pair_ally} 궁합(원문 직접 조회)",
+                })
+                logger.info("[SYNERGY PAIR] %s · %s 궁합·협업 줄을 검색 결과 맨 앞에 추가", me, pair_ally)
+
+        # 아군을 정하지 않고 내 영웅과 같이 할 영웅을 물으면, 그 영웅 궁합 표에서 자리가 남는 역할의 좋은 줄을 꺼낸다.
+        elif asks_partner_for_self(state.get("message", ""), state.get("current_hero")):
+            me = state.get("current_hero")
+            roles = partner_open_roles(me, state.get("ally_team") or [], state.get("roster_size_effective"))
+            pick_role = requested_pick_role(state.get("message", ""))
+            if pick_role in roles:
+                roles = [pick_role]
+            text = top_synergy_rows(me, roles)
+            if text:
+                all_docs.insert(0, {
+                    "content": f"## {me} 궁합이 좋은 아군\n{text}",
+                    "metadata": {"H2": me, "H3": "궁합이 좋은 아군"},
+                    "query": f"{me} 궁합 표(원문 직접 조회)",
+                })
+                logger.info("[PARTNER SYNERGY] %s 궁합 표 %s 역할 줄을 검색 결과 맨 앞에 추가", me, roles)
 
         # 상대별 프로필은 검색으로 다 안 걸려서 직접 꺼낸다.
         if state.get("is_target_priority_question"):

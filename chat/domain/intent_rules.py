@@ -371,6 +371,31 @@ def resolve_roster_size(declared: Optional[int]) -> int:
     return CURRENT_META_ROSTER_SIZE
 
 
+def two_tanks_allowed(roster_size: Optional[int] = None) -> bool:
+    """이 인원수 규격에서 탱커 둘이 한 팀에 설 수 있는지(5대5는 불가)."""
+    return ROSTER_ROLE_RANGES[resolve_roster_size(roster_size)]["tank"][1] >= 2
+
+
+def is_tank_pair(hero: Optional[str], other: Optional[str]) -> bool:
+    return HERO_TO_ROLE.get(hero) == "tank" and HERO_TO_ROLE.get(other) == "tank"
+
+
+# 같은 팀에서 함께 할 영웅을 묻는 표현(교체 추천과 구분한다).
+_PARTNER_QUESTION_RE = re.compile(r"(?:같이|함께)\s*(?:하면|할|쓰면|쓸|플레이|하기)|궁합|잘\s*맞|어울리|시너지")
+
+
+def asks_partner_for_self(message: str, current_hero: Optional[str]) -> bool:
+    """내 영웅을 밝히고 같은 팀에서 함께 할 영웅을 묻는 질문인지."""
+    return bool(current_hero and message and _PARTNER_QUESTION_RE.search(message))
+
+
+def partner_open_roles(current_hero: Optional[str], ally_team: List[str], roster_size: Optional[int] = None) -> List[str]:
+    """내 영웅과 아군을 넣고도 인원수 규격상 자리가 남는 역할."""
+    ranges = ROSTER_ROLE_RANGES[resolve_roster_size(roster_size)]
+    taken = [HERO_TO_ROLE.get(h) for h in dict.fromkeys([current_hero, *(ally_team or [])]) if h]
+    return [role for role in ROLE_HEROES if taken.count(role) < ranges[role][1]]
+
+
 def alternate_roster_size(roster_size: Optional[int] = None) -> int:
     """지금 적용 중인 인원수의 반대쪽(5↔6). 정정 버튼용."""
     return 5 if resolve_roster_size(roster_size) == 6 else 6
@@ -565,6 +590,29 @@ _ELLIPSIS_FOLLOWUP_MAP_PATTERN = re.compile(r"어떤\s*맵|맵에서")
 
 # 특전 질문 판정(단어 등장만으로 충분하다).
 _PERK_QUESTION_PATTERN = re.compile(r"특전|퍼크|perk", re.IGNORECASE)
+
+
+# 어디에 서는지를 묻는 질문(포지션·위치 선정·자리 잡기).
+_POSITION_QUESTION_PATTERN = re.compile(
+    r"포지션|위치\s*(?:선정|를\s*잡|는\s*어디|잡)|자리\s*(?:를|는)?\s*(?:잡|선정)|어디(?:에|서)\s*(?:서야|서서|있어야|싸워)"
+)
+
+
+def is_position_question(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_POSITION_QUESTION_PATTERN.search(message))
+
+
+def synergy_pair_ally(
+    message: str, current_hero: Optional[str], ally_team: List[str], enemy_named: bool,
+) -> Optional[str]:
+    """내 영웅으로 이번 메시지에 말한 아군 한 명과 어떻게 맞출지 묻는 질문이면 그 아군."""
+    if not current_hero or enemy_named or is_pick_request(message):
+        return None
+    named = set(find_all_heroes(message or ""))
+    allies = [h for h in (ally_team or []) if h != current_hero and h in named]
+    return allies[0] if len(allies) == 1 else None
 
 
 def is_perk_question(message: str) -> bool:

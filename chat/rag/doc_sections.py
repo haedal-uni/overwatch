@@ -6,7 +6,7 @@
 import logging
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from chat.domain.heroes import HERO_TO_ROLE, ROLE_LABELS, normalize_hero_name, resolve_hero_name
 from chat.rag.vectorstore import MD_PATH
@@ -143,6 +143,16 @@ def get_hero_profile(hero: Optional[str]) -> Optional[str]:
 
 
 _TEAMPLAY_LINE_RE = re.compile(r"^\s*-\s*(기본 위치|협업):")
+_POSITION_LINE_RE = re.compile(r"^\s*-\s*기본 위치:")
+
+
+def get_hero_position(hero: Optional[str]) -> Optional[str]:
+    """영웅 프로필의 "기본 위치" 줄(포지션 질문의 근거)."""
+    profile = get_hero_profile(hero)
+    if not profile:
+        return None
+    lines = [line.strip() for line in profile.splitlines() if _POSITION_LINE_RE.match(line)]
+    return "\n".join(lines) or None
 
 
 def get_hero_teamplay(hero: Optional[str]) -> Optional[str]:
@@ -228,6 +238,58 @@ def _build_skill_keys() -> Dict[str, Dict[str, str]]:
 
     logger.info("[SKILL KEYS] 영웅 %d명 스킬 단축키 로드", len(table))
     return table
+
+
+_DISPLAY_SKILL_LINE_RE = re.compile(r"^\s+-\s+(?:설정:\s*)?([^:()]+?)\s*(?:\(([^)]*)\))?\s*:")
+_DISPLAY_KEY_TOKEN_RE = re.compile(r"(좌클릭|우클릭|좌클|우클|좌Shift|Shift|(?<![A-Za-z])[EQ](?![A-Za-z]))")
+_DISPLAY_KEY_ORDER = ["좌클릭", "우클릭", "shift", "e", "q"]
+
+_skill_list_cache: Optional[Dict[str, List[Tuple[str, List[str]]]]] = None
+
+
+def _build_skill_list() -> Dict[str, List[Tuple[str, List[str]]]]:
+    table: Dict[str, List[Tuple[str, List[str]]]] = {}
+    keys_by_name = get_skill_keys()
+    for hero, body in _hero_section_bodies().items():
+        found: Dict[str, List[str]] = {}
+        in_block = False
+        for line in body:
+            if line.startswith("- "):
+                in_block = line.strip().rstrip(":") == "- 스킬 데이터"
+                continue
+            if not in_block:
+                continue
+            match = _DISPLAY_SKILL_LINE_RE.match(line)
+            if not match:
+                continue
+            name = match.group(1).strip()
+            keys = []
+            suffix = _NAME_SUFFIX_KEY_RE.match(name)
+            if suffix:
+                name, keys = suffix.group(1), [_SKILL_KEY_WORDS[suffix.group(2)]]
+            elif match.group(2):
+                keys = [_SKILL_KEY_WORDS[token] for token in _DISPLAY_KEY_TOKEN_RE.findall(match.group(2))]
+            for key in keys:
+                if key not in found.setdefault(name, []):
+                    found[name].append(key)
+        # 소제목 형태로 적힌 영웅은 단축키 표에만 있다.
+        for name, key in (keys_by_name.get(hero) or {}).items():
+            name = re.sub(r"^설정:\s*", "", name)
+            if not found.get(name):
+                found[name] = [key]
+        rows = [(name, keys) for name, keys in found.items() if keys]
+        rows.sort(key=lambda row: min(_DISPLAY_KEY_ORDER.index(key) for key in row[1]))
+        if rows:
+            table[hero] = rows
+    return table
+
+
+def get_skill_list(hero: Optional[str]) -> List[Tuple[str, List[str]]]:
+    """화면에 보여 줄 스킬 목록 [(이름, [단축키…])]. 답변 단축키 교정용 표(get_skill_keys)와 달리 키가 둘인 스킬도 남긴다."""
+    global _skill_list_cache
+    if _skill_list_cache is None:
+        _skill_list_cache = _build_skill_list()
+    return _skill_list_cache.get(normalize_hero_name(hero) or "", [])
 
 
 def get_skill_keys() -> Dict[str, Dict[str, str]]:
@@ -408,15 +470,16 @@ def get_hero_stat_types() -> Dict[str, str]:
 
 
 def skill_key_reference(heroes) -> str:
-    """프롬프트에 넣을 영웅별 스킬 단축키 줄("- 안란: 맹염 질주(shift), ...")."""
-    table = get_skill_keys()
+    """프롬프트에 넣을 영웅별 스킬 줄("- 안란: 맹염 질주(shift), ..."). 무기처럼 키가 둘인 스킬도 넣는다."""
     lines = []
     seen = set()
     for hero in heroes:
         name = normalize_hero_name(hero)
-        if not name or name in seen or name not in table:
+        if not name or name in seen:
+            continue
+        skills = get_skill_list(name)
+        if not skills:
             continue
         seen.add(name)
-        skills = ", ".join(f"{skill}({key})" for skill, key in table[name].items())
-        lines.append(f"- {name}: {skills}")
+        lines.append(f"- {name}: " + ", ".join(f"{skill}({'/'.join(keys)})" for skill, keys in skills))
     return "\n".join(lines)

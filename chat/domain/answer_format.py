@@ -603,3 +603,116 @@ def relabel_quick_actions_for_review(answer: str) -> str:
     if not answer:
         return answer
     return _QUICK_ACTIONS_HEADER_RE.sub(r"\1다음 판에 해볼 것 3가지", answer)
+
+
+def drop_role_labels_for(answer: str, heroes: List[str]) -> str:
+    """사용자가 이미 아는 영웅(내 영웅·아군·상대) 이름 뒤 "(역할)"을 지운다."""
+    if not answer or not heroes:
+        return answer
+    known = set(heroes)
+    return _HERO_ROLE_LABEL_RE.sub(
+        lambda m: m.group(1) if HERO_NAME_TO_CANONICAL[m.group(1)] in known else m.group(0), answer
+    )
+
+
+_SWAP_HEADER_RE = re.compile(r"^\s*영웅을 바꾼다면\s*:\s*(.+)$")
+
+
+def label_swap_reasons(answer: str) -> str:
+    """"영웅을 바꾼다면" 아래 이유 줄에 영웅 이름이 빠졌으면 순서대로 붙인다."""
+    if not answer:
+        return answer
+    lines = answer.split("\n")
+    for i, line in enumerate(lines):
+        m = _SWAP_HEADER_RE.match(line)
+        if not m:
+            continue
+        names = [n.strip() for n in re.sub(r"\((탱커|딜러|힐러)\)", "", m.group(1)).split(",") if n.strip()]
+        reasons = []
+        for j in range(i + 1, len(lines)):
+            if not lines[j].lstrip().startswith("- "):
+                break
+            reasons.append(j)
+        if len(reasons) != len(names):
+            continue
+        surfaces = list(HERO_NAME_TO_CANONICAL)
+        for j in reasons:
+            if any(s in lines[j] for s in surfaces):
+                break
+        else:
+            for name, j in zip(names, reasons):
+                lines[j] = f"- {name}: {lines[j].lstrip()[2:].lstrip()}"
+    return "\n".join(lines)
+
+
+_SECTION_HEADER_RE = re.compile(
+    r"^\s*(운영 팁:|바로\s*(?:적용)?할\s*것\s*3가지|다음 판에 해볼 것 3가지|영웅을 바꾼다면\s*:|강점:|약점:)"
+)
+_NUMBERED_LINE_RE = re.compile(r"^\s*\d+\.\s")
+
+
+def tidy_simple_sections(answer: str, quick_actions: bool = False) -> str:
+    """간단히 답변의 섹션 모양을 맞춘다(제목 없는 끝 숫자 목록에 "바로 할 것 3가지", "운영 팁" 항목의 "- ", 제목 앞 빈 줄)."""
+    if not answer:
+        return answer
+    lines = answer.split("\n")
+
+    if quick_actions and not _QUICK_ACTIONS_HEADER_RE.search(answer):
+        numbered = [i for i, line in enumerate(lines) if _NUMBERED_LINE_RE.match(line)]
+        if len(numbered) >= 2:
+            start = numbered[-1]
+            while start - 1 in numbered:
+                start -= 1
+            lines.insert(start, "바로 할 것 3가지")
+
+    in_tips = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if _SECTION_HEADER_RE.match(line):
+            in_tips = stripped.startswith("운영 팁")
+            continue
+        if not stripped:
+            in_tips = False
+            continue
+        if in_tips and not stripped.startswith("- ") and not _NUMBERED_LINE_RE.match(line):
+            lines[i] = "- " + stripped
+
+    out: List[str] = []
+    for line in lines:
+        if _SECTION_HEADER_RE.match(line) and out and out[-1].strip():
+            out.append("")
+        if not line.strip() and out and not out[-1].strip():
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+_ECHO_TITLE_END_RE = re.compile(r"(분석|안내|정리|요약|설명|가이드|방법)\s*:?\s*$")
+
+
+def drop_echo_title(answer: str, message: str) -> str:
+    """질문을 고쳐 쓴 제목 줄("~ 조합의 강점과 약점 분석")로 시작하면 그 줄을 지운다."""
+    if not answer or not message:
+        return answer
+    lines = answer.split("\n")
+    first = lines[0].strip()
+    if len(lines) < 2 or len(first) > 60 or not _ECHO_TITLE_END_RE.search(first):
+        return answer
+    words = {w for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", message)}
+    shared = sum(1 for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", first) if w in words or any(w.startswith(m) for m in words))
+    if shared < 2:
+        return answer
+    return "\n".join(lines[1:]).lstrip("\n")
+
+
+_DYING_STATE_RE = re.compile(r"빈사\s*상태")
+_DYING_BEFORE_NOUN_RE = re.compile(r"빈사(?:인|의)?\s+(?=[가-힣])")
+
+
+def replace_dying_word(text: str) -> str:
+    """문서의 "빈사"를 쉬운 말("생명력이 거의 없는")로 바꾼다."""
+    if not text or "빈사" not in text:
+        return text
+    text = _DYING_STATE_RE.sub("생명력이 거의 없는 상태", text)
+    text = _DYING_BEFORE_NOUN_RE.sub("생명력이 거의 없는 ", text)
+    return text.replace("빈사", "생명력이 거의 없는 상태")
