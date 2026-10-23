@@ -17,6 +17,7 @@ from chat.domain.heroes import (
 )
 from chat.domain.intent_rules import (
     asks_partner_for_self,
+    is_combo_question,
     is_hero_enumeration_request,
     is_position_question,
     is_tank_pair,
@@ -28,6 +29,7 @@ from chat.domain.intent_rules import (
 from chat.domain.prompts import ally_team_prompt_text
 from chat.rag.doc_sections import (
     continued_line_label,
+    get_hero_combo_lines,
     get_hero_perk_section,
     get_hero_position,
     get_hero_profile,
@@ -120,6 +122,17 @@ def _synergy_pair_ally(state: ChatbotGraphState) -> Any:
     )
 
 
+def combo_question_hero(state: ChatbotGraphState) -> Any:
+    """한 영웅의 스킬 연계·콤보를 묻는 질문이면 그 영웅(아군과의 연계 질문은 제외)."""
+    message = state.get("message", "")
+    if not is_combo_question(message) or _synergy_pair_ally(state):
+        return None
+    if asks_partner_for_self(message, state.get("current_hero")):
+        return None
+    hero = resolve_perk_hero(state)
+    return normalize_hero_name(hero) if get_hero_combo_lines(hero) else None
+
+
 def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
     message = state.get("message", "")
     intent = state.get("intent") or "general"
@@ -171,6 +184,10 @@ def build_retrieval_queries_node(state: ChatbotGraphState) -> ChatbotGraphState:
         pair_ally = None
     if pair_ally:
         queries.insert(1, f"{current_hero} {pair_ally} 궁합 연계")
+
+    combo_hero = combo_question_hero(state)
+    if combo_hero:
+        queries.insert(1, f"{combo_hero} 주요 연계 콤보")
 
     if (
         role_filter and role_filter != "all" and intent not in _OWN_PLAY_INTENTS
@@ -295,6 +312,16 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
                     "query": f"{position_hero} 기본 위치(원문 직접 조회)",
                 })
                 logger.info("[POSITION] %s 기본 위치를 검색 결과 맨 앞에 추가", position_hero)
+
+        # 연계 설명은 영웅 절 곳곳에 흩어져 있어 검색이 다 모으지 못한다.
+        combo_hero = combo_question_hero(state)
+        if combo_hero:
+            all_docs.insert(0, {
+                "content": f"## {combo_hero} 연계\n{get_hero_combo_lines(combo_hero)}",
+                "metadata": {"H2": combo_hero, "H3": "연계"},
+                "query": f"{combo_hero} 연계(원문 직접 조회)",
+            })
+            logger.info("[COMBO] %s 연계 줄을 검색 결과 맨 앞에 추가", combo_hero)
 
         # 탱커가 한 명뿐인 규격이면 탱커끼리 궁합 줄은 근거에서 뺀다.
         tank_pair_ok = two_tanks_allowed(state.get("roster_size_effective"))

@@ -59,6 +59,8 @@ from chat.domain.intent_rules import (
 )
 from chat.rag.doc_sections import get_hero_teamplay, get_skill_keys, get_skill_tag_index, skill_key_reference
 from chat.rag.llm_utils import call_llm_text, call_llm_text_creative, safe_json_loads
+from chat.graph.nodes_retrieval import combo_question_hero
+from chat.rag.target_priorities import target_rule_line
 from chat.domain.prompts import (
     SUGGESTED_QUESTIONS_INLINE_RULES,
     SUGGESTED_QUESTIONS_INLINE_SCHEMA_LINE,
@@ -535,10 +537,18 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "덧붙이지 않은 다른 영웅 이야기나 운영 팁은 쓰지 마라."
             )
 
+        # 우선 타겟 질문은 지금 영웅으로 누구를 노릴지 묻는다(교체 추천 블록을 만들지 않는다).
+        target_priority_rule = (
+            "추천 영웅 블록이나 다른 영웅으로 바꾸라는 이야기는 쓰지 마라 — 지금 영웅으로 상대 중 누구부터 노릴지 물었다."
+            if state.get("is_target_priority_question") and state.get("target_priority") else ""
+        )
+
         quick_actions_requested = False
         if is_simple_style:
             if pick_answer_rule:
                 simple_recommend_rule = f"2. {pick_answer_rule}\n"
+            elif target_priority_rule:
+                simple_recommend_rule = f"2. {target_priority_rule}\n"
             elif swap_last:
                 simple_recommend_rule = f"2. {swap_last_rule}\n"
             else:
@@ -599,6 +609,7 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "2. 영웅 교체를 추천할 때는 위 허용 목록 안에서만 골라라.\n"
                 + (
                     f"   {pick_answer_rule}\n" if pick_answer_rule else
+                    f"   {target_priority_rule}\n" if target_priority_rule else
                     f"   {swap_last_rule}\n" if swap_last else
                     "   추천 영웅 목록은 답변 전체에 한 번만 만들어라 — 여러 역할을 함께 "
                     "추천하더라도 역할마다 목록을 따로 만들지 말고 한 곳에 모아 적고,\n"
@@ -791,6 +802,8 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
 - {pair_ally}의 스킬은 아래 스킬 표에 있는 이름으로만 부르고, 그 스킬이 실제로 하는 일과 맞게 써라.
 - 문서 문장을 옮길 때 누가 누구에게 무엇을 하는지 바꾸지 마라. {pair_ally}의 성질을 말한 문장을 {current_hero}가 조심할
   행동으로 바꾸거나, 아군을 상대로 바꿔 읽지 마라. 뜻이 분명하지 않은 문장은 쓰지 말고 빼라.
+- 한 줄에 두 영웅의 행동이 함께 나오면 "(아군 영웅)이 ~할 때 (내 영웅)은 ~"처럼 행동마다 주어를 밝혀라. 문서 문장에
+  주어가 없으면 앞뒤 문장과 스킬 주인으로 누가 하는 행동인지 확인되는 경우에만 쓰고, 확인되지 않으면 빼라.
 - 문서의 연계 별명(예: 윈풍참)은 처음 쓸 때 어떤 스킬을 어떻게 잇는 것인지 풀어 써라."""
         elif partner_roles:
             position_instruction += f"""
@@ -800,6 +813,17 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
 - 이유는 그 영웅 줄에 적힌 내용으로 쓰고, 줄에 없는 스킬 연계를 지어내지 마라. 스킬 이름은 그 스킬을 가진 영웅의 것으로만 써라
   (예: {current_hero}의 스킬을 추천 영웅이 쓰는 것처럼 쓰지 마라).
 - 지난 패치·시즌 이야기("~이후", "~였다")는 옮기지 마라."""
+
+        # 한 영웅의 연계 질문은 문서의 연계 줄에 적힌 순서·피해량만 쓴다.
+        combo_hero = None if (pair_ally or partner_roles) else combo_question_hero(state)
+        if combo_hero:
+            position_instruction += f"""
+
+연계 질문 답변 규칙:
+- 검색 결과 맨 앞의 "{combo_hero} 연계" 줄들이 근거다. 연계마다 한 줄로 "연계 이름이나 목적: 스킬 순서(→로 잇기) — 피해량·쓰는 때"를 적어라.
+- 스킬 순서와 피해량은 문서에 적힌 그대로 옮기고, 문서에 없는 연계·순서·수치를 지어내지 마라. 문서의 연계 별명은 어떤 스킬을 잇는 것인지 풀어 써라.
+- 다른 영웅과 함께 하는 궁극기 연계는 사용자가 묻지 않았으면 한 줄 이내로만 덧붙여라.
+- "바로 할 것 3가지"는 연계를 연습하거나 실전에서 쓰는 행동으로 채워라."""
 
         # 순서는 문서 판정으로 정해져 있고 LLM은 이유와 방법만 채운다.
         target_priority_instruction = ""
@@ -813,17 +837,22 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 else:
                     verdict = f"유불리 {row['signed']:+.1f}"
                 note = f" · {row['note']}" if row["note"] else ""
-                ranked_lines.append(f"{idx}. {row['hero']}({role_label}) — {verdict}{note}")
+                tier_label = f"{row['tier_label']} · " if row.get("tier_label") else ""
+                ranked_lines.append(f"{idx}. {row['hero']}({role_label}) — {tier_label}{verdict}{note}")
             ranked_text = "\n".join(ranked_lines)
+            rule_line = target_rule_line(current_hero)
+            rule_text = f"\n- 문서의 {current_hero} 처리 우선 원칙: {rule_line}" if rule_line else ""
             target_priority_instruction = f"""
 
 우선 타겟 답변 규칙:
-- 아래는 문서의 상성 판정으로 정렬한 상대 목록이다(위쪽이 {current_hero}에게
-  유리한 상대 = 노리기 쉬운 상대). **이 순서를 그대로 쓰고 임의로 바꾸지 마라.**
+- 아래는 문서의 {current_hero} 처리 우선 원칙을 먼저, 같은 묶음 안에서는 상성 판정(유리한 상대 = 노리기
+  쉬운 상대)을 따라 정렬한 상대 목록이다. **이 순서를 그대로 쓰고 임의로 바꾸지 마라.**{rule_text}
 {ranked_text}
 - 답변 본문은 이 순서 그대로 "1순위 OO: ..." 목록 하나로만 적어라. 상대 한 명당
-  한 줄이고, 그 한 줄에 어디를 노려서 어떻게 잡는지를 적는다. 왜 그 순위인지를
-  따로 설명하지 마라 — 순서 자체가 답이다.
+  한 줄이고, 그 한 줄에 어디를 노려서 어떻게 잡는지를 적는다. 순위 이유를 따로 문단으로 설명하지 마라.
+- "처리 우선: 최우선/우선"으로 표시된 상대는 그 줄 끝에 원칙이 말한 이유(예: 부활로 처치를 무효화한다)를 짧게 붙여라.
+  "처리 우선: 피함"으로 표시된 상대는 "직접 노리지 말고 ~"처럼 어떻게 지나칠지를 적어라.
+  "처리 우선: …", "유불리 +2.0" 같은 표시 자체는 답변에 옮기지 마라.
 - 근거는 검색된 문서(각 상대의 기본 위치, 취약한 상대 판정/상황)에서만 가져와라.
   문서에 없는 스킬 이름이나 수치를 지어내지 마라.
 - 목록 말고 다른 정리 문단("운영 팁", "정리" 등)을 새로 만들지 마라. 마무리는

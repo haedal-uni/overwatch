@@ -604,6 +604,16 @@ def is_position_question(message: str) -> bool:
     return bool(_POSITION_QUESTION_PATTERN.search(message))
 
 
+# 스킬을 잇는 연계·콤보를 묻는 질문.
+_COMBO_QUESTION_PATTERN = re.compile(r"연계|콤보|컴보|연속기")
+
+
+def is_combo_question(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_COMBO_QUESTION_PATTERN.search(message))
+
+
 def synergy_pair_ally(
     message: str, current_hero: Optional[str], ally_team: List[str], enemy_named: bool,
 ) -> Optional[str]:
@@ -1127,7 +1137,12 @@ ROLE_CLARIFICATION_INTENTS = {
 HERO_CONTEXT_CLARIFICATION_INTENTS = {"situation", "stay", "performance_improve"}
 
 
-_ENEMY_MARKER_PATTERN = re.compile(r"상대|적팀|(?<![가-힣])적(?![가-힣])")
+_ANY_HERO_NAME = "|".join(
+    re.escape(n) for n in sorted(set(HEROES) | set(HERO_ALIASES), key=len, reverse=True)
+)
+_ENEMY_MARKER_PATTERN = re.compile(
+    rf"상대|적팀|(?<![가-힣])적(?![가-힣])|(?<![가-힣])적(?=(?:{_ANY_HERO_NAME}))"
+)
 
 
 def side_unclear_heroes(message: str) -> List[str]:
