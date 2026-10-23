@@ -1808,44 +1808,130 @@
       margin-top: 0;
     }
 
-    .mx-row {
+    .mx-foe-grid {
       display: grid;
-      grid-template-columns: 30px minmax(0, 1fr) auto;
+      grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+      gap: 7px;
+    }
+
+    .mx-foe {
+      display: flex;
+      flex-direction: column;
       align-items: center;
-      gap: 10px;
-      padding: 9px 12px;
+      gap: 4px;
+      padding: 9px 4px 8px;
       border-radius: 14px;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      transition: .14s;
+    }
+
+    .mx-foe:hover {
+      transform: translateY(-2px);
+      background: var(--primary-soft);
+    }
+
+    .mx-group-hard .mx-foe {
+      border-color: rgba(239, 68, 68, .26)
+    }
+
+    .mx-group-easy .mx-foe {
+      border-color: rgba(22, 163, 74, .26)
+    }
+
+    .mx-group-mixed .mx-foe {
+      border-color: rgba(255, 159, 28, .3)
+    }
+
+    .mx-foe img {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      object-fit: cover;
+      border: 1px solid var(--line);
+      background: var(--card-solid);
+    }
+
+    .mx-foe-name {
+      font-size: 12px;
+      font-weight: 800;
+      text-align: center;
+      line-height: 1.25;
+      word-break: keep-all;
+    }
+
+    .mx-foe .mx-verdict {
+      font-size: 10.5px;
+      padding: 1px 7px;
+    }
+
+    .mx-foe-detail {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .mx-vs {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 14px;
+      border-radius: 18px;
       background: var(--soft);
       border: 1px solid var(--line);
     }
 
-    .mx-group-hard .mx-row {
-      border-color: rgba(239, 68, 68, .26)
-    }
-
-    .mx-group-easy .mx-row {
-      border-color: rgba(22, 163, 74, .26)
-    }
-
-    .mx-group-mixed .mx-row {
-      border-color: rgba(255, 159, 28, .3)
-    }
-
-    .mx-row img {
-      width: 30px;
-      height: 30px;
-      border-radius: 10px;
-      object-fit: cover;
-      border: 1px solid var(--line);
-    }
-
-    .mx-row-name {
+    .mx-vs-hero {
       display: flex;
+      flex-direction: column;
       align-items: center;
       gap: 6px;
-      flex-wrap: wrap;
-      font-size: 13.5px;
+      font-size: 14px;
       font-weight: 800;
+    }
+
+    .mx-vs-hero img {
+      width: 58px;
+      height: 58px;
+      border-radius: 17px;
+      object-fit: cover;
+      border: 1px solid var(--line-strong);
+    }
+
+    .mx-vs-mark {
+      font-size: 13px;
+      font-weight: 900;
+      color: var(--muted);
+      letter-spacing: .08em;
+    }
+
+    .mx-foe-verdict {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .mx-foe-verdict .mx-verdict {
+      font-size: 12.5px;
+      padding: 3px 11px;
+    }
+
+    .mx-foe-note {
+      font-size: 13.5px;
+      line-height: 1.65;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      word-break: keep-all;
+    }
+
+    .mx-ask-wide {
+      width: 100%;
+      padding: 11px 14px;
+      font-size: 13.5px;
     }
 
     .mx-verdict {
@@ -1874,13 +1960,6 @@
       border-color: rgba(255, 159, 28, .34);
     }
 
-    .mx-reason {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.5;
-      margin-top: 3px;
-    }
-
     .mx-ask-btn {
       border: 1px solid var(--line-strong);
       background: var(--card-solid);
@@ -1897,6 +1976,453 @@
       background: var(--primary);
       border-color: var(--primary);
       color: #fff;
+    }
+
+    .gd-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 4px;
+    }
+
+    .gd-head img {
+      width: 56px;
+      height: 56px;
+      border-radius: 17px;
+      object-fit: cover;
+      border: 1px solid var(--line-strong);
+      flex: 0 0 auto;
+    }
+
+    .gd-concept {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.45;
+      margin-top: 3px;
+      word-break: keep-all;
+    }
+
+    .gd-tabs {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-bottom: 1px solid var(--line);
+      margin: 6px -20px 14px;
+      padding: 0 20px;
+      position: sticky;
+      top: -16px;
+      z-index: 2;
+      background: var(--card-solid);
+    }
+
+    .gd-tab {
+      border: 0;
+      background: transparent;
+      padding: 11px 0 9px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--muted);
+      border-bottom: 3px solid transparent;
+    }
+
+    .gd-tab.on {
+      color: var(--primary);
+      font-weight: 800;
+      border-bottom-color: var(--primary);
+    }
+
+    .gd-pane {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .gd-card {
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+
+    .gd-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .gd-card-title {
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .gd-card-title.gd-hard { color: var(--danger) }
+    .gd-card-title.gd-easy { color: var(--success) }
+    .gd-card-title.gd-warn { color: var(--tint-orange) }
+
+    .gd-sub {
+      font-size: 12.5px;
+      font-weight: 800;
+      color: var(--muted);
+    }
+
+    .gd-link {
+      border: 0;
+      background: transparent;
+      color: var(--primary);
+      font-size: 12.5px;
+      font-weight: 700;
+      padding: 4px 0;
+      white-space: nowrap;
+    }
+
+    .gd-step {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      font-size: 13.5px;
+      line-height: 1.55;
+      word-break: keep-all;
+    }
+
+    .gd-num {
+      flex: 0 0 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .gd-key {
+      font-size: 12.5px;
+      color: var(--tint-orange);
+      background: var(--tint-orange-bg);
+      border-radius: 11px;
+      padding: 8px 11px;
+      line-height: 1.5;
+      word-break: keep-all;
+    }
+
+    .gd-skills {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      row-gap: 7px;
+      column-gap: 10px;
+      align-items: center;
+      font-size: 13.5px;
+    }
+
+    .gd-keycap {
+      font-size: 11.5px;
+      font-weight: 800;
+      color: var(--muted);
+      background: var(--card-solid);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 3px 8px;
+      min-width: 58px;
+      box-sizing: border-box;
+      white-space: nowrap;
+      text-align: center;
+    }
+
+    .gd-keycap.ult {
+      color: var(--primary);
+      background: var(--primary-soft);
+      border-color: var(--line-strong);
+    }
+
+    .gd-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .gd-chip {
+      font-size: 12.5px;
+      font-weight: 700;
+      background: var(--card-solid);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: var(--text);
+      font-family: inherit;
+    }
+
+    button.gd-chip {
+      cursor: pointer;
+      border-color: var(--line-strong);
+    }
+
+    button.gd-chip:hover {
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+
+    .gd-hint {
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+
+    .gd-perk {
+      border: 1px solid var(--line);
+      background: var(--card-solid);
+      border-radius: 14px;
+      padding: 11px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .gd-perk.popular {
+      border: 2px solid var(--primary);
+      background: var(--primary-soft);
+    }
+
+    .gd-perk-name {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 14.5px;
+      font-weight: 800;
+    }
+
+    .gd-perk-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .gd-mouse {
+      flex: none;
+      color: var(--muted);
+    }
+
+    .gd-mouse-on {
+      fill: var(--primary);
+    }
+
+    .gd-pop {
+      font-size: 11px;
+      font-weight: 800;
+      color: #fff;
+      background: var(--primary);
+      border-radius: 999px;
+      padding: 2px 9px;
+      white-space: nowrap;
+    }
+
+    .gd-perk-effect {
+      font-size: 13px;
+      line-height: 1.5;
+      word-break: keep-all;
+    }
+
+    .gd-perk-when {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      word-break: keep-all;
+    }
+
+    .gd-ally {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .gd-ally-faces {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .gd-face {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      width: 58px;
+      font-size: 11px;
+      font-weight: 700;
+      text-align: center;
+      line-height: 1.2;
+      word-break: keep-all;
+    }
+
+    .gd-face img {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      object-fit: cover;
+      border: 1px solid var(--line);
+      background: var(--card-solid);
+    }
+
+    button.gd-face {
+      background: none;
+      border: 0;
+      padding: 0;
+      color: var(--text);
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    button.gd-face img {
+      border-color: var(--line-strong);
+    }
+
+    button.gd-face:hover img {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px var(--primary-soft);
+    }
+
+    button.gd-face:hover span {
+      color: var(--primary);
+    }
+
+    .gd-line {
+      font-size: 13px;
+      line-height: 1.55;
+      word-break: keep-all;
+    }
+
+    .mx-roster-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .ct-open {
+      border: 1px solid var(--line-strong);
+      background: var(--card-solid);
+      color: var(--primary);
+      font-size: 12.5px;
+      font-weight: 800;
+      padding: 8px 13px;
+      border-radius: 12px;
+      margin-bottom: 14px;
+      font-family: inherit;
+      transition: .14s;
+    }
+
+    .ct-open:hover {
+      background: var(--primary-soft);
+      border-color: var(--primary);
+    }
+
+    .ct-note {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .ct-head {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .ct-name {
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--primary);
+    }
+
+    .ct-alias {
+      font-size: 12.5px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .ct-row {
+      display: grid;
+      grid-template-columns: 62px minmax(0, 1fr);
+      gap: 8px;
+      font-size: 13px;
+      line-height: 1.55;
+      word-break: keep-all;
+    }
+
+    .ct-row b {
+      font-size: 12px;
+      font-weight: 800;
+      padding-top: 1px;
+    }
+
+    .ct-good b { color: var(--success) }
+    .ct-bad b { color: var(--danger) }
+    .ct-map b { color: var(--muted) }
+
+    .gd-more {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .gd-foe-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .gd-foe-grid .mx-foe {
+      background: var(--card-solid);
+    }
+
+    .gd-weak {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.5;
+      word-break: keep-all;
+    }
+
+    .gd-outline {
+      height: 46px;
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      background: var(--card-solid);
+      color: var(--primary);
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .gd-cta {
+      position: sticky;
+      bottom: -20px;
+      margin: 14px -20px -20px;
+      padding: 12px 20px 18px;
+      background: var(--card-solid);
+      border-top: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .gd-cta-btn {
+      width: 100%;
+      height: 48px;
+      border: 0;
+      border-radius: 14px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .gd-cta-sub {
+      font-size: 11.5px;
+      color: var(--muted);
+      text-align: center;
     }
 
     .mx-empty {
@@ -2339,7 +2865,7 @@
       }
 
       .mx-modal {
-        height: min(560px, 88vh);
+        height: min(720px, 88vh);
         border-radius: 20px;
       }
 
@@ -2356,14 +2882,21 @@
         gap: 7px;
       }
 
-      /* 좁은 화면에서는 공략법 버튼을 아래 줄로 */
-      .mx-row {
-        grid-template-columns: 30px minmax(0, 1fr);
+      .mx-foe-grid {
+        grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
+        gap: 6px;
       }
 
-      .mx-ask-btn {
-        grid-column: 1 / -1;
-        justify-self: start;
+      .gd-tabs {
+        margin: 6px -14px 14px;
+        padding: 0 14px;
+        top: -14px;
+      }
+
+      .gd-cta {
+        bottom: -18px;
+        margin: 14px -14px -18px;
+        padding: 12px 14px 16px;
       }
 
       /* 모바일에서는 역할 선택 / 추천 질문 영역을 숨김 */
@@ -2518,7 +3051,7 @@
     }
 
     @media(max-width:380px) {
-      /* 아주 좁은 화면: 상성표는 아이콘만(버튼 title에 이름이 남는다) */
+      /* 아주 좁은 화면: 영웅 가이드는 아이콘만(버튼 title에 이름이 남는다) */
       .mx-open-label {
         display: none
       }
@@ -2665,9 +3198,9 @@
           <p>영웅 카운터, 조합, 맵 운영, 스탯 피드백을 질문해보세요.</p>
         </div>
         <div class="actions">
-          <button type="button" class="mx-open-btn chat-only" id="matchupBtn" title="영웅별 상성표 보기">
+          <button type="button" class="mx-open-btn chat-only" id="matchupBtn" title="영웅 가이드(운영·특전·조합·상성)">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l9 9"/><path d="M20 4l-9 9"/><path d="M3 8V4h4"/><path d="M21 8V4h-4"/><path d="M9 15l-4 5"/><path d="M15 15l4 5"/></svg>
-            <span class="mx-open-label">상성표</span>
+            <span class="mx-open-label">영웅 가이드</span>
           </button>
           <button class="icon-btn chat-only" id="recordsBtn" title="내 기록" aria-label="내 기록">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg>
@@ -2722,7 +3255,7 @@
             </button>
             <button type="button" class="wl-card" data-click="matchupBtn">
               <span class="wl-ico orange"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l9 9"/><path d="M20 4l-9 9"/><path d="M3 8V4h4"/><path d="M21 8V4h-4"/><path d="M9 15l-4 5"/><path d="M15 15l4 5"/></svg></span>
-              <b>상성표</b><span>영웅별 강한·약한 상대</span>
+              <b>영웅 가이드</b><span>운영·특전·조합·상성</span>
             </button>
             <button type="button" class="wl-card" data-click="recordsBtn">
               <span class="wl-ico green"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg></span>
@@ -2942,7 +3475,11 @@
       if (!/^<h|^<ul|^<p|^<table/.test(s)) s = '<p>' + s + '</p>';
       return s;
     }
-    function hasStats(text) { return /\d/.test(text) && /(킬|데스|딜|힐|도움|어시|피해|치유|사망)/.test(text); }
+    // "솔저76"의 숫자와 "스킬"의 "킬"은 스탯이 아니다.
+    function hasStats(text) {
+      const t = String(text || '').replace(/솔저\s*:?\s*76/g, '').replace(/스킬/g, '');
+      return /\d/.test(t) && /(킬|데스|딜|힐|도움|어시|피해|치유|사망)/.test(t);
+    }
     function contextLabel() {
       if (!state.map || state.map.mode === 'none') return '';
       let txt = `${state.map.name} · ${modeName[state.map.mode] || ''}`;
@@ -3142,9 +3679,9 @@
       if (file) attachImage(file);
     });
 
-    // ── 전체 상성표 모달 ──
+    // ── 영웅 가이드(상성표) 모달 ──
     // 내용은 /chat/api/matchups/에서 받은 값만 띄운다(서버가 문서에서 읽은 값).
-    const matchupCache = { roles: null, heroes: {} };
+    const matchupCache = { roles: null, heroes: {}, guides: {} };
     const ROLE_LABELS = { tank: '탱커', damage: '딜러', support: '힐러' };
     // 받침에 따라 '이'/'가'(heroes.py와 같은 계산).
     const DIGIT_HAS_FINAL = { '0': true, '1': true, '2': false, '3': true, '4': false, '5': false, '6': true, '7': true, '8': true, '9': false };
@@ -3162,6 +3699,20 @@
     ];
     let matchupOverlay = null;
     let matchupRole = 'tank';
+    let matchupCurrent = null;  // 지금 보고 있는 영웅의 상성
+    let matchupListScroll = 0;  // 상대 상세에서 돌아올 때 목록 스크롤 위치
+    let guideTab = 'play';
+    let foeFrom = 'chart';      // 상대 상세의 뒤로가기 대상(가이드 상성 탭 / 전체 상성표)
+    const GUIDE_TABS = [['play', '운영'], ['perk', '특전'], ['team', '조합'], ['matchup', '상성']];
+    function josaEuro(word) {
+      const text = String(word || '');
+      const last = text[text.length - 1];
+      if (last in DIGIT_HAS_FINAL) return DIGIT_HAS_FINAL[last] && !'178'.includes(last) ? '으로' : '로';
+      const code = text.charCodeAt(text.length - 1) - 0xAC00;
+      if (code < 0 || code > 11171) return '로';
+      const final = code % 28;
+      return final === 0 || final === 8 ? '로' : '으로';
+    }
 
     async function fetchMatchups(hero) {
       const url = hero ? `/chat/api/matchups/?hero=${encodeURIComponent(hero)}` : '/chat/api/matchups/';
@@ -3185,30 +3736,93 @@
           <img src="${heroIcon(hero.name)}" alt="${escapeHtml(hero.name)}" loading="lazy">
           <span>${escapeHtml(hero.name)}</span>
         </button>`).join('');
-      body.innerHTML = `<div class="mx-tabs">${tabs}</div><div class="mx-hero-grid">${cards}</div>`;
+      body.innerHTML = `
+        <div class="mx-roster-top"><div class="mx-tabs">${tabs}</div><button type="button" class="ct-open" data-mx-comps="1">조합 유형 알아보기 ›</button></div>
+        <div class="mx-hero-grid">${cards}</div>`;
     }
 
-    function renderMatchupDetail(data) {
+    // 조합 유형 화면. 문구와 대표 영웅은 문서 "# 8. 팀 조합" 절을 풀어 쓴 것(사용자 확인).
+    const COMP_TYPES = [
+      {
+        name: '다이브', alias: '빠르게 뒤로 파고드는 조합',
+        what: '잘 움직이는 영웅들이 상대 뒤쪽 힐러에게 한꺼번에 들어가 한 명씩 끊어요.',
+        good: '멀리서 쏘는 상대(포킹)를 만났을 때예요. 바로 옆까지 붙으면 멀리서 쏘는 영웅은 제대로 맞히지 못해요.',
+        bad: '가까이서 싸움이 센 상대(러쉬·앵커)에게 함부로 들어가면 오히려 먼저 녹아요.',
+        map: '2층이 많은 맵에서 좋아요.',
+        heroes: { tank: ['윈스턴', '디바', '둠피스트'], damage: ['트레이서', '겐지', '에코'], support: ['아나', '브리기테', '루시우', '키리코'] },
+      },
+      {
+        name: '러쉬', alias: '다 같이 밀고 들어가는 조합',
+        what: '다섯 명이 한 덩어리로 뭉쳐 상대에게 붙어 가까이서 싸워요.',
+        good: '흩어져 뒤로 파고드는 상대(다이브)를 만났을 때예요.',
+        bad: '멀리서 쏘는 상대(포킹)를 만났을 때예요. 원거리 공격이 거의 없어 다가가는 동안 계속 맞아요.',
+        heroes: { tank: ['라인하르트', '자리야', '정커퀸'], damage: ['메이', '리퍼'], support: ['루시우', '주노', '브리기테'] },
+      },
+      {
+        name: '포킹', alias: '멀리서 깎는 조합',
+        what: '거리를 두고 쏴서 상대 체력을 깎아 뒤로 물러나게 해요.',
+        good: '뭉쳐서 다가오는 상대(러쉬)를 만났을 때예요. 다가오는 동안 계속 깎을 수 있어요.',
+        bad: '가까이 파고드는 상대(다이브)를 만났을 때예요. 한 발이 느리고 맞히기 어려워 붙으면 제대로 쏘지 못해요.',
+        map: '직선 길이 많은 맵에서 좋아요.',
+        heroes: { tank: ['시그마', '오리사'], damage: ['위도우메이커', '한조', '애쉬', '솔저76'], support: ['젠야타', '바티스트'] },
+      },
+      {
+        name: '앵커', alias: '자리 잡고 버티는 조합',
+        what: '한 구역을 단단히 잡고, 들어오는 상대를 받아쳐요.',
+        bad: '멀리서 쏘는 상대(포킹)를 만났을 때예요. 팔이 짧아 먼 상대에게 손이 닿지 않아요.',
+        map: '벽을 끼기 쉬운 짧은 구역에서 좋고, 2층이나 탁 트인 곳에서는 불리해요.',
+        heroes: { tank: ['오리사'], damage: ['바스티온', '토르비욘', '메이'], support: ['일리아리', '아나', '바티스트'] },
+      },
+    ];
+
+    function renderCompTypes() {
       const body = matchupBody();
       if (!body) return;
+      const row = (cls, label, text) => text ? `<div class="ct-row ${cls}"><b>${label}</b><span>${escapeHtml(text)}</span></div>` : '';
+      const cards = COMP_TYPES.map(comp => `
+        <section class="gd-card">
+          <div class="ct-head"><span class="ct-name">${escapeHtml(comp.name)}</span><span class="ct-alias">${escapeHtml(comp.alias)}</span></div>
+          <div class="gd-line">${escapeHtml(comp.what)}</div>
+          ${row('ct-good', '잘 통할 때', comp.good)}
+          ${row('ct-bad', '조심할 때', comp.bad)}
+          ${row('ct-map', '맵', comp.map)}
+          ${Object.entries(comp.heroes).map(([role, names]) => `
+            <div class="gd-ally">
+              <span class="gd-sub">${ROLE_LABELS[role]}</span>
+              <div class="gd-ally-faces">${names.map(name => `
+                <button type="button" class="gd-face" data-mx-hero="${escapeHtml(name)}"><img src="${heroIcon(name)}" alt="" loading="lazy"><span>${escapeHtml(name)}</span></button>`).join('')}</div>
+            </div>`).join('')}
+        </section>`).join('');
+      body.innerHTML = `
+        <button type="button" class="mx-back" id="mxBackBtn">‹ 영웅 목록</button>
+        <div class="gd-pane">
+          <div class="ct-note">맵과 팀 실력에 따라 달라질 수 있어요. 영웅을 누르면 그 영웅 가이드로 가요.</div>
+          ${cards}
+        </div>`;
+      body.scrollTop = 0;
+    }
+
+    function renderMatchupDetail(data, scrollTop = 0) {
+      const body = matchupBody();
+      if (!body) return;
+      matchupCurrent = data;
       const groups = MATCHUP_GROUPS.map(group => {
         const items = data[group.key] || [];
-        // 서버가 역할 순으로 정렬해 보내므로 이름표만 끼운다.
-        let lastRole = null;
-        const rows = items.map(item => {
-          const divider = item.role === lastRole ? '' :
-            `<div class="mx-role-line">${escapeHtml(ROLE_LABELS[item.role] || '기타')}</div>`;
-          lastRole = item.role;
-          return `${divider}
-            <div class="mx-row">
+        // 서버가 역할 순으로 정렬해 보내므로 역할이 바뀌는 자리에서 칸 묶음을 나눈다.
+        const byRole = [];
+        items.forEach((item, index) => {
+          const last = byRole[byRole.length - 1];
+          if (!last || last.role !== item.role) byRole.push({ role: item.role, tiles: [] });
+          byRole[byRole.length - 1].tiles.push(`
+            <button type="button" class="mx-foe" data-mx-foe="${group.key}:${index}">
               <img src="${heroIcon(item.hero)}" alt="${escapeHtml(item.hero)}" loading="lazy">
-              <div>
-                <div class="mx-row-name">${escapeHtml(item.hero)}<span class="mx-verdict">${escapeHtml(group.badge(item.score))}</span></div>
-                ${item.note ? `<div class="mx-reason">${escapeHtml(item.note)}</div>` : ''}
-              </div>
-              <button type="button" class="mx-ask-btn" data-mx-question="${escapeHtml(item.question)}">공략법 ›</button>
-            </div>`;
-        }).join('');
+              <span class="mx-foe-name">${escapeHtml(item.hero)}</span>
+              <span class="mx-verdict">${escapeHtml(group.badge(item.score))}</span>
+            </button>`);
+        });
+        const rows = byRole.map(chunk => `
+          <div class="mx-role-line">${escapeHtml(ROLE_LABELS[chunk.role] || '기타')}</div>
+          <div class="mx-foe-grid">${chunk.tiles.join('')}</div>`).join('');
         // "상황에 따라 갈림"은 없는 영웅이 많아 빈 묶음을 띄우지 않는다.
         if (!rows && group.key === 'mixed') return '';
         const inner = rows || `<div class="mx-empty">문서에 기록된 상대가 없어요.</div>`;
@@ -3220,27 +3834,198 @@
       }).join('');
 
       body.innerHTML = `
-        <button type="button" class="mx-back" id="mxBackBtn">‹ 영웅 목록</button>
+        <button type="button" class="mx-back" id="mxChartBackBtn">‹ ${escapeHtml(data.hero)} 가이드</button>
         <div class="mx-detail-head">
           <img src="${heroIcon(data.hero)}" alt="${escapeHtml(data.hero)}">
           <div>
             <div class="mx-detail-name">${escapeHtml(data.hero)}<span class="mx-role-chip">${escapeHtml(data.role_label)}</span></div>
-            <div class="mx-detail-hint"><b>공략법</b>을 누르면 그 상대를 어떻게 상대할지 챗봇이 답해드려요.</div>
+            <div class="mx-detail-hint">영웅을 누르면 이유와 <b>공략법</b>을 볼 수 있어요.</div>
           </div>
         </div>
         ${groups}`;
+      body.scrollTop = scrollTop;
+      foeFrom = 'chart';
+    }
+
+    function guideTile(item, group, index) {
+      return `
+        <button type="button" class="mx-foe" data-mx-foe="${group.key}:${index}">
+          <img src="${heroIcon(item.hero)}" alt="${escapeHtml(item.hero)}" loading="lazy">
+          <span class="mx-foe-name">${escapeHtml(item.hero)}</span>
+          <span class="mx-verdict">${escapeHtml(group.badge(item.score))}</span>
+        </button>`;
+    }
+
+    // 상성 탭: 묶음마다 세기가 큰 상대 3명(원래 순서의 번호를 들고 다녀 상대 상세로 이어진다).
+    function guideMatchupGroup(data, key, title, extra) {
+      const group = MATCHUP_GROUPS.find(g => g.key === key);
+      const items = (data[key] || []).map((item, index) => ({ item, index }))
+        .sort((a, b) => b.item.score - a.item.score);
+      if (!items.length) return '';
+      const more = items.length > 3 ? `<span class="gd-more">외 ${items.length - 3}명</span>` : '';
+      return `
+        <section class="gd-card mx-group-${key}">
+          <div class="gd-card-head"><span class="gd-card-title gd-${key}">${title}</span>${more}</div>
+          <div class="gd-foe-grid">${items.slice(0, 3).map(({ item, index }) => guideTile(item, group, index)).join('')}</div>
+          ${extra || ''}
+        </section>`;
+    }
+
+    // 특전 선택 키(문서에 적힌 경우만): 마우스 그림에서 누르는 쪽 버튼을 칠한다.
+    function perkMouseIcon(key) {
+      if (key !== '좌클릭' && key !== '우클릭') return '';
+      const fill = key === '좌클릭' ? 'M7 1 A6 6 0 0 0 1 7 V8 H7 Z' : 'M7 1 A6 6 0 0 1 13 7 V8 H7 Z';
+      return `<svg class="gd-mouse" viewBox="0 0 14 20" width="12" height="17" role="img" aria-label="${key}"><title>${key}</title>`
+        + `<path d="${fill}" class="gd-mouse-on"></path>`
+        + `<rect x="1" y="1" width="12" height="18" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"></rect>`
+        + `<path d="M7 1 V8 M1 8 H13" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`;
+    }
+
+    function guidePane(tab, guide, data) {
+      const hero = data.hero;
+      const ask = (question, label) => `<button type="button" class="gd-link" data-mx-question="${escapeHtml(question)}">${label} ›</button>`;
+      if (tab === 'perk') {
+        const perkCard = (title, perks) => perks.length ? `
+          <section class="gd-card">
+            <span class="gd-sub">${title}</span>
+            ${perks.map(perk => `
+              <div class="gd-perk${perk.popular ? ' popular' : ''}">
+                <div class="gd-perk-name"><span class="gd-perk-title">${perkMouseIcon(perk.key)}${escapeHtml(perk.name)}</span>${perk.popular ? '<span class="gd-pop">많이 고름</span>' : ''}</div>
+                ${perk.effect ? `<div class="gd-perk-effect">${escapeHtml(perk.effect)}</div>` : ''}
+                ${perk.when ? `<div class="gd-perk-when">${escapeHtml(perk.when)}</div>` : ''}
+              </div>`).join('')}
+          </section>` : '';
+        const cards = perkCard('보조 특전 (1개 고르기)', guide.perks.minor) + perkCard('주요 특전 (1개 고르기)', guide.perks.major);
+        return cards || `<div class="mx-empty">특전 정보가 아직 없어요.</div>`;
+      }
+      if (tab === 'team') {
+        const allies = guide.allies.length ? `
+          <section class="gd-card">
+            <div class="gd-card-head"><span class="gd-card-title">같이 하면 좋은 아군</span><span class="gd-hint">누르면 연계법을 물어봐요</span></div>
+            ${guide.allies.map(group => `
+              <div class="gd-ally">
+                <span class="gd-sub">${escapeHtml(group.label)}</span>
+                <div class="gd-ally-faces">${group.heroes.map((name, i) => {
+                  const question = (group.questions || [])[i];
+                  const face = `<img src="${heroIcon(name)}" alt="" loading="lazy"><span>${escapeHtml(name)}</span>`;
+                  return question
+                    ? `<button type="button" class="gd-face" data-mx-question="${escapeHtml(question)}">${face}</button>`
+                    : `<span class="gd-face">${face}</span>`;
+                }).join('')}</div>
+              </div>`).join('')}
+          </section>` : '';
+        const avoid = guide.avoid.length ? `
+          <section class="gd-card">
+            <span class="gd-card-title gd-warn">피해야 할 조합</span>
+            ${guide.avoid.map(line => `<div class="gd-line">${escapeHtml(line)}</div>`).join('')}
+          </section>` : '';
+        return (allies + avoid) || `<div class="mx-empty">조합 정보가 아직 없어요.</div>`;
+      }
+      if (tab === 'matchup') {
+        const weak = guide.weak ? `<div class="gd-weak">약한 상황: ${escapeHtml(guide.weak)}</div>` : '';
+        return `
+          ${guideMatchupGroup(data, 'hard', '상대하기 어려운 영웅', weak)}
+          ${guideMatchupGroup(data, 'easy', '상대하기 쉬운 영웅')}
+          <button type="button" class="gd-outline" data-gd-chart="1">전체 상성표 보기 ›</button>`;
+      }
+      const position = guide.position.length ? `
+        <section class="gd-card">
+          <div class="gd-card-head"><span class="gd-card-title">포지션 잡기</span>${ask(`${hero} 포지션은 어떻게 잡아야 해?`, '더 묻기')}</div>
+          ${guide.position.map((step, i) => `<div class="gd-step"><span class="gd-num">${i + 1}</span><span>${escapeHtml(step)}</span></div>`).join('')}
+          ${guide.position_key ? `<div class="gd-key">${guide.position_key.includes('핵심') ? '' : '핵심: '}${escapeHtml(guide.position_key)}</div>` : ''}
+        </section>` : '';
+      const skills = guide.skills.length ? `
+        <section class="gd-card">
+          <div class="gd-card-head"><span class="gd-card-title">스킬</span>${ask(`${hero} 스킬은 언제 어떻게 써야 해?`, '스킬 쓰는 법 묻기')}</div>
+          <div class="gd-skills">${guide.skills.map(skill => `
+            <span class="gd-keycap${skill.key === 'q' ? ' ult' : ''}">${escapeHtml(skill.label)}</span><span>${escapeHtml(skill.name)}</span>`).join('')}</div>
+        </section>` : '';
+      const priorities = guide.priorities.length ? `
+        <section class="gd-card">
+          <div class="gd-card-head"><span class="gd-card-title">먼저 처리할 것</span><span class="gd-hint">누르면 바로 물어봐요</span></div>
+          <div class="gd-chips">${guide.priorities.map((p, i) => {
+            const question = (guide.priority_questions || [])[i];
+            return question
+              ? `<button type="button" class="gd-chip" data-mx-question="${escapeHtml(question)}">${escapeHtml(p)} ›</button>`
+              : `<span class="gd-chip">${escapeHtml(p)}</span>`;
+          }).join('')}</div>
+        </section>` : '';
+      return position + skills + priorities;
+    }
+
+    function guideCta(tab, hero) {
+      if (tab === 'perk') {
+        return `<button type="button" class="gd-cta-btn" data-mx-fill="${escapeHtml(`나는 ${hero}인데 특전 추천해줘. 상대는 `)}">이번 판 상대에 맞춰 특전 추천받기</button>
+          <span class="gd-cta-sub">상대 조합을 이어서 적으면 하나로 골라드려요</span>`;
+      }
+      if (tab === 'team') {
+        return `<button type="button" class="gd-cta-btn" data-mx-heroask="team">우리 팀 고르고 조합 평가받기</button>
+          <span class="gd-cta-sub">팀원을 고르면 조합의 강점과 약점을 알려드려요</span>`;
+      }
+      if (tab === 'matchup') {
+        return `<button type="button" class="gd-cta-btn" data-mx-heroask="foe">상대 고르고 대처법 묻기</button>
+          <span class="gd-cta-sub">영웅으로 묻기에서 ${escapeHtml(hero)}${josaIGa(hero)} 미리 골라진 채로 열려요</span>`;
+      }
+      return `<button type="button" class="gd-cta-btn" data-mx-fill="${escapeHtml(`나는 ${hero}인데 `)}">${escapeHtml(hero + josaEuro(hero))} 질문하기</button>`;
+    }
+
+    function renderGuide(tab) {
+      const body = matchupBody();
+      const data = matchupCurrent;
+      const guide = data && matchupCache.guides[data.hero];
+      if (!body || !guide) return;
+      guideTab = tab || 'play';
+      const tabs = GUIDE_TABS.map(([key, label]) =>
+        `<button type="button" class="gd-tab ${key === guideTab ? 'on' : ''}" data-gd-tab="${key}">${label}</button>`).join('');
+      body.innerHTML = `
+        <button type="button" class="mx-back" id="mxBackBtn">‹ 영웅 목록</button>
+        <div class="gd-head">
+          <img src="${heroIcon(data.hero)}" alt="${escapeHtml(data.hero)}">
+          <div>
+            <div class="mx-detail-name">${escapeHtml(data.hero)}<span class="mx-role-chip">${escapeHtml(data.role_label)}</span></div>
+            ${guide.concept ? `<div class="gd-concept">${escapeHtml(guide.concept)}</div>` : ''}
+          </div>
+        </div>
+        <div class="gd-tabs" role="tablist">${tabs}</div>
+        <div class="gd-pane">${guidePane(guideTab, guide, data)}</div>
+        <div class="gd-cta">${guideCta(guideTab, data.hero)}</div>`;
+      body.scrollTop = 0;
+      foeFrom = 'guide';
+    }
+
+    function renderMatchupFoe(groupKey, index) {
+      const body = matchupBody();
+      const data = matchupCurrent;
+      const group = MATCHUP_GROUPS.find(g => g.key === groupKey);
+      const item = data && group ? (data[groupKey] || [])[Number(index)] : null;
+      if (!body || !item) return;
+      matchupListScroll = body.scrollTop;
+      body.innerHTML = `
+        <button type="button" class="mx-back" id="mxFoeBackBtn">‹ ${escapeHtml(data.hero)} ${foeFrom === 'guide' ? '가이드' : '상성표'}</button>
+        <div class="mx-foe-detail mx-group-${group.key}">
+          <div class="mx-vs">
+            <div class="mx-vs-hero"><img src="${heroIcon(data.hero)}" alt="${escapeHtml(data.hero)}"><span>${escapeHtml(data.hero)}</span></div>
+            <div class="mx-vs-mark">VS</div>
+            <div class="mx-vs-hero"><img src="${heroIcon(item.hero)}" alt="${escapeHtml(item.hero)}"><span>${escapeHtml(item.hero)}</span></div>
+          </div>
+          <div class="mx-foe-verdict"><span class="mx-verdict">${escapeHtml(group.badge(item.score))}</span><span class="mx-role-chip">${escapeHtml(ROLE_LABELS[item.role] || '기타')}</span></div>
+          <div class="mx-foe-note">${item.note ? escapeHtml(item.note) : '자세한 이유는 기록돼 있지 않아요. 공략법으로 물어보세요.'}</div>
+          <button type="button" class="mx-ask-btn mx-ask-wide" data-mx-question="${escapeHtml(item.question)}">${escapeHtml(item.hero)} 공략법 물어보기 ›</button>
+        </div>`;
       body.scrollTop = 0;
     }
 
     async function showMatchupHero(name) {
       const body = matchupBody();
       if (!body) return;
-      if (matchupCache.heroes[name]) { renderMatchupDetail(matchupCache.heroes[name]); return; }
-      body.innerHTML = `<div class="mx-empty">${escapeHtml(name)} 상성을 불러오는 중...</div>`;
+      if (matchupCache.heroes[name]) { matchupCurrent = matchupCache.heroes[name]; renderGuide('play'); return; }
+      body.innerHTML = `<div class="mx-empty">${escapeHtml(name)} 가이드를 불러오는 중...</div>`;
       try {
         const data = await fetchMatchups(name);
         matchupCache.heroes[name] = data.hero;
-        renderMatchupDetail(data.hero);
+        matchupCache.guides[data.hero.hero] = data.guide;
+        matchupCurrent = data.hero;
+        renderGuide('play');
       } catch (err) {
         body.innerHTML = `<div class="mx-empty">${escapeHtml(err.message || '상성표를 불러오지 못했습니다.')}</div>`;
       }
@@ -3258,6 +4043,14 @@
       sendMessage();  // 응답 대기 중이면 전송만 안 되고 질문은 입력창에 남는다
     }
 
+    function fillMatchupQuestion(text) {
+      closeMatchupModal();
+      input.value = text;
+      autoResize();
+      input.focus();
+      input.setSelectionRange(text.length, text.length);
+    }
+
     async function openMatchupModal() {
       closeMatchupModal();
       const overlay = document.createElement('div');
@@ -3266,10 +4059,10 @@
         <div class="mx-modal">
           <div class="mx-head">
             <div class="mx-head-top">
-              <h3>⚔️ 영웅 상성표</h3>
+              <h3>⚔️ 영웅 가이드</h3>
               <button type="button" class="save-modal-close" id="mxCloseBtn">×</button>
             </div>
-            <div class="mx-head-sub">역할과 영웅을 고르면 상성을 볼 수 있어요.</div>
+            <div class="mx-head-sub">영웅을 고르면 운영·특전·조합·상성을 볼 수 있어요.</div>
           </div>
           <div class="mx-body" id="mxBody"><div class="mx-empty">상성표를 불러오는 중...</div></div>
         </div>`;
@@ -3278,9 +4071,29 @@
       overlay.addEventListener('click', (e) => {
         const roleBtn = e.target.closest('[data-mx-role]');
         if (roleBtn) { matchupRole = roleBtn.dataset.mxRole; renderMatchupRoster(); return; }
+        if (e.target.closest('[data-mx-comps]')) { renderCompTypes(); return; }
         const heroBtn = e.target.closest('[data-mx-hero]');
         if (heroBtn) { showMatchupHero(heroBtn.dataset.mxHero); return; }
         if (e.target.closest('#mxBackBtn')) { renderMatchupRoster(); return; }
+        const foeBtn = e.target.closest('[data-mx-foe]');
+        if (foeBtn) { const [key, idx] = foeBtn.dataset.mxFoe.split(':'); renderMatchupFoe(key, idx); return; }
+        if (e.target.closest('#mxFoeBackBtn')) {
+          if (foeFrom === 'guide') renderGuide('matchup'); else renderMatchupDetail(matchupCurrent, matchupListScroll);
+          return;
+        }
+        const tabBtn = e.target.closest('[data-gd-tab]');
+        if (tabBtn) { renderGuide(tabBtn.dataset.gdTab); return; }
+        if (e.target.closest('[data-gd-chart]')) { renderMatchupDetail(matchupCurrent); return; }
+        if (e.target.closest('#mxChartBackBtn')) { renderGuide('matchup'); return; }
+        const fillBtn = e.target.closest('[data-mx-fill]');
+        if (fillBtn) { fillMatchupQuestion(fillBtn.dataset.mxFill); return; }
+        const heroAskBtn = e.target.closest('[data-mx-heroask]');
+        if (heroAskBtn && matchupCurrent) {
+          const me = matchupCurrent.hero;
+          closeMatchupModal();
+          window.HeroAsk?.open(2, { me, mode: heroAskBtn.dataset.mxHeroask });
+          return;
+        }
         const askBtn = e.target.closest('[data-mx-question]');
         if (askBtn) askMatchupQuestion(askBtn.dataset.mxQuestion);
       });
