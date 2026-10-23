@@ -15,6 +15,7 @@ from chat.graph.pipeline import (
     try_canned_shortcut,
 )
 from chat.models import ChatLog
+from chat.rag.hero_guides import get_hero_guide
 from chat.rag.matchup_tables import get_hero_matchup, get_matchup_roster
 from chat.vision.scoreboard import analyze_scoreboard_image, ScoreboardAnalysisError
 
@@ -335,9 +336,9 @@ def chat_api(request):
 
 @require_http_methods(["GET"])
 def chat_matchups(request):
-    """상성표 모달이 쓰는 읽기 전용 데이터.
+    """영웅 가이드(상성표) 모달이 쓰는 읽기 전용 데이터.
 
-    `?hero=`가 있으면 그 영웅의 상성표만, 없으면 역할별 영웅 목록만 돌려준다.
+    `?hero=`가 있으면 그 영웅의 상성표와 가이드를, 없으면 역할별 영웅 목록만 돌려준다.
     """
     hero = (request.GET.get("hero") or "").strip()
 
@@ -349,7 +350,10 @@ def chat_matchups(request):
         return JsonResponse({"error": "상성 정보를 찾을 수 없는 영웅입니다."}, status=404)
 
     # 중립은 우선 타겟 정렬에만 쓰고 화면에는 안 띄운다.
-    return JsonResponse({"hero": {k: v for k, v in data.items() if k != "even"}})
+    return JsonResponse({
+        "hero": {k: v for k, v in data.items() if k != "even"},
+        "guide": get_hero_guide(data["hero"]),
+    })
 
 
 @require_http_methods(["POST"])

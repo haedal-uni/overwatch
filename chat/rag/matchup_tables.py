@@ -10,15 +10,18 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from chat.domain.answer_format import replace_dying_word
 from chat.domain.heroes import (
     HERO_TO_ROLE,
     ROLE_HEROES,
     ROLE_LABELS,
     josa_eul_reul,
+    josa_euro,
     normalize_hero_name,
     resolve_hero_name,
 )
 from chat.rag.doc_sections import read_source_markdown
+from chat.rag.target_priorities import TIER_LABELS, priority_tier
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +85,7 @@ def clean_note(text: str) -> str:
     """화면에 띄울 설명에서 편집 메모와 줄표, 이유 없음 문장을 걷어낸다."""
     text = _NO_REASON_SENTENCE_RE.sub(" ", text or "")
     text = _EDITOR_NOTE_RE.sub(" ", text)
-    text = _DASH_RE.sub(", ", text)
+    text = replace_dying_word(_DASH_RE.sub(", ", text))
     return re.sub(r"\s{2,}", " ", text).strip(" ,")
 
 
@@ -132,7 +135,7 @@ def _invert_verdict(verdict: str) -> str:
     )
 
 
-def _parse_hero_tables(text: str) -> Dict[str, Dict[str, Tuple[str, str]]]:
+def _parse_hero_tables(text: str, heading_re: re.Pattern = _MATCHUP_HEADING_RE) -> Dict[str, Dict[str, Tuple[str, str]]]:
     """문서를 훑어 `{영웅: {상대: (판정, 이유)}}`로 만든다(직접 판정만)."""
     lines = text.splitlines()
     heading_indexes = [i for i, line in enumerate(lines) if _HERO_HEADING_RE.match(line)]
@@ -152,7 +155,7 @@ def _parse_hero_tables(text: str) -> Dict[str, Dict[str, Tuple[str, str]]]:
         body = lines[start + 1:end]
         rows: Dict[str, Tuple[str, str]] = tables.setdefault(hero, {})
         for idx, line in enumerate(body):
-            if not _MATCHUP_HEADING_RE.match(line):
+            if not heading_re.match(line):
                 continue
             table_lines = []
             for next_line in body[idx + 1:]:
@@ -195,11 +198,11 @@ def _question_for(hero: str, opponent: str, bucket: str) -> str:
     josa = josa_eul_reul(opponent)
     if bucket == "easy":
         return (
-            f"{hero}로 플레이하는데 상대 {opponent}{josa} 어떻게 상대하면 "
+            f"{hero}{josa_euro(hero)} 플레이하는데 상대 {opponent}{josa} 어떻게 상대하면 "
             f"유리하게 굴릴 수 있을까? 스킬 활용법 위주로 알려줘"
         )
     return (
-        f"{hero}로 플레이하는데 상대 {opponent}{josa} 어떻게 상대해야 할까? "
+        f"{hero}{josa_euro(hero)} 플레이하는데 상대 {opponent}{josa} 어떻게 상대해야 할까? "
         f"스킬 활용법 위주로 알려줘"
     )
 
@@ -301,7 +304,11 @@ def get_hero_matchup(hero: Optional[str]) -> Optional[Dict[str, Any]]:
 
 
 def rank_opponents(hero: Optional[str], opponents: List[str]) -> List[Dict[str, Any]]:
-    """내 영웅 기준으로 상대 목록을 문서 판정 순서대로 정렬한다(우선 타겟 답변용)."""
+    """내 영웅 기준으로 상대 목록을 정렬한다(우선 타겟 답변용).
+
+    내 영웅 문서의 처리 우선 원칙(최우선 > 우선 > 역할 우선 > 언급 없음 > 피함)이 먼저이고,
+    같은 묶음 안에서는 상성 판정이 유리한 상대부터 둔다.
+    """
     data = get_hero_matchup(hero)
     if not data:
         return []
@@ -315,10 +322,14 @@ def rank_opponents(hero: Optional[str], opponents: List[str]) -> List[Dict[str, 
     ranked = []
     for raw in opponents:
         opponent = normalize_hero_name(raw)
-        if not opponent or opponent not in HERO_TO_ROLE or opponent == data["hero"]:
+        # 내 영웅과 같은 상대(미러전)도 남긴다. 상성 판정은 없고 처리 우선 원칙만 적용된다.
+        if not opponent or opponent not in HERO_TO_ROLE:
             continue
         bucket, item = by_opponent.get(opponent, (None, None))
+        tier = priority_tier(data["hero"], opponent)
         ranked.append({
+            "tier": tier,
+            "tier_label": TIER_LABELS.get(tier, ""),
             "hero": opponent,
             "role": HERO_TO_ROLE[opponent],
             "bucket": bucket,
@@ -327,5 +338,95 @@ def rank_opponents(hero: Optional[str], opponents: List[str]) -> List[Dict[str, 
             "note": item["note"] if item else "",
         })
 
-    ranked.sort(key=lambda row: (row["signed"] is None, -(row["signed"] or 0), row["hero"]))
+    ranked.sort(key=lambda row: (row["tier"], row["signed"] is None, -(row["signed"] or 0), row["hero"]))
     return ranked
+
+
+_SYNERGY_HEADING_RE = re.compile(r"^####\s*궁합\s*[—–-]\s*(탱커|딜러|힐러)\s*$")
+_synergy_cache: Optional[Dict[str, Dict[str, Tuple[str, str]]]] = None
+
+
+def get_synergy_note(hero: Optional[str], ally: Optional[str]) -> Optional[str]:
+    """두 영웅의 궁합 표 줄(양쪽 영웅 표 모두). 연계 질문의 근거."""
+    global _synergy_cache
+    if _synergy_cache is None:
+        text = read_source_markdown()
+        _synergy_cache = _parse_hero_tables(text, _SYNERGY_HEADING_RE) if text else {}
+    hero, ally = normalize_hero_name(hero), normalize_hero_name(ally)
+    lines = []
+    for owner, other in ((hero, ally), (ally, hero)):
+        row = (_synergy_cache.get(owner) or {}).get(other)
+        if row:
+            verdict, reason = row
+            lines.append(f"- {owner} 궁합표의 {other}: {verdict}. {clean_note(reason)}".rstrip())
+    return "\n".join(lines) or None
+
+
+_tank_pair_lines: Optional[List[str]] = None
+
+
+def tank_pair_synergy_lines() -> List[str]:
+    """탱커 영웅 궁합 표의 탱커 아군 줄(원문 그대로). 탱커가 하나뿐인 규격에서 근거에서 뺀다."""
+    global _tank_pair_lines
+    if _tank_pair_lines is None:
+        _tank_pair_lines = []
+        owner, in_table = None, False
+        for line in (read_source_markdown() or "").splitlines():
+            heading = _HERO_HEADING_RE.match(line)
+            if heading or _ANY_H1_H2_RE.match(line):
+                owner = resolve_hero_name(heading.group(1)) if heading else None
+                in_table = False
+            elif _ANY_HEADING_RE.match(line):
+                match = _SYNERGY_HEADING_RE.match(line)
+                in_table = bool(match and match.group(1) == "탱커")
+            elif in_table and HERO_TO_ROLE.get(owner) == "tank":
+                rows = _parse_table_rows([line])
+                if rows and HERO_TO_ROLE.get(resolve_hero_name(rows[0][0])) == "tank":
+                    _tank_pair_lines.append(line.strip())
+    return _tank_pair_lines
+
+
+def strip_tank_pair_synergy(text: str) -> str:
+    """검색 조각에서 탱커끼리 궁합 줄과 그 소제목을 지운다(조각 경계에서 잘린 줄도)."""
+    banned = tank_pair_synergy_lines()
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        match = _SYNERGY_HEADING_RE.match(stripped)
+        if match and match.group(1) == "탱커":
+            continue
+        if len(stripped) > 20 and stripped.startswith("|") and any(stripped in row for row in banned):
+            continue
+        if len(stripped) > 20 and not stripped.startswith("|") and stripped.endswith("|") and any(row.endswith(stripped) for row in banned):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+# 궁합 표 평가 점수(첫 표기, 없으면 괄호 속 역방향 표기).
+_SYNERGY_SCORES = [("매우 좋음", 3), ("매우 적합", 3), ("약간 좋음", 1), ("약간 적합", 1), ("좋음", 2), ("적합", 2)]
+
+
+def _synergy_score(verdict: str) -> int:
+    for part in (verdict.split("(")[0], verdict):
+        head = re.split(r"\s*(?:/|↔)\s*", part.strip())[0]
+        for label, score in _SYNERGY_SCORES:
+            if label in head and "좋지 않" not in head and "부적합" not in head:
+                return score
+    return 0
+
+
+def top_synergy_rows(hero: Optional[str], roles: List[str], limit: int = 8) -> Optional[str]:
+    """그 영웅 궁합 표에서 roles 역할 아군 중 평가가 "좋음" 이상인 줄(같이 할 영웅을 묻는 질문의 근거)."""
+    get_synergy_note(hero, hero)  # 표를 읽어 둔다
+    hero = normalize_hero_name(hero)
+    rows = [
+        (ally, verdict, reason) for ally, (verdict, reason) in (_synergy_cache.get(hero) or {}).items()
+        if HERO_TO_ROLE.get(ally) in roles and _synergy_score(verdict) >= 2
+    ]
+    rows.sort(key=lambda row: -_synergy_score(row[1]))
+    lines = [
+        f"- {ally}({ROLE_LABELS[HERO_TO_ROLE[ally]]}): {clean_note(verdict)}. {clean_note(reason)}"
+        for ally, verdict, reason in rows[:limit]
+    ]
+    return "\n".join(lines) or None
