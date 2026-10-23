@@ -186,9 +186,54 @@ _POLITE_ENDING_RULES = [
     (re.compile(r"([가-힣]{2,})입니다\.?$"), r"\1"),
 ]
 
+_PLAIN_ENDING_RE = re.compile(r"([가-힣]+)다\.?$")
+_JONG_NONE, _JONG_N, _JONG_L, _JONG_M, _JONG_B = 0, 4, 8, 16, 17
+# ㄹ 받침이 떨어진 "~ㄴ다" 동사(밀다 → 민다)는 받침만 바꾸면 말이 틀려 따로 적는다.
+_L_STEM_PLAIN = {"민": "밀기", "돈": "돌기", "든": "들기", "연": "열기", "건": "걸기", "논": "놀기", "판": "팔기", "몬": "몰기"}
+# "~워"로 바뀌는 ㅂ 불규칙 형용사의 받침 앞 글자.
+_B_IRREGULAR = set("쉽렵롭겁볍깝섭럽")
+
+
+def _jong(syllable: str) -> int:
+    return (ord(syllable) - 0xAC00) % 28
+
+
+def _with_jong(syllable: str, jong: int) -> str:
+    return chr(ord(syllable) - _jong(syllable) + jong)
+
+
+def _shorten_plain_word(word: str) -> Optional[str]:
+    """"~다"로 끝나는 어절(다 앞부분)을 짧은 구로 바꾼다. 모르는 모양이면 None."""
+    last = word[-1]
+    if last in "하한":
+        return word[:-1] if len(word) >= 3 else word[:-1] + "함"
+    if last == "된":
+        return word[:-1] + "됨"
+    if last == "는" and len(word) >= 2 and _jong(word[-2]) != _JONG_NONE:
+        return word[:-1] + "음"
+    jong = _jong(last)
+    if jong == _JONG_N:
+        if last in _L_STEM_PLAIN:
+            return word[:-1] + _L_STEM_PLAIN[last]
+        return word[:-1] + _with_jong(last, _JONG_M)
+    if jong == _JONG_B and last in _B_IRREGULAR:
+        return word[:-1] + _with_jong(last, _JONG_NONE) + "움"
+    if jong not in (_JONG_NONE, _JONG_L):
+        return word + "음"
+    # 받침 없는 말(목표다, 크다)은 명사인지 형용사인지 몰라 그대로 둔다.
+    return None
+
+
+def _shorten_plain_ending(line: str) -> str:
+    match = _PLAIN_ENDING_RE.search(line)
+    if not match:
+        return line
+    short = _shorten_plain_word(match.group(1))
+    return line if short is None else line[:match.start()] + short
+
 
 def shorten_polite_endings(answer: str) -> str:
-    """줄 끝의 격식체 종결을 짧은 구로 줄인다(추천 이유 줄은 그대로 둔다)."""
+    """줄 끝의 격식체·"~다" 종결을 짧은 구로 줄인다(추천 이유 줄은 그대로 둔다)."""
     if not answer:
         return answer
 
@@ -203,6 +248,8 @@ def shorten_polite_endings(answer: str) -> str:
             if count:
                 line = new_line.rstrip()
                 break
+        else:
+            line = _shorten_plain_ending(line)
         shortened.append(line)
     return "\n".join(shortened)
 
