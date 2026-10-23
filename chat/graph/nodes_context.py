@@ -1016,6 +1016,12 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
             llm_ally_team[0], effective_message,
         )
         llm_ally_team = None
+    # 자기 영웅은 아군 나열("우리팀은 …")에 직접 넣지 않았으면 아군이 아니다(둘 다에 넣으면 조합 질문이 된다).
+    if current_hero and current_hero not in extract_ally_team(effective_message):
+        if llm_ally_team and current_hero in llm_ally_team:
+            logger.info("[SELF NOT ALLY] 자기 영웅 '%s'를 LLM 아군 목록에서 제외함: %s", current_hero, llm_ally_team)
+            llm_ally_team = [h for h in llm_ally_team if h != current_hero] or None
+        rule_based_ally_team = [h for h in rule_based_ally_team if h != current_hero]
     # LLM이 사용자로 가정해 아군에서 뺐지만 자기 영웅으로 받지 않은 영웅은, 아군 나열에 있으면 되돌린다.
     rejected_llm_hero = normalize_hero_name(state.get("llm_current_hero"))
     if (
