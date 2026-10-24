@@ -32,7 +32,7 @@ from chat.rag.doc_sections import (
     get_hero_combo_lines,
     get_hero_perk_section,
     get_hero_position,
-    get_hero_profile,
+    get_hero_target_profile,
     get_hero_teamplay,
     skill_tag_section,
 )
@@ -366,7 +366,7 @@ def retrieve_docs_node(state: ChatbotGraphState) -> ChatbotGraphState:
         # 상대별 프로필은 검색으로 다 안 걸려서 직접 꺼낸다.
         if state.get("is_target_priority_question"):
             for enemy in reversed(state.get("enemy_team") or []):
-                profile = get_hero_profile(enemy)
+                profile = get_hero_target_profile(enemy)
                 if not profile:
                     continue
                 all_docs.insert(0, {
