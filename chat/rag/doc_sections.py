@@ -19,10 +19,13 @@ _NEXT_H3_RE = re.compile(r"^###\s")
 
 # 우선 타겟 답변이 영웅마다 참고하는 항목.
 PROFILE_FIELDS = ["기본 위치", "취약한 상대 판정/상황", "조합 내 담당"]
+# 우선 타겟 근거는 상대가 어디 있고 무엇에 약한지만(그 상대 자신의 처리 우선·협업은 내 영웅 이유로 섞인다).
+TARGET_PROFILE_FIELDS = ["기본 위치", "취약한 상대 판정/상황"]
 
 # 원본 문서는 실행 중 바뀌지 않으므로 최초 1회만 파싱한다.
 _perk_sections_cache: Optional[Dict[str, str]] = None
 _profile_cache: Optional[Dict[str, str]] = None
+_target_profile_cache: Optional[Dict[str, str]] = None
 
 
 def read_source_markdown() -> Optional[str]:
@@ -103,12 +106,12 @@ def _build_perk_sections() -> Dict[str, str]:
     return sections
 
 
-def _build_profiles() -> Dict[str, str]:
+def _build_profiles(fields: List[str] = PROFILE_FIELDS) -> Dict[str, str]:
     profiles = {}
     for hero, body in _hero_section_bodies().items():
         blocks = [
             block for block in
-            (_extract_block(body, field) for field in PROFILE_FIELDS)
+            (_extract_block(body, field) for field in fields)
             if block
         ]
         if blocks:
@@ -130,6 +133,35 @@ def get_hero_perk_section(hero: Optional[str]) -> Optional[str]:
     return _perk_sections_cache.get(normalize_hero_name(hero))
 
 
+_PERK_SLOT_RE = re.compile(r"^\s*(?:-|#+)\s*(보조|주요)\s*특전")
+_PERK_LINE_RE = re.compile(r"^\s*-\s*(?P<name>[^/(]+?)\s*(?:\((?P<paren>[^)]*)\))?\s*/\s*(?P<effect>[^/]+)")
+_PERK_KEY_RE = re.compile(r"(좌클릭|우클릭|좌클|우클)")
+
+
+def get_hero_perks(hero: Optional[str]) -> Dict[str, List[Dict[str, Optional[str]]]]:
+    """특전 데이터 절의 특전 목록 {"minor"/"major": [{name, effect, key}]}. key는 문서에 적힌 좌클릭/우클릭(없으면 None)."""
+    perks: Dict[str, List[Dict[str, Optional[str]]]] = {"minor": [], "major": []}
+    slot = None
+    for line in (get_hero_perk_section(hero) or "").splitlines():
+        heading = _PERK_SLOT_RE.match(line)
+        if heading:
+            slot = "minor" if heading.group(1) == "보조" else "major"
+            continue
+        if re.match(r"^\s*(?:-|#+)\s*운용", line):
+            slot = None
+            continue
+        match = _PERK_LINE_RE.match(line) if slot else None
+        if not match:
+            continue
+        key = _PERK_KEY_RE.search(match.group("paren") or "")
+        perks[slot].append({
+            "name": match.group("name").strip(),
+            "effect": match.group("effect").strip(),
+            "key": ("좌클릭" if key.group(1).startswith("좌") else "우클릭") if key else None,
+        })
+    return perks
+
+
 def get_hero_profile(hero: Optional[str]) -> Optional[str]:
     """우선 타겟 답변이 쓰는 영웅 정보(기본 위치 / 취약한 상대 / 조합 내 담당)."""
     global _profile_cache
@@ -140,6 +172,18 @@ def get_hero_profile(hero: Optional[str]) -> Optional[str]:
         _profile_cache = _build_profiles()
 
     return _profile_cache.get(normalize_hero_name(hero))
+
+
+def get_hero_target_profile(hero: Optional[str]) -> Optional[str]:
+    """우선 타겟 답변에 넣을 상대 정보(기본 위치 / 취약한 상대)."""
+    global _target_profile_cache
+
+    if not hero:
+        return None
+    if _target_profile_cache is None:
+        _target_profile_cache = _build_profiles(TARGET_PROFILE_FIELDS)
+
+    return _target_profile_cache.get(normalize_hero_name(hero))
 
 
 _TEAMPLAY_LINE_RE = re.compile(r"^\s*-\s*(기본 위치|협업):")
@@ -162,6 +206,50 @@ def get_hero_teamplay(hero: Optional[str]) -> Optional[str]:
         return None
     lines = [line.strip() for line in profile.splitlines() if _TEAMPLAY_LINE_RE.match(line)]
     return "\n".join(lines) or None
+
+
+_COMBO_WORD_RE = re.compile(r"연계|콤보")
+_COMBO_STOP_HEADING_RE = re.compile(r"^#{3,4}\s+.*(상성|궁합)")
+_COMBO_SKIP_LINE_RE = re.compile(r"^\s*-\s*(운영 태그|검색어|유리|불리)\s*:")
+# 줄 앞부분에서 연계를 말하는 줄(연계 설명 자체)을 먼저 두고, 합쳐서 이 길이까지만 쓴다.
+_COMBO_HEAD_CHARS = 40
+_COMBO_MAX_CHARS = 4000
+_combo_cache: Optional[Dict[str, str]] = None
+
+
+def _build_combo_lines() -> Dict[str, str]:
+    combos = {}
+    for hero, body in _hero_section_bodies().items():
+        lines = []
+        for line in body:
+            if _COMBO_STOP_HEADING_RE.match(line):
+                break
+            if not line.strip().startswith("-") or not _COMBO_WORD_RE.search(line):
+                continue
+            if _COMBO_SKIP_LINE_RE.match(line) or _SKILL_TAG_LINE_RE.match(line):
+                continue
+            lines.append(line.strip())
+        lines.sort(key=lambda l: not _COMBO_WORD_RE.search(l[:_COMBO_HEAD_CHARS]))
+        picked, total = [], 0
+        for line in lines:
+            if total + len(line) > _COMBO_MAX_CHARS and picked:
+                continue
+            picked.append(line)
+            total += len(line)
+        if picked:
+            combos[hero] = "\n".join(picked)
+    return combos
+
+
+def get_hero_combo_lines(hero: Optional[str]) -> Optional[str]:
+    """영웅 절(상성·궁합 표 앞)에서 연계·콤보를 말하는 줄만. 스킬 데이터·태그 줄은 뺀다."""
+    global _combo_cache
+
+    if not hero:
+        return None
+    if _combo_cache is None:
+        _combo_cache = _build_combo_lines()
+    return _combo_cache.get(normalize_hero_name(hero))
 
 
 # 스킬 데이터 줄의 괄호 속 첫 항목 → 표준 단축키.
