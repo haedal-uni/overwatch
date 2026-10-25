@@ -374,7 +374,7 @@
       transform: rotate(45deg);
     }
 
-    /* 첫 화면에서는 상성표·내 기록·영웅으로 묻기가 본문 카드로 나와서 위·아래 버튼을 숨긴다. */
+    /* 첫 화면에서는 상성표·내 기록·영웅으로 묻기가 본문 카드로 나와서 위·아래 버튼을 숨긴다(죽었어요는 맵 선택 옆이라 남는다). */
     .chat-shell:has(#welcome) .chat-only,
     .chat-shell:has(#welcome) .hero-ask-row {
       display: none
@@ -1039,7 +1039,7 @@
 
     .wl-cards {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
     }
 
@@ -2478,7 +2478,7 @@
       background: rgba(255, 255, 255, .25);
     }
 
-    /* 간단히/자세히: 맵 선택 줄 오른쪽 끝의 두 칸 버튼 */
+    /* 간단히/자세히/명령조: 맵 선택 줄 오른쪽 끝의 세 칸 버튼 */
     .style-toggle {
       margin-left: auto;
       flex: none;
@@ -2503,6 +2503,10 @@
 
     .style-btn:hover {
       color: var(--primary)
+    }
+
+    @media (max-width: 430px) {
+      .style-btn { padding: 0 8px; font-size: 12px }
     }
 
     .style-btn.active {
@@ -2722,6 +2726,117 @@
     .ha-next { height: 52px; flex: none; border: 0; border-radius: 16px; background: var(--primary); color: #fff; font-size: 16px; font-weight: 800; cursor: pointer; }
     .ha-next:disabled { background: var(--line-strong); cursor: default; }
 
+    /* 죽었어요(death_btn.js) */
+    .death-btn { height: 36px; padding: 0 11px 0 8px; border-radius: 999px; border: 1.5px solid #f3b4b4; background: #fff1f1; color: #b91c1c; font-weight: 800; font-size: 13px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+    /* 맵을 고르면 공격/수비가 생겨 좁은 폰에서는 맵 이름 칸이 사라지므로 죽었어요는 아이콘만 남긴다. */
+    @media (max-width: 430px) {
+      .composer-tools:has(.side-toggle.show) .death-label { display: none; }
+      .composer-tools:has(.side-toggle.show) .death-btn { padding: 0 9px; }
+    }
+    html[data-theme="dark"] .death-btn { background: rgba(255, 107, 107, .12); border-color: rgba(255, 107, 107, .45); color: #ff8a8a; }
+    .dt-me { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 16px; background: var(--soft); flex: none; }
+    .dt-me-ico { width: 40px; height: 40px; border-radius: 12px; object-fit: cover; }
+    .dt-me span { flex: 1; display: flex; flex-direction: column; }
+    .dt-me small { font-size: 12px; color: var(--muted); }
+    .dt-me b { font-size: 15px; }
+    .dt-me button { height: 40px; padding: 0 14px; border: 0; border-radius: 12px; background: var(--card-solid); color: var(--primary); font-weight: 800; cursor: pointer; }
+    .dt-label { font-size: 12.5px; font-weight: 700; color: var(--muted); }
+    .dt-foes .ha-hero-ico { background: var(--tint-orange-bg); }
+    .dt-card { display: flex; flex-direction: column; gap: 10px; }
+    .dt-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .dt-ico { width: 34px; height: 34px; border-radius: 10px; object-fit: cover; }
+    .dt-vs { font-size: 12px; color: var(--muted); }
+    .dt-badge { margin-left: 4px; padding: 4px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 800; }
+    .dt-badge.bad { background: var(--tint-orange-bg); color: var(--tint-orange); }
+    .dt-badge.good { background: var(--tint-green-bg); color: var(--tint-green); }
+    .dt-badge.mid { background: var(--soft); color: var(--muted); }
+    .dt-card .dt-do { margin: 0; font-size: 19px; line-height: 1.5; font-weight: 800; }
+    .dt-card .dt-why { margin: 0; font-size: 14px; line-height: 1.55; color: var(--muted); }
+    .dt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .dt-actions button { min-height: 40px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--card-solid); color: var(--text); font-weight: 700; font-size: 13.5px; cursor: pointer; }
+
+    /* 카운터 카드 대결(card_battle.js) */
+    .cb-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(19, 32, 51, 0); display: flex; justify-content: center; transition: background .2s; }
+    .cb-overlay.show { background: rgba(19, 32, 51, .42); }
+    .cb-overlay.busy { cursor: progress; }
+    .cb-panel { width: 100%; max-width: 480px; height: 100dvh; box-sizing: border-box; padding: 12px 16px calc(16px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--text); display: flex; flex-direction: column; gap: 12px; overflow-y: auto; opacity: 0; transform: translateY(24px); transition: opacity .2s, transform .2s; }
+    .cb-overlay.show .cb-panel { opacity: 1; transform: none; }
+    .cb-top { display: flex; align-items: center; gap: 10px; flex: none; }
+    .cb-top h3 { margin: 0; flex: 1; font-size: 19px; }
+    .cb-icon { width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 14px; background: var(--card-solid); color: var(--text); display: grid; place-items: center; cursor: pointer; }
+    .cb-icon svg { width: 18px; height: 18px; }
+    .cb-pill { font-size: 12px; color: var(--muted); background: var(--card-solid); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; white-space: nowrap; }
+    .cb-score { display: flex; align-items: center; justify-content: space-between; font-size: 14px; color: var(--muted); flex: none; }
+    .cb-score b { color: var(--text); }
+    .cb-pts { display: flex; align-items: center; gap: 7px; font-size: 18px; }
+    .cb-pts small { font-size: 12px; font-weight: 700; }
+    .cb-pts .me, .cb-final .me { color: var(--primary); }
+    .cb-pts .op, .cb-final .op { color: var(--tint-orange); }
+    .cb-pts i { font-style: normal; color: var(--line-strong); }
+    .cb-stage { background: var(--card-solid); border: 1px solid var(--line); border-radius: 24px; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 10px; flex: none; }
+    .cb-stage p { margin: 0; font-size: 15px; color: var(--muted); }
+    .cb-op-label { font-size: 13px; font-weight: 700; color: var(--tint-orange); }
+    .cb-card { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+    .cb-card img { width: 100%; max-width: 56px; aspect-ratio: 1; border-radius: 12px; object-fit: cover; }
+    .cb-card b { font-size: 12.5px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cb-card small { font-size: 11px; color: var(--muted); }
+    .cb-card em { font-style: normal; font-size: 11px; color: var(--muted); }
+    .cb-card.big, .cb-duel .cb-card { width: 128px; padding: 12px 8px; border-radius: 20px; box-sizing: border-box; }
+    .cb-card.big img, .cb-duel .cb-card img { max-width: 88px; border-radius: 16px; }
+    .cb-card.big b, .cb-duel .cb-card b { font-size: 17px; }
+    .cb-card.op { background: var(--tint-orange-bg); border: 2px solid #fdba74; }
+    .cb-card.mine { background: var(--primary-soft); border: 3px solid var(--primary); }
+    .cb-hand-label { font-size: 13px; color: var(--muted); flex: none; }
+    .cb-hand { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; align-items: end; flex: none; padding-top: 16px; }
+    .cb-stage + .cb-hand-label { margin-top: auto; }
+    .cb-pick { border: 1px solid var(--line); background: var(--card-solid); border-radius: 16px; padding: 8px 3px; color: var(--text); cursor: pointer; transition: transform .15s; min-width: 0; }
+    .cb-pick.on { border: 3px solid var(--primary); background: var(--primary-soft); transform: translateY(-14px); box-shadow: 0 10px 20px rgba(37, 99, 235, .25); }
+    .cb-main { height: 54px; flex: none; border: 0; border-radius: 16px; background: var(--primary); color: #fff; font-size: 17px; font-weight: 800; cursor: pointer; }
+    .cb-main:disabled { background: var(--line-strong); cursor: default; }
+    .cb-sub { height: 48px; flex: none; border: 1px solid var(--line); border-radius: 16px; background: var(--card-solid); color: var(--text); font-size: 15px; font-weight: 700; cursor: pointer; }
+    .cb-intro { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; text-align: center; }
+    .cb-vsfaces { display: flex; justify-content: center; align-items: center; gap: 8px; font-weight: 800; color: var(--muted); }
+    .cb-vsfaces img { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--card-solid); }
+    .cb-intro h4 { margin: 0; font-size: 21px; }
+    .cb-intro p { margin: 0; font-size: 15px; line-height: 1.6; color: var(--muted); }
+    .cb-intro ol { margin: 0; padding: 14px 16px 14px 34px; text-align: left; background: var(--card-solid); border-radius: 16px; font-size: 14px; line-height: 1.8; }
+    .cb-skip { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: var(--muted); }
+    .cb-skip input { width: 18px; height: 18px; }
+    .cb-result { background: var(--card-solid); border: 1px solid var(--line); border-radius: 24px; padding: 18px 16px; display: flex; flex-direction: column; align-items: center; gap: 14px; flex: none; }
+    .cb-res-title { font-size: 26px; font-weight: 800; }
+    .cb-result.win .cb-res-title { color: var(--tint-green); }
+    .cb-result.lose .cb-res-title { color: var(--tint-orange); }
+    .cb-result.draw .cb-res-title { color: var(--muted); }
+    .cb-duel { display: flex; align-items: center; gap: 10px; }
+    .cb-vs { font-weight: 800; color: var(--line-strong); }
+    .cb-badge { padding: 5px 12px; border-radius: 999px; font-size: 13.5px; font-weight: 800; background: var(--soft); color: var(--muted); }
+    .cb-badge.win { background: var(--tint-green-bg); color: var(--tint-green); }
+    .cb-badge.lose { background: var(--tint-orange-bg); color: var(--tint-orange); }
+    .cb-note { margin: 0; font-size: 15px; line-height: 1.6; text-align: center; }
+    .cb-ask { min-height: 48px; padding: 0 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card-solid); color: var(--text); font-size: 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; text-align: left; flex: none; }
+    .cb-ask svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
+    .cb-fill { flex: 1; }
+    .cb-end { background: var(--card-solid); border: 1px solid var(--line); border-radius: 24px; padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 2px; flex: none; }
+    .cb-end small { font-size: 14px; color: var(--muted); }
+    .cb-end b { font-size: 28px; }
+    .cb-end b.good { color: var(--primary); }
+    .cb-end b.bad { color: var(--tint-orange); }
+    .cb-final { font-size: 40px; font-weight: 800; }
+    .cb-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+    .cb-lost { background: var(--card-solid); border: 1px solid var(--line); border-radius: 18px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+    .cb-lost-head { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+    .cb-lost-head img { width: 40px; height: 40px; border-radius: 10px; object-fit: cover; }
+    .cb-lost-head .cb-badge { margin-left: auto; }
+    .cb-lost p, .cb-perfect { margin: 0; font-size: 14px; line-height: 1.55; }
+    .cb-answer { width: 100%; border-top: 1px dashed var(--line); padding-top: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+    .cb-answer small { font-size: 13px; font-weight: 800; color: var(--tint-green); }
+    .cb-answer-faces { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 12px; }
+    .cb-answer-faces span { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 700; }
+    .cb-answer-faces img { width: 34px; height: 34px; border-radius: 10px; object-fit: cover; }
+    .cb-answer-faces em { font-style: normal; font-size: 12px; color: var(--tint-green); }
+    .cb-answer p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--muted); word-break: keep-all; }
+    .cb-lost .cb-lost-answer { font-weight: 700; color: var(--tint-green); }
+
     /* 결과 카드 · 내 기록(my_records.js) */
     .rec-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .rec-chip { height: 36px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--primary-soft); color: var(--primary); font-weight: 800; font-size: 13px; cursor: pointer; white-space: nowrap; }
@@ -2751,6 +2866,58 @@
     .rec-card-actions { display: flex; justify-content: center; gap: 8px; }
     .rec-btn { height: 42px; padding: 0 18px; border-radius: 14px; border: 1px solid var(--line-strong); background: var(--card-solid); color: var(--text); font-weight: 800; font-size: 14px; display: inline-flex; align-items: center; text-decoration: none; cursor: pointer; }
     .rec-btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+    /* 승패 기록 */
+    .rec-wrap { display: flex; flex-direction: column; }
+    .rec-ask { margin-top: 12px; padding: 12px; border-radius: 16px; border: 2px solid var(--line-strong); background: var(--soft); display: flex; flex-direction: column; gap: 4px; }
+    .rec-ask b { font-size: 15px; }
+    .rec-ask > span { font-size: 12.5px; color: var(--muted); word-break: keep-all; }
+    .rec-ask-btns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
+    .rec-ask-btns button, .rec-res-pick button { height: 44px; border-radius: 14px; font-weight: 800; font-size: 15px; cursor: pointer; border: 1px solid var(--line); background: var(--card-solid); color: var(--muted); }
+    .rec-ask-btns .win, .rec-res-pick .win { background: var(--primary); border-color: var(--primary); color: #fff; }
+    .rec-ask-btns .loss, .rec-res-pick .loss { background: var(--tint-orange-bg); border: 1.5px solid #fdba74; color: var(--tint-orange); }
+    .rec-saved { margin-top: 12px; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 16px; background: var(--soft); font-weight: 800; font-size: 14px; }
+    .rec-saved.win { background: var(--tint-green-bg); color: var(--tint-green); }
+    .rec-saved.loss { background: var(--tint-orange-bg); color: var(--tint-orange); }
+    .rec-saved span { flex: 1; }
+    .rec-saved button { height: 34px; padding: 0 12px; border: 0; border-radius: 10px; background: var(--card-solid); color: var(--primary); font-weight: 700; font-size: 13px; cursor: pointer; }
+    .rec-saved-note { margin-top: 6px; font-size: 12.5px; line-height: 1.6; color: var(--muted); white-space: pre-line; word-break: keep-all; }
+    .rec-tiles .rec-tile:last-child { grid-column: 1 / -1; }
+    .rec-wl { font-size: 12px; font-weight: 600; color: var(--muted); }
+    .rec-compare-btn { display: flex; align-items: center; justify-content: space-between; min-height: 50px; padding: 0 14px; border: 0; border-radius: 16px; background: var(--primary); color: #fff; font-size: 15px; font-weight: 800; cursor: pointer; }
+    .rec-res { flex: none; min-width: 52px; height: 32px; border: 0; border-radius: 10px; font-weight: 800; font-size: 12.5px; cursor: pointer; background: var(--soft); color: var(--muted); }
+    .rec-res.win { background: var(--primary-soft); color: var(--primary); }
+    .rec-res.loss { background: var(--tint-orange-bg); color: var(--tint-orange); }
+    .rec-res-pick { display: flex; gap: 4px; flex: none; }
+    .rec-res-pick button { width: 40px; height: 32px; font-size: 13px; border-radius: 10px; }
+    .rec-hint { font-size: 12px; color: var(--muted); }
+    .rec-back { align-self: flex-start; border: 0; background: none; color: var(--primary); font-weight: 700; font-size: 14px; cursor: pointer; padding: 4px 0; }
+    .rec-note { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); background: var(--soft); border-radius: 14px; padding: 10px 12px; white-space: pre-line; word-break: keep-all; }
+    .rec-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 14px; background: var(--soft); }
+    .rec-tabs button { height: 36px; border: 0; border-radius: 11px; background: transparent; color: var(--muted); font-weight: 700; font-size: 13px; cursor: pointer; }
+    .rec-tabs button.on { background: var(--card-solid); color: var(--primary); font-weight: 800; box-shadow: 0 2px 6px rgba(33, 74, 132, .12); }
+    .rec-legend { display: flex; gap: 14px; font-size: 13px; font-weight: 600; }
+    .rec-legend span { display: flex; align-items: center; gap: 6px; }
+    .rec-legend i, .rec-metric i { display: block; border-radius: 5px; }
+    .rec-legend i { width: 14px; height: 14px; }
+    .rec-legend i.w, .rec-metric i.w { background: var(--primary); }
+    .rec-legend i.l, .rec-metric i.l { background: #f59e0b; }
+    .rec-top { background: var(--tint-orange-bg); border-radius: 18px; padding: 14px; display: flex; flex-direction: column; gap: 4px; }
+    .rec-top small { font-size: 12px; font-weight: 800; color: var(--tint-orange); }
+    .rec-top b { font-size: 17px; line-height: 1.5; white-space: pre-line; word-break: keep-all; }
+    .rec-top span { font-size: 12px; color: var(--muted); }
+    .rec-metric { display: flex; flex-direction: column; gap: 3px; }
+    .rec-metric-head { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+    .rec-metric-head em { font-style: normal; color: var(--muted); white-space: nowrap; }
+    .rec-metric i { height: 10px; }
+    .rec-metric.diff { position: relative; }
+    .rec-metric.diff::after { content: ""; position: absolute; left: 50%; top: 24px; bottom: 16px; width: 2px; background: var(--line-strong); }
+    .rec-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+    .rec-locked { display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; padding: 40px 8px; }
+    .rec-locked b { font-size: 18px; line-height: 1.5; white-space: pre-line; }
+    .rec-locked span { font-size: 14px; color: var(--muted); }
+    .rec-locked p { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--muted); white-space: pre-line; word-break: keep-all; }
+    .rec-progress { width: 100%; height: 12px; border-radius: 6px; background: var(--primary-soft); overflow: hidden; }
+    .rec-progress i { display: block; height: 100%; background: var(--primary); border-radius: 6px; }
 
     .composer-hint {
       display: flex;
@@ -3217,6 +3384,10 @@
                 <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10z"/></svg>
                 <span>야간 모드</span><span class="more-switch" aria-hidden="true"></span>
               </button>
+              <button type="button" class="more-item" id="cardBattleBtn" role="menuitem">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="10" height="14" rx="2"/><path d="M15 4h4a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2"/></svg>
+                <span>카운터 카드 대결</span>
+              </button>
               <button type="button" class="more-item" id="saveChatBtn" role="menuitem">
                 <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v6h8V4"/><path d="M8 14h8v6H8z"/></svg>
                 <span>대화 저장</span>
@@ -3261,6 +3432,10 @@
               <span class="wl-ico green"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg></span>
               <b>내 기록</b><span>판 기록·결과 카드</span>
             </button>
+            <button type="button" class="wl-card" data-click="cardBattleBtn">
+              <span class="wl-ico blue"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="10" height="14" rx="2"/><path d="M15 4h4a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2"/></svg></span>
+              <b>카운터 카드 대결</b><span>상성을 게임으로 익히기</span>
+            </button>
           </div>
           <div>
             <div class="wl-label">이렇게 물어봐도 돼요</div>
@@ -3289,6 +3464,7 @@
               <div class="select-list" id="mapList"></div>
             </div>
           </div>
+          <button type="button" class="death-btn" id="deathBtn" aria-label="죽었어요" title="죽었어요"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3C7 3 4 6.5 4 11c0 3 1.5 4.5 3 5.5V20h10v-3.5c1.5-1 3-2.5 3-5.5 0-4.5-3-8-8-8z"/><circle cx="9" cy="11" r="1.6" fill="currentColor"/><circle cx="15" cy="11" r="1.6" fill="currentColor"/></svg><span class="death-label">죽었어요</span></button>
           <div class="side-toggle" id="sideToggle">
             <button class="side-btn" data-side="attack">공격</button>
             <button class="side-btn" data-side="defense">수비</button>
@@ -3300,6 +3476,7 @@
           <div class="style-toggle" id="styleToggle">
             <button type="button" class="style-btn active" data-style="simple" title="인게임 중 빠르게 볼 핵심 요약">간단히</button>
             <button type="button" class="style-btn" data-style="detailed" title="복기·학습용 자세한 설명">자세히</button>
+            <button type="button" class="style-btn" data-style="command" title="간단히 형식을 짧은 명령조로">명령조</button>
           </div>
         </div>
         <div class="attach-preview" id="attachPreview" hidden>
@@ -3322,6 +3499,8 @@
 
   <script src="{% static 'chat/my_records.js' %}"></script>
   <script src="{% static 'chat/hero_ask.js' %}"></script>
+  <script src="{% static 'chat/death_btn.js' %}"></script>
+  <script src="{% static 'chat/card_battle.js' %}"></script>
   <script>
     const maps = [
       { group: '전체', name: '맵 선택 없이 질문하기', mode: 'none' },
@@ -3380,6 +3559,33 @@
       },
       isBusy: () => state.busy,
       send: (text, heroes) => { input.value = text; autoResize(); pendingHeroes = heroes; sendMessage(); },
+    });
+    const sendFromPanel = (text, heroes) => { input.value = text; autoResize(); pendingHeroes = heroes; sendMessage(); };
+    const loadRoster = async () => {
+      if (!matchupCache.roles) matchupCache.roles = (await fetchMatchups()).roles;
+      return matchupCache.roles;
+    };
+    window.DeathBtn?.init({
+      iconBase: HERO_ICON_BASE,
+      escapeHtml: (t) => escapeHtml(t),
+      loadRoles: loadRoster,
+      isBusy: () => state.busy,
+      setBusy: (on) => { state.busy = on; sendBtn.disabled = on; },
+      addMessage: (role, text, options) => addMessage(role, text, options),
+      addTyping: () => addTyping(),
+      removeTyping: () => removeTyping(),
+      showError: (msg) => showError(msg),
+      getCsrf: () => getCsrf(),
+      send: sendFromPanel,
+    });
+    window.CardBattle?.init({
+      iconBase: HERO_ICON_BASE,
+      escapeHtml: (t) => escapeHtml(t),
+      loadRoles: loadRoster,
+      fetchHero: (name) => fetchMatchups(name),
+      isBusy: () => state.busy,
+      showError: (msg) => showError(msg),
+      send: sendFromPanel,
     });
     function heroIcon(name) { return `${HERO_ICON_BASE}${encodeURIComponent(name || '')}.png`; }
     const input = $('userInput');
@@ -3545,7 +3751,7 @@
       btn.classList.add('active'); renderQuick(btn.dataset.role);
     }));
 
-    // 간단히/자세히 토글. 고른 값은 다음 질문에 answer_style로 함께 보낸다.
+    // 간단히/자세히/명령조 토글. 고른 값은 다음 질문에 answer_style로 함께 보낸다.
     document.querySelectorAll('.style-btn').forEach(btn => btn.addEventListener('click', () => {
       document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
@@ -4152,7 +4358,8 @@
       const wrap = document.createElement('div'); wrap.className = 'bubble-wrap';
       const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `${role === 'user' ? '나' : '코치 AI'} · ${timeText()}`;
       const bubble = document.createElement('div'); bubble.className = 'bubble';
-      bubble.innerHTML = role === 'ai' ? simpleMarkdown(text) : `<p>${escapeHtml(text)}</p>`;
+      bubble.innerHTML = options.deathTip ? '' : role === 'ai' ? simpleMarkdown(text) : `<p>${escapeHtml(text)}</p>`;
+      if (options.deathTip && window.DeathBtn) bubble.appendChild(DeathBtn.buildCard(options.deathTip));
       if (role === 'user') {
         const badges = [];
         if (options.stats) badges.push('스탯 입력 감지');
@@ -4458,7 +4665,7 @@
       moreBtn.setAttribute('aria-expanded', String(open));
     }
     moreBtn.addEventListener('click', (e) => { e.stopPropagation(); setMoreMenu(moreMenu.hidden); });
-    moreMenu.addEventListener('click', (e) => { if (e.target.closest('#saveChatBtn, #helpBtn')) setMoreMenu(false); });
+    moreMenu.addEventListener('click', (e) => { if (e.target.closest('#saveChatBtn, #helpBtn, #cardBattleBtn')) setMoreMenu(false); });
     document.addEventListener('click', (e) => { if (!moreMenu.hidden && !moreMenu.contains(e.target)) setMoreMenu(false); });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !moreMenu.hidden) setMoreMenu(false); });
 
@@ -4499,7 +4706,7 @@
       {
         target: () => $('styleToggle'),
         title: '답변 스타일',
-        desc: '간단히 / 자세히 중 원하는 답변 길이를 선택할 수 있어요.\n글로 답하는 질문에 적용되고, 카운터·조합 추천 카드는 차이가 거의 없어요.',
+        desc: '간단히 / 자세히 / 명령조 중 원하는 답변을 선택할 수 있어요. 명령조는 간단히를 "위치 잡기"처럼 짧은 말로 줄여요.\n글로 답하는 질문에 적용되고, 카운터·조합 추천 카드는 차이가 거의 없어요.',
       },
       {
         target: () => document.querySelector('.input-box'),
@@ -4772,7 +4979,7 @@
 
       $('welcome')?.remove();
       messages.innerHTML = '';
-      state.answerStyle = entry.answerStyle === 'simple' ? 'simple' : 'detailed';
+      state.answerStyle = ['simple', 'command'].includes(entry.answerStyle) ? entry.answerStyle : 'detailed';
       document.querySelectorAll('.style-btn').forEach(b => b.classList.toggle('active', b.dataset.style === state.answerStyle));
       // 재생 중에는 history에 쌓지 않고, 끝난 뒤 불러온 내용으로 history를 채운다.
       (entry.messages || []).forEach(m => addMessage(m.role, m.text, { ...(m.options || {}), skipHistory: true }));
