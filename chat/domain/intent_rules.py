@@ -343,9 +343,29 @@ ROSTER_ROLE_RANGES = {
     6: {"tank": (1, 2), "damage": (2, 3), "support": (2, 2)},
 }
 
-# 현재 패치 메타의 팀 인원수. 5대5 ↔ 6대6을 바꾸는 유일한 고정점이므로
-# 다른 곳에 5나 6을 직접 쓰지 마라(chat_모듈_구조.md 참고).
+# 현재 패치 메타의 팀 인원수 기본값. 관리자 페이지 설정(SiteSetting)이 있으면 그 값이 이긴다.
+# 다른 곳에 5나 6을 직접 쓰지 말고 current_meta_roster_size()를 거쳐라(chat_모듈_구조.md 참고).
 CURRENT_META_ROSTER_SIZE = 5
+
+# 관리자 설정을 읽는 함수(chat 앱이 시작할 때 등록한다). 이 모듈은 DB를 모른다.
+_meta_roster_provider = None
+
+
+def set_meta_roster_provider(provider) -> None:
+    global _meta_roster_provider
+    _meta_roster_provider = provider
+
+
+def current_meta_roster_size() -> int:
+    """지금 메타의 인원수: 관리자 설정, 없으면 CURRENT_META_ROSTER_SIZE."""
+    if _meta_roster_provider is not None:
+        try:
+            value = _meta_roster_provider()
+        except Exception:
+            value = None
+        if value in ROSTER_ROLE_RANGES:
+            return value
+    return CURRENT_META_ROSTER_SIZE
 
 # 아군 조합을 역할 좁히기에 쓸 수 있는 유효 기간.
 ROLE_NARROWING_MAX_AGE_SECONDS = 5 * 60
@@ -368,7 +388,7 @@ def resolve_roster_size(declared: Optional[int]) -> int:
     """이번 답변에 적용할 인원수. 밝힌 값이 없으면 현재 메타."""
     if declared in ROSTER_ROLE_RANGES:
         return declared
-    return CURRENT_META_ROSTER_SIZE
+    return current_meta_roster_size()
 
 
 def two_tanks_allowed(roster_size: Optional[int] = None) -> bool:
@@ -414,7 +434,7 @@ def roster_size_button_label(roster_size: int) -> str:
 
 def roster_role_quota_text(roster_size: int) -> str:
     """프롬프트에 넣는 역할 정원 설명."""
-    ranges = ROSTER_ROLE_RANGES.get(roster_size) or ROSTER_ROLE_RANGES[CURRENT_META_ROSTER_SIZE]
+    ranges = ROSTER_ROLE_RANGES.get(roster_size) or ROSTER_ROLE_RANGES[current_meta_roster_size()]
     parts = []
     for role in ROLE_HEROES:
         low, high = ranges[role]

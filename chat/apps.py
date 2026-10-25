@@ -13,6 +13,10 @@ class ChatConfig(AppConfig):
     _initialized = False
 
     def ready(self):
+        from chat.domain.intent_rules import set_meta_roster_provider
+        from chat.site_settings import meta_roster_size
+        set_meta_roster_provider(meta_roster_size)
+
         if "test" in os.sys.argv:
             return
         if settings.DEBUG and os.environ.get("RUN_MAIN") != "true":

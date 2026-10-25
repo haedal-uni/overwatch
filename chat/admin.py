@@ -19,9 +19,18 @@ from chat.vision.debug_images import (
     delete_scoreboard_debug_dirs as _delete_scoreboard_debug_dirs,
     scoreboard_debug_root,
 )
-from chat.models import ChatLog, ErrorChatLog, UnsatisfiedChatLog
+from chat.models import ChatLog, ErrorChatLog, SiteSetting, UnsatisfiedChatLog
+from chat.site_settings import clear_cache as clear_site_settings_cache
 
 logger = logging.getLogger(__name__)
+
+# 관리자 홈: "최근 활동" 대신 챗봇 대시보드.
+admin.site.index_template = "admin/chat/site_index.html"
+admin.site.site_header = "오버워치 코치 관리"
+admin.site.site_title = "오버워치 코치 관리"
+admin.site.index_title = "대시보드"
+# 위쪽 메뉴(base_site.html)가 있어 왼쪽 앱 목록은 끈다(목록 칸이 좁아졌다).
+admin.site.enable_nav_sidebar = False
 
 # 디버그 이미지 파일명 화이트리스트(경로 조작 방지).
 # _save_debug_images의 파일명 규칙과 일치해야 한다.
@@ -113,7 +122,7 @@ def _format_context_value(key, value):
     if key == "role_filter":
         return role_filter_label(value)
     if key == "answer_style":
-        return {"simple": "간단히", "detailed": "자세히"}.get(value, value)
+        return {"simple": "간단히", "detailed": "자세히", "command": "명령조"}.get(value, value)
     if key == "choice_buttons" and isinstance(value, list):
         return ", ".join(str(b.get("label", b)) if isinstance(b, dict) else str(b) for b in value)
     if isinstance(value, bool):
@@ -217,6 +226,10 @@ class ChatLogDisplayMixin:
         )
         self._warn_if_debug_dir_cleanup_failed(request, failed)
 
+    @admin.display(description="시각", ordering="created_at")
+    def created_display(self, obj):
+        return obj.created_at.strftime("%m/%d %H:%M") if obj.created_at else "-"
+
     @admin.display(description="구분", ordering="role")
     def role_badge(self, obj):
         bg, fg, label = ROLE_BADGE_STYLES.get(
@@ -236,7 +249,7 @@ class ChatLogDisplayMixin:
         if not obj.log_session_id:
             return "-"
         url = reverse("admin:chat_chatlog_session_transcript", args=[obj.log_session_id])
-        return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.log_session_id[:10])
+        return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.log_session_id[:8])
 
     @admin.display(description="턴", ordering="turn_id")
     def turn_link(self, obj):
@@ -246,7 +259,7 @@ class ChatLogDisplayMixin:
             reverse("admin:chat_chatlog_changelist")
             + "?" + urlencode({"turn_id": obj.turn_id})
         )
-        return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.turn_id[:10])
+        return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.turn_id[:8])
 
     @admin.display(description="메시지 미리보기")
     def message_preview(self, obj):
@@ -740,7 +753,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
     actions = ["delete_selected", "delete_entire_session"]
 
     list_display = (
-        "created_at",
+        "created_display",
         "role_badge",
         "log_session_link",
         "turn_link",
@@ -799,7 +812,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
 
     fieldsets = (
         ("기본 정보", {
-            "fields": ("created_at", "role_badge", "role", "log_session_id", "turn_id"),
+            "fields": ("created_at", "role_badge", "log_session_id", "turn_id"),
         }),
         ("분석 정보", {
             "fields": ("intent", "current_hero", "target_enemy", "enemy_team_display", "context_summary_display"),
@@ -906,7 +919,7 @@ class ErrorChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
     actions = ["delete_selected", "delete_entire_session"]
 
     list_display = (
-        "created_at",
+        "created_display",
         "log_session_link",
         "turn_link",
         "intent",
@@ -958,7 +971,7 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
     actions = ["delete_selected", "delete_entire_session"]
 
     list_display = (
-        "created_at",
+        "created_display",
         "log_session_link",
         "turn_link",
         "intent",
@@ -1037,3 +1050,26 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
             'overflow:hidden; text-overflow:ellipsis;">{}</span>',
             truncated,
         )
+
+
+@admin.register(SiteSetting)
+class SiteSettingAdmin(admin.ModelAdmin):
+    """설정은 한 줄뿐이라 목록 대신 바로 수정 화면을 연다."""
+
+    fields = ("meta_roster_size", "updated_at")
+    readonly_fields = ("updated_at",)
+
+    def has_add_permission(self, request):
+        return not SiteSetting.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        obj, _ = SiteSetting.objects.get_or_create(pk=1)
+        return HttpResponseRedirect(reverse("admin:chat_sitesetting_change", args=[obj.pk]))
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        clear_site_settings_cache()
+
