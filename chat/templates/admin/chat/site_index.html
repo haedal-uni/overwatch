@@ -1,0 +1,113 @@
+{% extends "admin/index.html" %}
+{% load chat_dashboard %}
+{% comment %}관리자 홈. "최근 활동" 칸은 빼고, 앱 목록 위에 챗봇 분석 요약을 둔다.{% endcomment %}
+
+{% block coltype %}colM{% endblock %}
+
+{% block extrastyle %}{{ block.super }}
+<style>
+  .dashboard #content { width: auto; max-width: 1100px; }
+  .db { margin: 0 0 28px; }
+  .db h2.db-title { margin: 0 0 4px; font-size: 18px; font-weight: 700; color: var(--body-fg); background: none; padding: 0; text-transform: none; letter-spacing: 0; }
+  .db .db-sub { margin: 0 0 14px; font-size: 12px; color: var(--body-quiet-color); }
+  .db-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .db-card { padding: 16px 18px; border-radius: 16px; background: var(--body-bg); box-shadow: var(--card-shadow); }
+  .db-card b { display: block; font-size: 26px; line-height: 1.15; color: var(--body-fg); }
+  .db-card b small { font-size: 14px; font-weight: 600; margin-left: 2px; }
+  .db-card span { display: block; margin-top: 4px; font-size: 12px; color: var(--body-quiet-color); }
+  .db-card.warn b { color: #d6455d; }
+  .db-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .db-box { padding: 18px; border-radius: 16px; background: var(--body-bg); box-shadow: var(--card-shadow); min-width: 0; }
+  .db-box h3 { margin: 0 0 12px; font-size: 14px; color: var(--body-fg); }
+  .db-box.wide { grid-column: 1 / -1; }
+  .db-bars { display: flex; align-items: flex-end; gap: 4px; height: 140px; padding-bottom: 2px; border-bottom: 1px solid var(--hairline-color); }
+  .db-bar { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .db-bar i { display: block; width: 100%; max-width: 30px; min-height: 2px; border-radius: 6px 6px 2px 2px; background: linear-gradient(180deg, #7aa7ff, #4f7cf0); }
+  .db-bar em { font-style: normal; font-size: 11px; color: var(--body-quiet-color); margin-bottom: 3px; }
+  .db-days { display: flex; gap: 4px; margin-top: 4px; }
+  .db-days span { flex: 1; min-width: 0; text-align: center; font-size: 10.5px; color: var(--body-quiet-color); }
+  .db-table { width: 100%; margin-top: 12px; font-size: 12px; border-collapse: collapse; }
+  .db-table th, .db-table td { padding: 5px 6px; border-bottom: 1px solid var(--hairline-color); text-align: right; background: none; }
+  .db-table th:first-child, .db-table td:first-child { text-align: left; }
+  .db-table .hot { color: #d6455d; font-weight: 700; }
+  .db-row { display: grid; grid-template-columns: 96px 1fr auto; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 12.5px; }
+  .db-row .lb { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--body-fg); }
+  .db-row .tr { height: 10px; border-radius: 99px; background: var(--darkened-bg); overflow: hidden; }
+  .db-row .tr i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #ffb36b, #ff7a59); }
+  .db-row.alt .tr i { background: linear-gradient(90deg, #6fd3b5, #2fa889); }
+  .db-row.alt2 .tr i { background: linear-gradient(90deg, #c4a5ff, #8b62f0); }
+  .db-row .v { text-align: right; color: var(--body-quiet-color); white-space: nowrap; }
+  .db-more { display: inline-block; margin-top: -6px; font-size: 13px; font-weight: 700; }
+  .db-empty { font-size: 12.5px; color: var(--body-quiet-color); }
+  .db-note { margin: 10px 0 0; font-size: 11.5px; color: var(--body-quiet-color); line-height: 1.5; }
+  @media (max-width: 767px) {
+    .db-cards { grid-template-columns: repeat(2, 1fr); }
+    .db-grid { grid-template-columns: 1fr; }
+    .db-days span:nth-child(even) { visibility: hidden; }
+    .db-bar em { font-size: 9.5px; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+{% chat_dashboard as d %}
+<div class="db">
+  <h2 class="db-title">챗봇 한눈에 보기</h2>
+  <p class="db-sub">질문 수는 사용자 메시지(버튼 선택 포함) 기준이고, 1분마다 새로 계산합니다. 게임 분석은 "게임 이용 현황"에 있습니다.</p>
+  <div class="db-cards">
+    <div class="db-card"><b>{{ d.today }}</b><span>오늘 질문</span></div>
+    <div class="db-card"><b>{{ d.week }}</b><span>최근 7일 질문</span></div>
+    <div class="db-card"><b>{{ d.week_sessions }}</b><span>최근 7일 대화</span></div>
+    <div class="db-card{% if d.bad_rate >= 10 %} warn{% endif %}"><b>{{ d.bad_rate }}<small>%</small></b><span>7일 불만족 답변</span></div>
+    <div class="db-card{% if d.err_rate >= 5 %} warn{% endif %}"><b>{{ d.err_rate }}<small>%</small></b><span>7일 오류</span></div>
+    <div class="db-card"><b>{{ d.ask_rate }}<small>%</small></b><span>7일 되물은 답변</span></div>
+    <div class="db-card"><b>{% if d.latency %}{{ d.latency.median }}<small>초</small>{% else %}-{% endif %}</b><span>7일 응답 시간(중앙값){% if d.latency %} · 느린 10% {{ d.latency.p90 }}초{% endif %}</span></div>
+    <div class="db-card{% if d.unknown_rate >= 15 %} warn{% endif %}"><b>{{ d.unknown_rate }}<small>%</small></b><span>30일 스탯창 영웅 인식 실패 ({{ d.unknown_rows }}/{{ d.rows_total }}행)</span></div>
+  </div>
+
+  <div class="db-grid">
+    <div class="db-box wide">
+      <h3>최근 14일 질문 수</h3>
+      <div class="db-bars">
+        {% for r in d.daily %}<div class="db-bar" title="{{ r.date|date:'n/j' }} 질문 {{ r.questions }} · 대화 {{ r.sessions }}"><em>{{ r.questions }}</em><i style="height: {{ r.h }}%"></i></div>{% endfor %}
+      </div>
+      <div class="db-days">{% for r in d.daily %}<span>{{ r.date|date:"n/j" }}</span>{% endfor %}</div>
+      <table class="db-table">
+        <thead><tr><th>날짜</th><th>질문</th><th>대화</th><th>불만족</th><th>오류</th></tr></thead>
+        <tbody>
+          {% for r in d.daily reversed %}{% if r.questions %}
+          <tr><td>{{ r.date|date:"n월 j일 (D)" }}</td><td>{{ r.questions }}</td><td>{{ r.sessions }}</td><td{% if r.bad >= 10 %} class="hot"{% endif %}>{{ r.bad }}%</td><td{% if r.err >= 5 %} class="hot"{% endif %}>{{ r.err }}%</td></tr>
+          {% endif %}{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="db-box">
+      <h3>질문 의도 (30일)</h3>
+      {% for r in d.intents %}<div class="db-row"><span class="lb" title="{{ r.code }}">{{ r.label }}</span><span class="tr"><i style="width: {{ r.pct }}%"></i></span><span class="v">{{ r.pct }}% · {{ r.n }}</span></div>
+      {% empty %}<p class="db-empty">아직 질문이 없어요.</p>{% endfor %}
+    </div>
+
+    <div class="db-box">
+      <h3>자주 나온 내 영웅 (30일)</h3>
+      {% for r in d.heroes %}<div class="db-row alt"><span class="lb">{{ r.label }}</span><span class="tr"><i style="width: {{ r.w }}%"></i></span><span class="v">{{ r.n }}</span></div>
+      {% empty %}<p class="db-empty">아직 없어요.</p>{% endfor %}
+      <h3 style="margin-top: 16px">자주 나온 상대 영웅 (30일)</h3>
+      {% for r in d.enemies %}<div class="db-row alt2"><span class="lb">{{ r.label }}</span><span class="tr"><i style="width: {{ r.w }}%"></i></span><span class="v">{{ r.n }}</span></div>
+      {% empty %}<p class="db-empty">아직 없어요.</p>{% endfor %}
+      <p class="db-note">질문 시점에 챗봇이 알고 있던 내 영웅·상대 영웅을 셉니다.</p>
+    </div>
+  </div>
+  {% for sec in d.extra %}
+  <h2 class="db-title" style="margin-top: 28px">{{ sec.title }}</h2>
+  <div class="db-cards">
+    {% for c in sec.cards %}<div class="db-card"><b>{{ c.value }}{% if c.unit %}<small>{{ c.unit }}</small>{% endif %}</b><span>{{ c.label }}</span></div>{% endfor %}
+  </div>
+  {% if sec.link %}<a class="db-more" href="{{ sec.link }}">{{ sec.link_label }} →</a>{% endif %}
+  {% endfor %}
+  {% if d.scoreboard_latency %}<p class="db-note">스탯창 분석 응답 시간(7일): 중앙값 {{ d.scoreboard_latency.median }}초, 느린 10% {{ d.scoreboard_latency.p90 }}초. 응답 시간은 2026-10-25부터 기록합니다.</p>{% else %}<p class="db-note">응답 시간은 2026-10-25부터 기록합니다.</p>{% endif %}
+</div>
+{{ block.super }}
+{% endblock %}
+
+{% block sidebar %}{% endblock %}
