@@ -14,6 +14,7 @@ from chat.domain.answer_format import (
     drop_role_labels_for,
     drop_single_role_labels,
     enforce_ranking_order,
+    is_short_style,
     extract_inline_suggested_questions,
     fix_skill_keys,
     format_perk_answer,
@@ -123,7 +124,8 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         explanation_question = explanation_question or tank_pair_blocked
         # 간단히/자세히 토글.
         answer_style = state.get("answer_style") or "detailed"
-        is_simple_style = answer_style == "simple"
+        is_simple_style = is_short_style(answer_style)
+        is_command_style = answer_style == "command"
         # "간단히"는 별도 LLM 호출 없이 이번 호출에서 추천 질문까지 함께 받는다.
         suggested_questions_schema_line = SUGGESTED_QUESTIONS_INLINE_SCHEMA_LINE if is_simple_style else ""
         suggested_questions_rules = SUGGESTED_QUESTIONS_INLINE_RULES if is_simple_style else ""
@@ -561,9 +563,13 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                     "없으면(운영 개선/유지 등) 이 블록 없이 서론 없이 바로 4번만 적어라.\n"
                 )
             style_rules_1to5 = (
-                "1. 문단 대신 핵심 아이디어당 한 줄, \\n으로 구분해라. 격식체 종결(~입니다 등) "
-                "대신 \"~하기 좋음\", \"~가능\" 같은 짧은 구로 끝내고, 질문에 나온 영웅/상대를 "
-                "되짚는 서두 없이 바로 본론부터 써라. 같은 섹션 안 항목은 빈 줄 없이 \\n으로만 "
+                "1. 문단 대신 핵심 아이디어당 한 줄, \\n으로 구분해라. "
+                + (
+                    "격식체 종결(~입니다 등) 대신 \"~하기 좋음\", \"~가능\" 같은 짧은 구로 끝내고, "
+                    if is_command_style else
+                    "줄마다 짧은 해요체 문장(~해요, ~좋아요)으로 끝내고 \"~하기 좋음\" 같은 명사형 끝맺음은 쓰지 말고, "
+                )
+                + "질문에 나온 영웅/상대를 되짚는 서두 없이 바로 본론부터 써라. 같은 섹션 안 항목은 빈 줄 없이 \\n으로만 "
                 "구분하고, 빈 줄은 섹션 사이에만 써라.\n"
                 + simple_recommend_rule
                 + "3. 스킬은 단축키를 괄호로 붙여라(단축키는 '스킬 단축키 참고' 표 그대로)."
@@ -585,8 +591,11 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
             else:
                 quick_actions_requested = True
                 style_rules_1to5 += (
-                    f"\n4. {'본문 뒤에' if swap_last else '마지막에'} \"바로 할 것 3가지\" 아래 "
-                    "1~3개 항목을 \"1. \", \"2. \" 숫자 목록으로 적어라."
+                    f"\n4. {'본문 뒤에' if swap_last else '마지막에'} 빈 줄 하나를 두고, 지금 할 행동을 한 줄에 하나씩 "
+                    "최대 5줄 적어라. 줄마다 다른 측면을 다루고 \"포지션: \", \"콤보: \", \"노릴 대상: \", "
+                    "\"생존: \", \"궁극기: \"처럼 짧은 항목 이름을 앞에 붙여라(이 다섯 개는 예시다). "
+                    "질문과 상관있는 측면만 쓰고 줄 수를 억지로 채우지 마라. 제목 줄, 숫자 목록, \"- \"는 쓰지 마라 "
+                    "— 다른 규칙에서 \"바로 할 것 3가지\"라고 부르는 것이 이 줄들이다."
                     + quick_actions_subject_rule
                 )
             stay_preference_instruction = (
@@ -740,9 +749,13 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
             if is_simple_style:
                 perk_brevity_rule = (
                     "\n- 도입부는 스탯을 짚는 한 줄 뒤에 짧은 진단 줄 1~2개만 붙여라"
-                    "(목록 기호 없이 줄만 나눈다).\n  조합 설명 줄은 격식체"
-                    "(~입니다/~합니다) 대신 \"~보완\", \"~때 적합\"처럼 짧은 구로 "
-                    "끝내라.\n  추천 이유(\"*\" 줄) 하나만 문장으로 써도 된다."
+                    "(목록 기호 없이 줄만 나눈다).\n  조합 설명 줄은 "
+                    + (
+                        "격식체(~입니다/~합니다) 대신 \"~보완\", \"~때 적합\"처럼 짧은 구로 끝내라."
+                        "\n  추천 이유(\"*\" 줄) 하나만 문장으로 써도 된다."
+                        if is_command_style else
+                        "짧은 해요체 문장 하나로 끝내라."
+                    )
                 )
             perk_instruction = f"""
 
@@ -973,8 +986,9 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
         )
         if is_perk_answer:
             answer = format_perk_answer(answer)
-        if is_simple_style:
+        if is_command_style:
             answer = shorten_polite_endings(answer)
+        if is_simple_style:
             answer = tidy_simple_sections(answer, quick_actions=quick_actions_requested)
         answer = label_swap_reasons(answer)
         if score_ranking_heroes and len(compared_heroes) < 2:
@@ -1138,7 +1152,7 @@ def generate_matchup_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         subject_role_label = ROLE_LABELS.get(subject_role, "알 수 없음")
 
         answer_style = state.get("answer_style") or "detailed"
-        is_simple_style = answer_style == "simple"
+        is_simple_style = is_short_style(answer_style)
 
         role_filter = state.get("role_filter") or "all"
         role_filter_explicit = state.get("role_filter_explicit", False)
@@ -1282,7 +1296,7 @@ def generate_recommend_card_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
         mode = state.get("recommend_card_mode")
         answer_style = state.get("answer_style") or "detailed"
-        is_simple_style = answer_style == "simple"
+        is_simple_style = is_short_style(answer_style)
         intro_length_instruction = (
             "결론 1문장만" if is_simple_style else "2~3문장으로 자연스럽게 풀어서"
         )
@@ -1704,7 +1718,7 @@ def format_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
     # 특전 답변의 "- "는 형식의 일부라 여기서도 보존한다.
     answer = sanitize_answer_for_user(
         state.get("answer", ""),
-        keep_dash_bullets=answer_style == "simple" or bool(state.get("is_perk_question")),
+        keep_dash_bullets=is_short_style(answer_style) or bool(state.get("is_perk_question")),
     )
 
     # 스킬 단축키는 LLM이 틀리게 쓰는 일이 잦아 원본 문서 표로 다시 맞춘다.

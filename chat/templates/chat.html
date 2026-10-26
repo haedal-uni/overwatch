@@ -6,7 +6,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="csrf-token" content="{{ csrf_token }}" />
+  <script src="/pwa/inset.js"></script>
   <title>오버워치 코치 AI</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/pwa/icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="OW 코치">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet">
@@ -71,6 +77,7 @@
 
     body {
       min-height: 100vh;
+      min-height: 100dvh;
       font-family: 'Noto Sans KR', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       color: var(--text);
       background:
@@ -282,6 +289,9 @@
       font-weight: 800;
       color: var(--text)
     }
+
+    .title-group { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .site-back { display: inline-flex; align-items: center; justify-content: center; flex: none; text-decoration: none; color: inherit; }
 
     .chat-shell {
       border-radius: var(--radius);
@@ -1039,21 +1049,21 @@
 
     .wl-cards {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
     }
 
     .wl-card {
-      min-height: 104px;
-      padding: 12px;
+      min-width: 0;
+      padding: 12px 2px 10px;
       border: 1px solid var(--line);
       border-radius: 18px;
       background: var(--card-solid);
       color: var(--text);
-      text-align: left;
+      text-align: center;
       display: flex;
       flex-direction: column;
-      align-items: flex-start;
+      align-items: center;
       gap: 6px;
       transition: .16s;
     }
@@ -1063,14 +1073,10 @@
     }
 
     .wl-card b {
-      font-size: 14px;
-      font-weight: 800
-    }
-
-    .wl-card>span:last-child {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.4
+      font-size: 12.5px;
+      font-weight: 800;
+      line-height: 1.3;
+      word-break: keep-all
     }
 
     .wl-ico {
@@ -2684,7 +2690,7 @@
     .ha-bf { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
     .ha-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(19, 32, 51, 0); display: flex; align-items: flex-end; justify-content: center; transition: background .2s; }
     .ha-overlay.show { background: rgba(19, 32, 51, .42); }
-    .ha-sheet { width: 100%; max-width: 560px; height: min(88dvh, 760px); box-sizing: border-box; padding: 10px 16px calc(16px + env(safe-area-inset-bottom)); border-radius: 28px 28px 0 0; background: var(--card-solid); color: var(--text); display: flex; flex-direction: column; gap: 12px; transform: translateY(40px); opacity: 0; transition: transform .22s, opacity .22s; }
+    .ha-sheet { width: 100%; max-width: 560px; height: min(88dvh, 760px); box-sizing: border-box; padding: 10px 16px calc(16px + var(--sab, env(safe-area-inset-bottom))); border-radius: 28px 28px 0 0; background: var(--card-solid); color: var(--text); display: flex; flex-direction: column; gap: 12px; transform: translateY(40px); opacity: 0; transition: transform .22s, opacity .22s; }
     .ha-overlay.show .ha-sheet { transform: none; opacity: 1; }
     .ha-grip { align-self: center; width: 44px; height: 5px; border-radius: 99px; background: var(--line); flex: none; }
     .ha-head { display: flex; align-items: center; gap: 8px; }
@@ -2759,7 +2765,7 @@
     .cb-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(19, 32, 51, 0); display: flex; justify-content: center; transition: background .2s; }
     .cb-overlay.show { background: rgba(19, 32, 51, .42); }
     .cb-overlay.busy { cursor: progress; }
-    .cb-panel { width: 100%; max-width: 480px; height: 100dvh; box-sizing: border-box; padding: 12px 16px calc(16px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--text); display: flex; flex-direction: column; gap: 12px; overflow-y: auto; opacity: 0; transform: translateY(24px); transition: opacity .2s, transform .2s; }
+    .cb-panel { width: 100%; max-width: 480px; height: 100%; box-sizing: border-box; padding: 12px 16px calc(16px + var(--sab, env(safe-area-inset-bottom))); background: var(--bg); color: var(--text); display: flex; flex-direction: column; gap: 12px; overflow-y: auto; opacity: 0; transform: translateY(24px); transition: opacity .2s, transform .2s; }
     .cb-overlay.show .cb-panel { opacity: 1; transform: none; }
     .cb-top { display: flex; align-items: center; gap: 10px; flex: none; }
     .cb-top h3 { margin: 0; flex: 1; font-size: 19px; }
@@ -2974,12 +2980,18 @@
       }
 
       body {
-        overflow: auto;
+        overflow: hidden;
         font-size: 90%
       }
 
+      /* 화면에 고정해 실제 보이는 영역에 맞춘다(100dvh는 설치 앱에서 아래가 막대 뒤로 가려졌다). 아래는 --sab만큼 비운다. */
       .app {
-        height: 100dvh;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: var(--sab, 0px);
+        height: auto;
         padding: 0;
         gap: 0
       }
@@ -3360,9 +3372,14 @@
 
     <main class="chat-shell">
       <header class="topbar">
-        <div class="title-wrap">
-          <h1>오버워치 코치 AI</h1>
-          <p>영웅 카운터, 조합, 맵 운영, 스탯 피드백을 질문해보세요.</p>
+        <div class="title-group">
+          <a class="icon-btn site-back" href="/" title="서비스 홈으로" aria-label="서비스 홈으로 돌아가기">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+          </a>
+          <div class="title-wrap">
+            <h1>오버워치 코치 AI</h1>
+            <p>영웅 카운터, 조합, 맵 운영, 스탯 피드백을 질문해보세요.</p>
+          </div>
         </div>
         <div class="actions">
           <button type="button" class="mx-open-btn chat-only" id="matchupBtn" title="영웅 가이드(운영·특전·조합·상성)">
@@ -3422,19 +3439,19 @@
           <div class="wl-cards">
             <button type="button" class="wl-card" data-click="uploadBtn">
               <span class="wl-ico blue"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18"/><path d="M9 10v9"/></svg></span>
-              <b>스탯창 분석</b><span>TAB 캡처로 누가 잘했나</span>
-            </button>
-            <button type="button" class="wl-card" data-click="matchupBtn">
-              <span class="wl-ico orange"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l9 9"/><path d="M20 4l-9 9"/><path d="M3 8V4h4"/><path d="M21 8V4h-4"/><path d="M9 15l-4 5"/><path d="M15 15l4 5"/></svg></span>
-              <b>영웅 가이드</b><span>운영·특전·조합·상성</span>
+              <b>스탯창 분석</b>
             </button>
             <button type="button" class="wl-card" data-click="recordsBtn">
               <span class="wl-ico green"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg></span>
-              <b>내 기록</b><span>판 기록·결과 카드</span>
+              <b>내 기록</b>
+            </button>
+            <button type="button" class="wl-card" data-click="matchupBtn">
+              <span class="wl-ico orange"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l9 9"/><path d="M20 4l-9 9"/><path d="M3 8V4h4"/><path d="M21 8V4h-4"/><path d="M9 15l-4 5"/><path d="M15 15l4 5"/></svg></span>
+              <b>영웅 가이드</b>
             </button>
             <button type="button" class="wl-card" data-click="cardBattleBtn">
               <span class="wl-ico blue"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="10" height="14" rx="2"/><path d="M15 4h4a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2"/></svg></span>
-              <b>카운터 카드 대결</b><span>상성을 게임으로 익히기</span>
+              <b>카운터 카드 대결</b>
             </button>
           </div>
           <div>
@@ -3497,6 +3514,8 @@
     </main>
   </div>
 
+  <script src="{% static 'chat/event_progress.js' %}"></script>
+  <script src="{% static 'chat/voice_input.js' %}"></script>
   <script src="{% static 'chat/my_records.js' %}"></script>
   <script src="{% static 'chat/hero_ask.js' %}"></script>
   <script src="{% static 'chat/death_btn.js' %}"></script>
@@ -4592,6 +4611,7 @@
       try {
         const data = await requestChat(buildRequestBody(text));
         removeTyping();
+        if (window.OwEvents) OwEvents.chat();
         addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card });
       } catch (err) {
         removeTyping(); showError(err.message || '연결에 실패했습니다.');

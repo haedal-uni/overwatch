@@ -19,7 +19,7 @@ from chat.vision.debug_images import (
     delete_scoreboard_debug_dirs as _delete_scoreboard_debug_dirs,
     scoreboard_debug_root,
 )
-from chat.models import ChatLog, ErrorChatLog, SiteSetting, UnsatisfiedChatLog
+from chat.models import ChatLog, ErrorChatLog, MatchStat, SiteSetting, UnsatisfiedChatLog
 from chat.site_settings import clear_cache as clear_site_settings_cache
 
 logger = logging.getLogger(__name__)
@@ -1073,3 +1073,19 @@ class SiteSettingAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
         clear_site_settings_cache()
 
+
+
+@admin.register(MatchStat)
+class MatchStatAdmin(admin.ModelAdmin):
+    """익명으로 모은 판 수치. 읽기 전용이고 지우기만 된다."""
+
+    list_display = ("created_at", "self_hero", "self_rank", "result")
+    list_filter = ("result",)
+    readonly_fields = ("created_at", "stat_key", "ally", "enemy", "self_hero", "self_rank", "result")
+    fields = readonly_fields
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

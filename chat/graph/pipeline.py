@@ -14,6 +14,7 @@ from langgraph.graph import END, START, StateGraph
 from chat.domain.answer_format import (  # noqa: F401
     _format_stat_text,
     extract_inline_suggested_questions,
+    is_short_style,
     sanitize_answer_for_user,
 )
 from chat.graph.canned import (  # noqa: F401
@@ -170,7 +171,7 @@ def route_after_retrieve(state: ChatbotGraphState) -> str:
     if state.get("recommend_card_mode"):
         return "generate_recommend_card"
     # "간단히"는 전략 판단 호출을 생략한다.
-    if state.get("answer_style") == "simple":
+    if is_short_style(state.get("answer_style")):
         return "generate_answer"
     return "judge_strategy"
 
@@ -184,7 +185,7 @@ def route_after_generate(state: ChatbotGraphState) -> str:
     if state.get("choice_buttons"):
         return "format_response"
     # "간단히"는 답변 노드가 추천 질문을 함께 받아오므로 별도 호출이 없다.
-    if state.get("answer_style") == "simple" and len(state.get("suggested_questions") or []) >= 3:
+    if is_short_style(state.get("answer_style")) and len(state.get("suggested_questions") or []) >= 3:
         return "format_response"
     return "generate_suggested_questions"
 

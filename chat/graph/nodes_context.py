@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from chat.rag import components as chatbot_service
 from chat.graph.state import ChatbotGraphState
+from chat.domain.answer_format import ANSWER_STYLES
 from chat.domain.heroes import (
     HERO_TO_ROLE,
     HEROES,
@@ -672,7 +673,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
     # 답변 스타일은 이번 턴 값 우선, 없으면 세션 값.
     requested_answer_style = state.get("answer_style")
-    if requested_answer_style not in ("simple", "detailed"):
+    if requested_answer_style not in ANSWER_STYLES:
         requested_answer_style = None
     answer_style = requested_answer_style or context.get("answer_style") or "detailed"
 

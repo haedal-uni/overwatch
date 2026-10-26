@@ -11,6 +11,14 @@ from chat.domain.heroes import HERO_NAME_TO_CANONICAL, HERO_TO_ROLE
 
 logger = logging.getLogger(__name__)
 
+# 답변 스타일. 명령조는 간단히 형식에 짧은 구 어미를 쓴다.
+ANSWER_STYLES = ("simple", "detailed", "command")
+
+
+def is_short_style(answer_style: Optional[str]) -> bool:
+    """간단히 형식(간단히·명령조)인지."""
+    return answer_style in ("simple", "command")
+
 
 def sanitize_answer_for_user(answer: str, keep_dash_bullets: bool = False) -> str:
     if not answer:
@@ -698,19 +706,41 @@ _SECTION_HEADER_RE = re.compile(
 _NUMBERED_LINE_RE = re.compile(r"^\s*\d+\.\s")
 
 
+_QUICK_ACTIONS_LINE_RE = re.compile(r"^\s*(바로\s*(?:적용)?할\s*것|다음 판에 해볼 것)\s*\d*\s*가지\s*:?\s*$")
+QUICK_ACTIONS_MAX_LINES = 5
+
+
+def _flatten_quick_actions(lines: List[str]) -> List[str]:
+    """간단히의 할 일 줄은 제목 없이 한 줄씩이다. LLM이 붙인 제목 줄을 지우고 그 아래 줄의 번호·"- "를 뗀다."""
+    out: List[str] = []
+    in_block = False
+    count = 0
+    for line in lines:
+        if _QUICK_ACTIONS_LINE_RE.match(line):
+            in_block, count = True, 0
+            if out and out[-1].strip():
+                out.append("")
+            continue
+        if in_block:
+            if not line.strip() or _SECTION_HEADER_RE.match(line):
+                in_block = False
+            else:
+                count += 1
+                if count > QUICK_ACTIONS_MAX_LINES:
+                    continue
+                line = re.sub(r"^\s*(?:\d+\.|-)\s+", "", line)
+        out.append(line)
+    return out
+
+
 def tidy_simple_sections(answer: str, quick_actions: bool = False) -> str:
-    """간단히 답변의 섹션 모양을 맞춘다(제목 없는 끝 숫자 목록에 "바로 할 것 3가지", "운영 팁" 항목의 "- ", 제목 앞 빈 줄)."""
+    """간단히 답변의 섹션 모양을 맞춘다(할 일 줄의 제목·번호 떼기, "운영 팁" 항목의 "- ", 제목 앞 빈 줄)."""
     if not answer:
         return answer
     lines = answer.split("\n")
 
-    if quick_actions and not _QUICK_ACTIONS_HEADER_RE.search(answer):
-        numbered = [i for i, line in enumerate(lines) if _NUMBERED_LINE_RE.match(line)]
-        if len(numbered) >= 2:
-            start = numbered[-1]
-            while start - 1 in numbered:
-                start -= 1
-            lines.insert(start, "바로 할 것 3가지")
+    if quick_actions:
+        lines = _flatten_quick_actions(lines)
 
     in_tips = False
     for i, line in enumerate(lines):

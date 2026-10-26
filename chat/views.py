@@ -8,13 +8,16 @@ from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
+from chat.match_stats import record_match, set_result
 from chat.graph.pipeline import (
     is_session_timed_out,
     role_filter_label,
     run_chatbot_graph,
     try_canned_shortcut,
 )
+from chat.domain.answer_format import ANSWER_STYLES
 from chat.models import ChatLog
+from chat.rag.death_tips import get_death_tip
 from chat.rag.hero_guides import get_hero_guide
 from chat.rag.matchup_tables import get_hero_matchup, get_matchup_roster
 from chat.vision.scoreboard import analyze_scoreboard_image, ScoreboardAnalysisError
@@ -137,6 +140,8 @@ def save_chat_log(
 
 @require_http_methods(["POST"])
 def chat_api(request):
+    # 응답 시간(관리자 분석용, AI 로그 metadata의 elapsed_ms).
+    started = time.monotonic()
     try:
         data = json.loads(request.body or b"{}")
 
@@ -157,7 +162,7 @@ def chat_api(request):
 
         # 알 수 없는 값이면 None으로 넘겨 세션 값을 쓰게 한다.
         answer_style = data.get("answer_style")
-        if answer_style not in ("simple", "detailed"):
+        if answer_style not in ANSWER_STYLES:
             answer_style = None
 
         if reset:
@@ -312,6 +317,7 @@ def chat_api(request):
                     "answer_style": result.get("answer_style"),
                     "matchup_card": result.get("matchup_card"),
                     "recommend_card": result.get("recommend_card"),
+                    "elapsed_ms": round((time.monotonic() - started) * 1000),
                     **({"source": "canned_response"} if is_canned else {}),
                     **({"scoreboard_turn_id": scoreboard_turn_id} if scoreboard_turn_id else {}),
                 },
@@ -354,6 +360,55 @@ def chat_matchups(request):
         "hero": {k: v for k, v in data.items() if k != "even"},
         "guide": get_hero_guide(data["hero"]),
     })
+
+
+@require_http_methods(["GET", "POST"])
+def chat_death(request):
+    """'죽었어요' 버튼.
+
+    GET은 세션이 아는 내 영웅·상대 조합(버튼 창에 먼저 보여 줄 것), POST는 {hero, killer}의 두 줄 답.
+    그래프를 타지 않고, 상성표에 그 짝이 없으면 found=False를 돌려 화면이 평소 채팅으로 묻게 한다.
+    """
+    context = request.session.get("coach_context", {})
+    if is_session_timed_out(context):
+        context = {}
+
+    if request.method == "GET":
+        return JsonResponse({
+            "hero": context.get("current_hero"),
+            "enemies": list(context.get("enemy_team") or [])[:6],
+        })
+
+    try:
+        data = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "요청 형식이 올바르지 않습니다."}, status=400)
+    hero = str(data.get("hero") or "").strip()[:30]
+    killer = str(data.get("killer") or "").strip()[:30]
+    if not hero or not killer:
+        return JsonResponse({"error": "내 영웅과 상대 영웅을 골라 주세요."}, status=400)
+
+    tip = get_death_tip(hero, killer)
+    log_session_id = ensure_log_session_id(request)
+    turn_id = str(uuid.uuid4())
+    try:
+        save_chat_log(
+            log_session_id=log_session_id, turn_id=turn_id, role="USER",
+            message=f"[죽었어요] {hero} → {killer}에게 처치", intent="death_tip",
+            current_hero=hero, target_enemy=killer,
+        )
+        save_chat_log(
+            log_session_id=log_session_id, turn_id=turn_id, role="AI",
+            message=f"{tip['do']}\n{tip['why']}" if tip else "(상성표에 없는 짝 — 채팅으로 넘김)",
+            intent="death_tip", current_hero=hero, target_enemy=killer,
+            metadata={"death_tip": tip} if tip else {},
+        )
+    except Exception:
+        logger.exception("죽었어요 로그 저장 실패")
+
+    if not tip:
+        return JsonResponse({"found": False, "turn_id": turn_id})
+    return JsonResponse({"found": True, "turn_id": turn_id, **tip})
 
 
 @require_http_methods(["POST"])
@@ -401,6 +456,7 @@ def chat_scoreboard_ocr(request):
 
     진단 정보(admin_log)는 ChatLog.metadata에만 남기고 응답에는 넣지 않는다.
     """
+    started = time.monotonic()
     try:
         image_file = request.FILES.get("image")
 
@@ -439,6 +495,7 @@ def chat_scoreboard_ocr(request):
             metadata={
                 "source": "chat_scoreboard_analysis",
                 "admin_log": admin_log,
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
             },
         )
 
@@ -477,7 +534,12 @@ def chat_scoreboard_ocr(request):
             request.session["coach_context"] = conversation_context
             request.session.modified = True
 
-        return JsonResponse({"report": result["report"], "turn_id": turn_id, "match": result.get("match")})
+        match = result.get("match")
+        if match:
+            key = record_match(match)
+            if key:
+                match["stat_key"] = key
+        return JsonResponse({"report": result["report"], "turn_id": turn_id, "match": match})
 
     except ScoreboardAnalysisError as e:
         logger.warning("chat_scoreboard_ocr 분석 실패: %s", e)
@@ -490,3 +552,12 @@ def chat_scoreboard_ocr(request):
         save_error_log(request, e, source="chat_scoreboard_ocr")
 
         return JsonResponse({"error": "이미지 분석 중 오류가 발생했습니다."}, status=500)
+
+@require_http_methods(["POST"])
+def chat_match_result(request):
+    """사용자가 고른 승패를 그 판 통계에 남긴다."""
+    try:
+        data = json.loads(request.body or "{}")
+    except ValueError:
+        return JsonResponse({"error": "잘못된 요청입니다."}, status=400)
+    return JsonResponse({"ok": set_result(str(data.get("stat_key") or ""), data.get("result"))})
