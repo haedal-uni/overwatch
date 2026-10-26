@@ -73,6 +73,73 @@ MIN_HEROES_FOR_TEAM_CONTEXT = 3
 
 TEAM_LABELS = {"my": "우리팀", "enemy": "상대팀"}
 
+SWITCHED_HERO_REASON = "경감 기술이 없는 영웅인데 경감이 찍힘 — 판 도중 다른 영웅을 하다 바꿔 다른 영웅의 기록이 섞였다"
+
+
+def _profile(entry: Dict[str, Any]) -> Dict[str, Any]:
+    from chat.rag.hero_stat_profiles import hero_stat_profile
+
+    return hero_stat_profile(entry["hero"])
+
+
+def hero_switched(entry: Dict[str, Any]) -> bool:
+    """경감 기술이 없는 영웅에 경감이 찍혔으면 판 도중 영웅을 바꾼 것이다."""
+    mitigation = entry["stats"]["mitigation"]
+    return bool(mitigation) and bool(_profile(entry).get("mitigation_none"))
+
+
+# 영웅 기대치 보정: 기본 무기 초당 수치 ÷ 같은 역할 중앙값을 이 범위로 자른 값으로 나눠 비교한다.
+RATE_FACTOR_MIN, RATE_FACTOR_MAX = 0.7, 1.3
+RATE_FIELDS = {"damage": "weapon_dps", "healing": "weapon_hps"}
+RATE_ADJUSTED_NOTE = "이 영웅 기준 환산"
+
+_reference_rates: Optional[Dict[tuple, float]] = None
+
+
+def _role_reference_rates() -> Dict[tuple, float]:
+    """{(역할, 필드): 중앙값}. 보정 제외 영웅도 중앙값 계산에는 넣는다."""
+    global _reference_rates
+    if _reference_rates is None:
+        from statistics import median
+
+        from chat.rag.hero_stat_profiles import get_hero_stat_profiles
+
+        grouped: Dict[tuple, List[float]] = {}
+        for hero, profile in get_hero_stat_profiles().items():
+            role = HERO_TO_ROLE.get(hero)
+            for field in RATE_FIELDS.values():
+                if role and profile.get(field):
+                    grouped.setdefault((role, field), []).append(profile[field])
+        _reference_rates = {key: median(values) for key, values in grouped.items()}
+    return _reference_rates
+
+
+def rate_factor(entry: Dict[str, Any], metric: str) -> float:
+    """이 영웅의 피해·치유가 같은 역할 평균보다 원래 얼마나 잘 쌓이는지(1 = 보정 없음)."""
+    field = RATE_FIELDS.get(metric)
+    if not field or (metric == "healing" and entry["role"] != "support"):
+        return 1.0
+    profile = _profile(entry)
+    rate = profile.get(field)
+    reference = _role_reference_rates().get((entry["role"], field))
+    if not rate or not reference or profile.get("no_rate_adjust") or hero_switched(entry):
+        return 1.0
+    return min(max(rate / reference, RATE_FACTOR_MIN), RATE_FACTOR_MAX)
+
+
+def _adjusted(entry: Dict[str, Any], metric: str) -> Optional[float]:
+    value = entry["stats"][metric]
+    return None if value is None else value / rate_factor(entry, metric)
+
+
+def _core_mitigation_reason(profile: Dict[str, Any]) -> str:
+    skills = "·".join(s.split("(")[0] for s in profile.get("mitigation_skills") or [])
+    skill_text = f"핵심 기술({skills})" if skills else "핵심 기술"
+    return (
+        f"경감이 쌓이는 {skill_text}이 피해를 막는 데 한 번도 쓰이지 않았다 "
+        "— 쓰지 않았거나 피해를 막을 수 없는 때에 썼다"
+    )
+
 
 def hero_stat_type(hero: str) -> Optional[str]:
     """영웅의 스탯 판정 유형 키. 모르는 영웅이면 None."""
@@ -267,14 +334,19 @@ def judge_entry(
         if not group:
             result[metric] = {"verdict": "판정 제외", "value": value, "mean": None, "reason": "비교 대상 없음"}
             continue
-        peers = [e["stats"][metric] for e in group]
-        verdict = _raw_verdict(metric, value, peers)
+        factor = rate_factor(entry, metric)
+        peers = [_adjusted(e, metric) for e in group]
+        verdict = _raw_verdict(metric, value / factor, peers)
+        adjusted = factor != 1.0 or any(rate_factor(e, metric) != 1.0 for e in group)
         reason = None
         if verdict == "약점" and widened and metric != "deaths":
             verdict, reason = "비슷", "같은 유형 비교 대상이 없어 다른 유형과 비교함"
         if verdict == "약점" and weight <= BONUS_ONLY_WEIGHT:
             verdict, reason = "비슷", "이 유형에선 가점으로만 보는 지표"
-        result[metric] = {"verdict": verdict, "value": value, "mean": _mean(peers), "reason": reason}
+        result[metric] = {
+            "verdict": verdict, "value": value, "mean": _mean(peers) * factor, "reason": reason,
+            "adjusted": adjusted,
+        }
 
     def _verdict(metric):
         return result.get(metric, {}).get("verdict")
@@ -294,12 +366,23 @@ def judge_entry(
         if reason:
             _soften("healing", reason)
 
+    mitigation = entry["stats"]["mitigation"]
+    profile = _profile(entry)
+    if mitigation == 0 and profile.get("mitigation_core"):
+        result["mitigation"] = {
+            "verdict": "약점", "value": 0, "mean": None, "reason": _core_mitigation_reason(profile),
+        }
+    elif hero_switched(entry):
+        result["mitigation"] = {
+            "verdict": "판정 제외", "value": mitigation, "mean": None, "reason": SWITCHED_HERO_REASON,
+        }
+
     return result
 
 
 def _score_value(entry, metric, context) -> Optional[float]:
     """종합 점수에 쓰는 값. 힐러 치유량은 그 팀이 받은 피해로 보정한다."""
-    value = entry["stats"][metric]
+    value = _adjusted(entry, metric)
     if value is None:
         return None
     if metric == "healing" and entry["role"] == "support" and context:
@@ -476,7 +559,8 @@ def _format_entry_verdicts(entry, verdicts) -> str:
             continue
         text = f"{METRIC_LABELS[metric]} {_fmt(info['value'])} {info['verdict']}"
         if info["mean"] is not None and info["verdict"] in ("강점", "약점"):
-            text += f"(비교 평균 {_fmt(info['mean'])})"
+            note = f", {RATE_ADJUSTED_NOTE}" if info.get("adjusted") else ""
+            text += f"(비교 평균 {_fmt(info['mean'])}{note})"
         if info["reason"]:
             text += f" — {info['reason']}"
         parts.append(text)
