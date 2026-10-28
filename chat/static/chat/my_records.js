@@ -28,12 +28,25 @@
     try { localStorage.setItem(KEY, JSON.stringify(list.slice(0, MAX_RECORDS))); } catch (e) { /* 저장이 막힌 브라우저 */ }
   }
 
+  // 승패를 고르면 그 판의 익명 통계에도 남긴다(실패해도 기록에는 영향이 없다).
+  function reportResult(record) {
+    const key = record.match && record.match.stat_key;
+    if (!key || !record.result) return;
+    const m = document.cookie.match(/(?:^|; )csrftoken=([^;]+)/);
+    fetch("/chat/api/match-result/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRFToken": m ? decodeURIComponent(m[1]) : "" },
+      body: JSON.stringify({ stat_key: key, result: record.result }),
+    }).catch(() => {});
+  }
+
   function setResult(id, result) {
     const list = load();
     const record = list.find((r) => r.id === id);
     if (!record) return null;
     record.result = result || undefined;
     store(list);
+    reportResult(record);
     return record;
   }
 
@@ -47,6 +60,7 @@
     const record = { id: id || String(Date.now()), ts: Date.now(), match };
     list.unshift(record);
     store(list);
+    if (window.OwEvents) window.OwEvents.scoreboard(match);
     return record;
   }
 
