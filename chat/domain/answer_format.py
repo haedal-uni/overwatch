@@ -782,6 +782,37 @@ def drop_echo_title(answer: str, message: str) -> str:
     return "\n".join(lines[1:]).lstrip("\n")
 
 
+_INTRO_ANNOUNCE_RE = re.compile(
+    r"(정리해\s*(?:줄게|드릴게요|드리겠습니다)|알려\s*(?:줄게|드릴게요|드리겠습니다)|살펴\s*(?:볼게요|보겠습니다)|정리했어요|알아볼게요)\s*[.!~:]*\s*$"
+)
+
+
+def drop_intro_announcement(answer: str) -> str:
+    """첫 줄이 안내 문장(~해 줄게, ~드릴게요)이면 지운다."""
+    if not answer:
+        return answer
+    lines = answer.split("\n")
+    first = lines[0].strip()
+    if len(lines) < 2 or len(first) > 60 or not _INTRO_ANNOUNCE_RE.search(first):
+        return answer
+    return "\n".join(lines[1:]).lstrip("\n")
+
+
+_KNOWN_SLIPS = [
+    (re.compile(r"순단\s*이동"), "순간이동"),
+    (re.compile(r"추노"), "추격"),
+]
+
+
+def fix_known_slips(text: str) -> str:
+    """답변·추천 질문에서 LLM이 자주 내는 오타·은어를 고친다."""
+    if not text:
+        return text
+    for pattern, repl in _KNOWN_SLIPS:
+        text = pattern.sub(repl, text)
+    return text
+
+
 _DYING_STATE_RE = re.compile(r"빈사\s*상태")
 _DYING_BEFORE_NOUN_RE = re.compile(r"빈사(?:인|의)?\s+(?=[가-힣])")
 
