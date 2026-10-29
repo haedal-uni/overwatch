@@ -3405,6 +3405,10 @@
                 <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="10" height="14" rx="2"/><path d="M15 4h4a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2"/></svg>
                 <span>카운터 카드 대결</span>
               </button>
+              <button type="button" class="more-item" id="syncBtn" role="menuitem">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="13" height="10" rx="1.5"/><path d="M5 18h7"/><rect x="16" y="8" width="6" height="12" rx="1.5"/></svg>
+                <span>PC·폰 기록 연결</span>
+              </button>
               <button type="button" class="more-item" id="saveChatBtn" role="menuitem">
                 <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v6h8V4"/><path d="M8 14h8v6H8z"/></svg>
                 <span>대화 저장</span>
@@ -3517,6 +3521,7 @@
   <script src="{% static 'chat/event_progress.js' %}"></script>
   <script src="{% static 'chat/voice_input.js' %}"></script>
   <script src="{% static 'chat/my_records.js' %}"></script>
+  <script src="{% static 'chat/sync.js' %}"></script>
   <script src="{% static 'chat/hero_ask.js' %}"></script>
   <script src="{% static 'chat/death_btn.js' %}"></script>
   <script src="{% static 'chat/card_battle.js' %}"></script>
@@ -3577,9 +3582,9 @@
         return matchupCache.roles;
       },
       isBusy: () => state.busy,
-      send: (text, heroes) => { input.value = text; autoResize(); pendingHeroes = heroes; sendMessage(); },
+      send: (text, heroes) => { input.value = text; autoResize(); setSource('hero_ask'); pendingHeroes = heroes; sendMessage(); },
     });
-    const sendFromPanel = (text, heroes) => { input.value = text; autoResize(); pendingHeroes = heroes; sendMessage(); };
+    const sendFromPanel = (source) => (text, heroes) => { input.value = text; autoResize(); setSource(source); pendingHeroes = heroes; sendMessage(); };
     const loadRoster = async () => {
       if (!matchupCache.roles) matchupCache.roles = (await fetchMatchups()).roles;
       return matchupCache.roles;
@@ -3595,7 +3600,7 @@
       removeTyping: () => removeTyping(),
       showError: (msg) => showError(msg),
       getCsrf: () => getCsrf(),
-      send: sendFromPanel,
+      send: sendFromPanel('death'),
     });
     window.CardBattle?.init({
       iconBase: HERO_ICON_BASE,
@@ -3604,10 +3609,12 @@
       fetchHero: (name) => fetchMatchups(name),
       isBusy: () => state.busy,
       showError: (msg) => showError(msg),
-      send: sendFromPanel,
+      send: sendFromPanel('card_battle'),
     });
     function heroIcon(name) { return `${HERO_ICON_BASE}${encodeURIComponent(name || '')}.png`; }
     const input = $('userInput');
+    // 질문 출처(직접 입력·예시·추천 질문 등)는 관리자 로그에서 구분하려고 서버에 함께 보낸다.
+    const setSource = (source) => { input.dataset.source = source; };
     const sendBtn = $('sendBtn');
     const AI_AVATAR_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><line x1="12" y1="8" x2="12" y2="4"/><circle cx="12" cy="3" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="14" r="1.6" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.6" fill="currentColor" stroke="none"/></svg>';
 
@@ -3778,7 +3785,7 @@
     }));
     document.addEventListener('click', (e) => {
       const fill = e.target.closest('[data-fill]');
-      if (fill) { input.value = fill.dataset.fill; autoResize(); input.focus(); }
+      if (fill) { input.value = fill.dataset.fill; autoResize(); setSource('example'); input.focus(); }
       // 첫 화면 카드는 같은 기능의 버튼(영웅으로 묻기·스탯창·상성표·내 기록)을 대신 누른다.
       const proxy = e.target.closest('[data-click]');
       if (proxy) $(proxy.dataset.click)?.click();
@@ -3791,6 +3798,13 @@
 
     function autoResize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 130) + 'px'; }
     input.addEventListener('input', autoResize);
+    // 사용자가 직접 고치면 출처에 "_edited"를 붙인다(음성 입력 등 프로그램이 낸 input 이벤트는 건너뛴다).
+    input.addEventListener('input', (e) => {
+      if (!e.isTrusted) return;
+      const cur = input.dataset.source || 'typed';
+      if (!input.value.trim()) setSource('typed');
+      else if (cur !== 'typed' && !cur.endsWith('_edited')) setSource(cur + '_edited');
+    });
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 
     // ── 스탯창(TAB) 이미지 업로드 ──
@@ -3854,7 +3868,7 @@
       addMessage('user', text || '스탯창 분석해줘', { context: '스탯창 이미지 첨부', stats: text ? hasStats(text) : false, recent: Boolean(text) });
       input.value = ''; autoResize();
       clearAttachedImage();
-      state.busy = true; sendBtn.disabled = true; uploadBtn.disabled = true; addTyping();
+      state.busy = true; sendBtn.disabled = true; uploadBtn.disabled = true; addTyping(IMAGE_TYPING_STEPS);
       try {
         const board = await requestScoreboard(file, !text);
         if (!text) {
@@ -4265,6 +4279,7 @@
       closeMatchupModal();
       input.value = question;
       autoResize();
+      setSource('guide');
       sendMessage();  // 응답 대기 중이면 전송만 안 되고 질문은 입력창에 남는다
     }
 
@@ -4272,6 +4287,7 @@
       closeMatchupModal();
       input.value = text;
       autoResize();
+      setSource('guide');
       input.focus();
       input.setSelectionRange(text.length, text.length);
     }
@@ -4504,18 +4520,22 @@
           else if (item.type === 'focus_hero') sendFocusHero(item.value, item.label);
           else if (item.type === 'roster_size') sendRosterSize(item.value, item.label);
           // 버튼이 뜻하는 문장(예: "상대 트레이서")을 사용자가 입력한 것처럼 보낸다.
-          else if (item.type === 'message') { if (!state.busy) { input.value = item.value; sendMessage(); } }
-          else { input.value = item.label; autoResize(); input.focus(); }
+          else if (item.type === 'message') { if (!state.busy) { input.value = item.value; setSource('button'); sendMessage(); } }
+          else { input.value = item.label; autoResize(); setSource('button'); input.focus(); }
         });
         box.appendChild(btn); has = true;
       });
       (options.suggested || []).slice(0, 3).forEach(q => {
         const btn = document.createElement('button'); btn.className = 'suggest-btn'; btn.textContent = q;
         // 누르면 입력창을 거치지 않고 바로 질문으로 보낸다.
-        btn.addEventListener('click', () => { if (state.busy) return; input.value = q; autoResize(); sendMessage(); });
+        btn.addEventListener('click', () => { if (state.busy) return; input.value = q; autoResize(); setSource('suggested'); sendMessage(); });
         box.appendChild(btn); has = true;
       });
       return has ? box : null;
+    }
+    // 미니 게임을 해 본 기기면 그 기기 ID를 읽는다(좋은 의견에 관리자가 게임 선물을 보낼 때 쓴다, 게임이 없으면 빈 값).
+    function gameDeviceId() {
+      try { return (JSON.parse(localStorage.getItem('game.player') || '{}') || {}).id || ''; } catch (e) { return ''; }
     }
     function buildFeedbackUI(turnId) {
       const row = document.createElement('div'); row.className = 'feedback-row';
@@ -4546,7 +4566,7 @@
           const res = await fetch('/chat/api/feedback/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
-            body: JSON.stringify({ turn_id: turnId, reason })
+            body: JSON.stringify({ turn_id: turnId, reason, device: gameDeviceId() })
           });
           const data = await parseJsonOrThrow(res);
           if (!res.ok || data.error) throw new Error(data.error || '피드백 전송에 실패했습니다.');
@@ -4564,18 +4584,43 @@
       row.appendChild(toggle); row.appendChild(form);
       return row;
     }
-    function addTyping() {
+    // 답변이 평균 7초 걸려서, 기다리는 동안 지금 무엇을 하는지 문구를 바꿔 보여 준다.
+    const TYPING_STEPS = [
+      [0, '질문을 살펴보고 있어요'],
+      [1800, '영웅 자료에서 근거를 찾고 있어요'],
+      [4200, '답변을 정리하고 있어요'],
+      [8000, '거의 다 됐어요. 조금만 기다려 주세요'],
+      [14000, '평소보다 오래 걸리고 있어요. 잠시만 기다려주세요'],
+    ];
+    const IMAGE_TYPING_STEPS = [
+      [0, '스탯창 이미지를 읽고 있어요'],
+      [3000, '영웅과 숫자를 확인하고 있어요'],
+      [7000, '분석을 정리하고 있어요'],
+      [14000, '평소보다 오래 걸리고 있어요. 잠시만 기다려주세요'],
+    ];
+    let typingTimers = [];
+    function addTyping(steps = TYPING_STEPS) {
       const row = document.createElement('div'); row.className = 'msg ai'; row.id = 'typing';
-      row.innerHTML = `<div class="avatar">${AI_AVATAR_ICON}</div><div class="bubble-wrap"><div class="meta">코치 AI</div><div class="bubble"><div class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>답변을 준비하고 있습니다.</span></div></div></div>`;
+      row.innerHTML = `<div class="avatar">${AI_AVATAR_ICON}</div><div class="bubble-wrap"><div class="meta">코치 AI</div><div class="bubble"><div class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="typing-text">${steps[0][1]}</span></div></div></div>`;
       messages.appendChild(row); messages.scrollTop = messages.scrollHeight;
+      typingTimers.forEach(clearTimeout);
+      typingTimers = steps.slice(1).map(([ms, text]) => setTimeout(() => {
+        const el = row.querySelector('.typing-text');
+        if (el) el.textContent = text;
+      }, ms));
     }
-    function removeTyping() { $('typing')?.remove(); }
+    function removeTyping() { typingTimers.forEach(clearTimeout); typingTimers = []; $('typing')?.remove(); }
     function showError(msg) {
       const div = document.createElement('div'); div.className = 'error'; div.textContent = msg;
       messages.appendChild(div); messages.scrollTop = messages.scrollHeight;
     }
     function buildRequestBody(message, roleFilter, focusHero, rosterSize) {
       const body = { message: message || '', answer_style: state.answerStyle };
+      if (message) {
+        body.question_source = input.dataset.source || 'typed'; setSource('typed');
+        const mains = window.MatchRecords?.mainHeroes?.() || [];
+        if (mains.length) body.main_heroes = mains;
+      }
       if (roleFilter) body.role_filter = roleFilter;
       if (focusHero) body.focus_hero = focusHero;
       if (rosterSize) body.roster_size = Number(rosterSize);
@@ -4685,7 +4730,8 @@
       moreBtn.setAttribute('aria-expanded', String(open));
     }
     moreBtn.addEventListener('click', (e) => { e.stopPropagation(); setMoreMenu(moreMenu.hidden); });
-    moreMenu.addEventListener('click', (e) => { if (e.target.closest('#saveChatBtn, #helpBtn, #cardBattleBtn')) setMoreMenu(false); });
+    moreMenu.addEventListener('click', (e) => { if (e.target.closest('#saveChatBtn, #helpBtn, #cardBattleBtn, #syncBtn')) setMoreMenu(false); });
+    $('syncBtn').addEventListener('click', () => window.OwSync?.open());
     document.addEventListener('click', (e) => { if (!moreMenu.hidden && !moreMenu.contains(e.target)) setMoreMenu(false); });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !moreMenu.hidden) setMoreMenu(false); });
 
@@ -4883,7 +4929,9 @@
       } catch (e) { return []; }
     }
     function setSavedChats(list) {
-      try { localStorage.setItem(SAVED_CHATS_KEY, JSON.stringify(list)); } catch (e) { }
+      // 바꾼 시각을 함께 남겨 PC·폰 동기화에서 나중에 바꾼 쪽이 이기게 한다.
+      try { localStorage.setItem(SAVED_CHATS_KEY, JSON.stringify(list)); localStorage.setItem(SAVED_CHATS_KEY + '_ts', String(Date.now())); } catch (e) { }
+      window.OwSync?.dirty();
     }
     function formatSavedAt(ts) {
       const d = new Date(ts);
