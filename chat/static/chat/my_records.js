@@ -26,6 +26,7 @@
   }
   function store(list) {
     try { localStorage.setItem(KEY, JSON.stringify(list.slice(0, MAX_RECORDS))); } catch (e) { /* 저장이 막힌 브라우저 */ }
+    if (window.OwSync) window.OwSync.dirty();
   }
 
   // 승패를 고르면 그 판의 익명 통계에도 남긴다(실패해도 기록에는 영향이 없다).
@@ -48,6 +49,20 @@
     store(list);
     reportResult(record);
     return record;
+  }
+
+  // 스탯창으로 분석한 판에서 내 영웅을 센다(2판 이상 한 영웅, 많은 순 3명). 추천 질문에 함께 보낸다.
+  function mainHeroes(limit = 3, min = 2) {
+    const counts = {};
+    load().forEach((r) => {
+      const hero = r.match && r.match.self_hero;
+      if (hero && !/^미확인|unknown/i.test(hero)) counts[hero] = (counts[hero] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .filter(([, n]) => n >= min)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([hero, count]) => ({ hero, count }));
   }
 
   const hasNumbers = (match) => !!match && (match.ally || []).some((p) => p.kills != null || p.damage != null);
@@ -441,5 +456,6 @@
     },
     actionBar,
     openRecords,
+    mainHeroes,
   };
 })();

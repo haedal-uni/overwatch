@@ -101,3 +101,91 @@ class SiteSetting(models.Model):
         self.pk = 1
         super().save(*args, **kwargs)
 
+
+class Notice(models.Model):
+    """홈 화면(`/`)에 띄우는 공지사항."""
+
+    POSITION_CHOICES = [("top", "위쪽"), ("bottom", "아래쪽")]
+
+    message = models.TextField("공지 내용", max_length=500)
+    position = models.CharField("보이는 곳", max_length=10, choices=POSITION_CHOICES, default="top")
+    is_active = models.BooleanField("켜짐", default=True)
+    starts_at = models.DateTimeField("시작", null=True, blank=True, help_text="비우면 바로 보인다.")
+    ends_at = models.DateTimeField("끝", null=True, blank=True, help_text="비우면 끄기 전까지 보인다.")
+    created_at = models.DateTimeField("만든 시각", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "공지사항"
+        verbose_name_plural = "공지사항"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.message[:40]
+
+
+
+class MatchStat(models.Model):
+    """스탯창 분석에서 읽은 판 수치(익명 통계용). 닉네임·이미지·세션·IP는 저장하지 않는다."""
+
+    RESULT_CHOICES = [("win", "승리"), ("loss", "패배"), ("draw", "무승부")]
+
+    created_at = models.DateTimeField("저장 시각", auto_now_add=True)
+    stat_key = models.CharField("판 식별값", max_length=64, unique=True)
+    ally = models.JSONField("우리팀 줄", default=list)
+    enemy = models.JSONField("상대팀 줄", default=list)
+    self_hero = models.CharField("내 영웅", max_length=40, blank=True, default="")
+    self_rank = models.PositiveSmallIntegerField("내 순위", null=True, blank=True)
+    result = models.CharField("승패", max_length=8, choices=RESULT_CHOICES, blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "판 통계"
+        verbose_name_plural = "판 통계"
+
+    def __str__(self):
+        return f"{self.created_at:%Y-%m-%d %H:%M} {self.self_hero or '-'}"
+
+
+class SyncGroup(models.Model):
+    """PC·폰을 6자리 코드로 묶은 한 사람의 기록 묶음(로그인 없음). 3개월 동안 어느 기기도 오지 않으면 통째로 지운다."""
+
+    # 내 기록(스탯창 판 요약, 최근 100판)과 저장한 대화(최대 2개, 마지막으로 바꾼 쪽이 이긴다).
+    records = models.JSONField("내 기록", default=list)
+    saved_chats = models.JSONField("저장한 대화", default=list)
+    saved_chats_ts = models.BigIntegerField("저장한 대화 바꾼 시각(ms)", default=0)
+    created_at = models.DateTimeField("만든 시각", auto_now_add=True)
+    last_seen = models.DateTimeField("마지막 사용", auto_now=True, db_index=True)
+
+    class Meta:
+        verbose_name = "기기 연결"
+        verbose_name_plural = "기기 연결"
+
+    def __str__(self):
+        return f"연결 {self.pk}"
+
+
+class SyncDevice(models.Model):
+    """연결 묶음에 속한 기기. device_id는 브라우저가 만든 무작위 값이다."""
+
+    device_id = models.CharField("기기 ID", max_length=64, unique=True)
+    group = models.ForeignKey(SyncGroup, on_delete=models.CASCADE, related_name="devices")
+    label = models.CharField("기기 종류", max_length=40, blank=True)
+    # 이 기기에서 센 이벤트 횟수({"chat", "cards", "shots": [판 해시]}). 묶음 합계는 기기별로 더한다.
+    events = models.JSONField("이벤트 횟수", default=dict)
+    last_seen = models.DateTimeField("마지막 사용", auto_now=True)
+
+    class Meta:
+        verbose_name = "연결된 기기"
+        verbose_name_plural = "연결된 기기"
+
+    def __str__(self):
+        return f"{self.label or '기기'} {self.device_id[:8]}"
+
+
+class SyncCode(models.Model):
+    """다른 기기를 묶을 때 쓰는 6자리 숫자(10분, 한 번만)."""
+
+    code = models.CharField("코드", max_length=6, db_index=True)
+    group = models.ForeignKey(SyncGroup, on_delete=models.CASCADE, related_name="codes")
+    expires_at = models.DateTimeField("만료")
+    used = models.BooleanField("사용함", default=False)
