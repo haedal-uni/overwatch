@@ -48,6 +48,11 @@ ROLE_ICON_FILE_TO_CODE = {"탱커": "tank", "딜러": "damage"}
 ROSTER_SIZE_MIN_CORRELATION = 0.3
 ROSTER_SIZE_MIN_MARGIN = 0.15
 
+# 행 높이 ÷ 팀 패널 폭. 나간 사람은 행이 없어 팀마다 보이는 행 수를 이 비율로 센다.
+ROW_HEIGHT_TO_PANEL_WIDTH = 0.075
+ROW_COUNT_TOLERANCE = 0.25
+ROLE_ORDER = ("tank", "damage", "support")
+
 # 역할 문양 모양 비교(cv2.matchShapes) 기준. 값이 작을수록 비슷하다.
 ROLE_ICON_TANK_MAX_SHAPE_DISTANCE = 0.08
 ROLE_ICON_DAMAGE_MAX_SHAPE_DISTANCE = 0.35
@@ -58,6 +63,9 @@ HERO_ICON_METHOD_LABEL = "hero_icons 폴더 유사도 매칭 (OpenCV 템플릿 �
 ROLE_HERO_NAME_SETS: Dict[str, set] = {
     role: {normalize_hero_name(h) or h for h in heroes}
     for role, heroes in ROLE_HEROES.items()
+}
+HERO_TO_ROLE_CODE: Dict[str, str] = {
+    hero: role for role, names in ROLE_HERO_NAME_SETS.items() for hero in names
 }
 
 # --- HSV 기준 팀 배경색 판정 (OpenCV의 H는 0~179 스케일) ---
@@ -437,8 +445,11 @@ def _match_hero_icon(
     pre_role_top = [{"hero": n, "score": round(s, 3)} for n, s, *_ in scores[:TOP_MATCHES_COUNT]]
     pre_role_best = scores[0][1]
 
-    role_name_set = ROLE_HERO_NAME_SETS.get(role_code, set()) if role_code else set()
-    role_scores = [t for t in scores if t[0] in role_name_set]
+    if role_code is None:
+        role_scores = [t for t in scores if t[0] in HERO_TO_ROLE_CODE]
+    else:
+        role_name_set = ROLE_HERO_NAME_SETS.get(role_code, set())
+        role_scores = [t for t in scores if t[0] in role_name_set]
 
     if not role_scores:
         # 역할 템플릿이 없으면 전체 후보로 폴백하지 않고 unknown 처리한다.
@@ -703,6 +714,52 @@ def _force_valid_role_labels(matches: List[Dict[str, Any]], n: int) -> List[str]
             labels.append("damage")
     labels += ["support"] * (n - combat_count)
     return labels
+
+
+def _visible_row_count(entry: Dict[str, Any]) -> Optional[int]:
+    """팀 패널 높이와 폭으로 실제 보이는 행 수를 센다. 정수에 가깝지 않으면 None."""
+    player_area_box, team_box = entry.get("player_area_box"), entry.get("team_box")
+    if not entry.get("layout_validation_ok") or not player_area_box or not team_box:
+        return None
+    width = team_box["x1"] - team_box["x0"]
+    height = player_area_box["y1"] - player_area_box["y0"]
+    if width <= 0 or height <= 0:
+        return None
+    rows = height / (width * ROW_HEIGHT_TO_PANEL_WIDTH)
+    n = int(round(rows))
+    if n < 1 or abs(rows - n) > ROW_COUNT_TOLERANCE:
+        return None
+    return n
+
+
+def _provisional_role_codes(
+    cv2, np, image, player_area_box: Dict[str, int], n: int, role_templates: Dict[str, List[Any]],
+) -> List[str]:
+    """나간 사람이 있는 팀의 임시 역할(문양 판별을 역할 순서로 정렬). 영웅 인식 뒤 다시 정한다."""
+    x0, x1 = player_area_box["x0"], player_area_box["x1"]
+    labels = []
+    for ry in _slice_bounds((player_area_box["y0"], player_area_box["y1"]), n):
+        if ry is None:
+            labels.append("support")
+            continue
+        rx0, ry0, rx1, ry1 = _role_icon_crop_box(ry, x0, x1)
+        labels.append(_classify_role_icon(cv2, np, image[ry0:ry1, rx0:rx1], role_templates)["role_code"] or "support")
+    return sorted(labels, key=ROLE_ORDER.index)
+
+
+def _fill_open_roles(known: List[Optional[str]], provisional: List[str]) -> List[str]:
+    """영웅으로 역할을 안 행은 그대로, 모르는 행은 임시 역할을 위아래 행의 역할 순서 안으로 맞춘다."""
+    ranks = [ROLE_ORDER.index(r) if r else None for r in known]
+    result = []
+    for i, rank in enumerate(ranks):
+        if rank is not None:
+            result.append(ROLE_ORDER[rank])
+            continue
+        lo = max([r for r in ranks[:i] if r is not None], default=0)
+        hi = min([r for r in ranks[i + 1:] if r is not None], default=len(ROLE_ORDER) - 1)
+        guess = ROLE_ORDER.index(provisional[i])
+        result.append(ROLE_ORDER[min(max(guess, lo), max(lo, hi))])
+    return result
 
 
 def _resolve_role_codes_for_team(
@@ -1303,6 +1360,12 @@ def _resolve_row_height_mismatch(
         anchor_candidate["box"], "relaxed_row_height_mismatch",
         None, None, True, width_img,
     )
+    # 원래 패널이 행 단위로 딱 맞으면 나간 사람이 있는 팀일 수 있어, 다시 찾은 패널도 행 단위로 맞을 때만 바꾼다.
+    old_rows = _visible_row_count(layout[small_team])
+    new_rows = _visible_row_count(new_entry)
+    if old_rows is not None and (new_rows is None or new_rows < old_rows):
+        diagnostics["replacement_rejected"] = {"old_rows": old_rows, "new_rows": new_rows}
+        return layout, diagnostics
     layout = {**layout, small_team: new_entry}
     return layout, diagnostics
 
@@ -1619,19 +1682,39 @@ def _compute_team_layout(cv2, np, image) -> Dict[str, Any]:
     layout, structural_diag = _maybe_replace_with_structural(cv2, np, image, layout)
 
     roster_size, roster_size_diag = _resolve_roster_size(cv2, np, image, layout)
-    role_templates = _load_role_icon_templates(cv2, np) if roster_size != DEFAULT_PLAYERS_PER_TEAM else {}
+    visible_rows = {team: _visible_row_count(layout[team]) for team in ("ally", "enemy")}
+    roster_size_diag["visible_rows"] = dict(visible_rows)
+    counted = [n for n in visible_rows.values() if n]
+    if counted and max(counted) in ROSTER_SIZE_CANDIDATES and max(counted) != roster_size:
+        roster_size = max(counted)
+        roster_size_diag["resolved_n"] = roster_size
+        roster_size_diag["resolved_by"] = "row_height_ratio"
+    rows_by_team = {
+        team: n if n and n < roster_size else roster_size
+        for team, n in visible_rows.items()
+    }
+    needs_role_icons = roster_size != DEFAULT_PLAYERS_PER_TEAM or any(
+        n < roster_size for n in rows_by_team.values()
+    )
+    role_templates = _load_role_icon_templates(cv2, np) if needs_role_icons else {}
     for team in ("ally", "enemy"):
         entry = layout[team]
         player_area_box = entry.get("player_area_box")
+        entry["open_roles"] = False
         if entry.get("layout_validation_ok") and player_area_box:
-            row_y_bounds = _slice_bounds((player_area_box["y0"], player_area_box["y1"]), roster_size)
+            n_rows = rows_by_team[team]
+            row_y_bounds = _slice_bounds((player_area_box["y0"], player_area_box["y1"]), n_rows)
             entry["row_boxes"] = [
                 {"x0": entry["team_box"]["x0"], "y0": ry[0], "x1": entry["team_box"]["x1"], "y1": ry[1]}
                 if ry else None
                 for ry in row_y_bounds
             ]
-            entry["expected_row_height"] = (player_area_box["y1"] - player_area_box["y0"]) / roster_size
-            role_codes = _resolve_role_codes_for_team(cv2, np, image, player_area_box, roster_size, role_templates)
+            entry["expected_row_height"] = (player_area_box["y1"] - player_area_box["y0"]) / n_rows
+            if n_rows < roster_size:
+                entry["open_roles"] = True
+                role_codes = _provisional_role_codes(cv2, np, image, player_area_box, n_rows, role_templates)
+            else:
+                role_codes = _resolve_role_codes_for_team(cv2, np, image, player_area_box, roster_size, role_templates)
         else:
             entry["row_boxes"] = [None] * roster_size
             role_codes = (
@@ -1721,11 +1804,12 @@ def _box_within(inner: Optional[Dict[str, int]], outer: Optional[Dict[str, int]]
 
 def _build_team_rows(
     cv2, np, image, row_boxes: List[Optional[Dict[str, int]]], templates, team: str, team_box: Optional[Dict[str, int]],
-    role_codes: List[str],
+    role_codes: List[str], open_roles: bool = False,
 ) -> Tuple[List[Dict[str, Any]], int, Optional[int], str, List[Optional[Any]], List[Optional[Any]]]:
     """row_boxes로 행 슬롯을 만들고 각 행의 row crop / hero crop을 잘라낸다.
 
-    영웅 후보는 넘겨받은 role_codes의 역할로 제한한다.
+    영웅 후보는 넘겨받은 role_codes의 역할로 제한한다. open_roles(나간 사람이 있는 팀)면
+    모든 영웅에서 찾고 역할은 인식한 영웅으로 다시 정한다.
     """
     row_images = [
         image[rb["y0"]:rb["y1"], rb["x0"]:rb["x1"]] if rb else None
@@ -1805,7 +1889,7 @@ def _build_team_rows(
                     "[SCOREBOARD DIAG] icon crop upscaled team=%s row=%d role=%s native=%s -> %s (INTER_CUBIC)",
                     team, i + 1, role_code, native_size, matching_region.shape[1::-1],
                 )
-            result = _match_hero_icon(cv2, np, matching_region, templates, role_code)
+            result = _match_hero_icon(cv2, np, matching_region, templates, None if open_roles else role_code)
             result["upscaled"] = upscaled
             result["native_size"] = list(native_size) if native_size else None
         hero_results.append(result)
@@ -1816,6 +1900,9 @@ def _build_team_rows(
     is_me_reasons: List[Optional[str]] = [None] * len(row_images)
     if team == "ally":
         self_row_idx, self_reason, is_me_values, is_me_reasons = _determine_self_row(cv2, np, row_images)
+
+    if open_roles:
+        role_codes = _fill_open_roles([HERO_TO_ROLE_CODE.get(hr["hero"]) for hr in hero_results], role_codes)
 
     entries = []
     for i, rb in enumerate(row_boxes):
@@ -2122,6 +2209,18 @@ def _format_team_for_feedback(team: List[Dict[str, Any]]) -> str:
     return "\n".join(lines) if lines else "정보 없음"
 
 
+def _leaver_note(my_count: int, enemy_count: int) -> str:
+    """두 팀 인원이 다르면 나간 사람이 있던 판이라는 안내 문장."""
+    if my_count == enemy_count or not my_count or not enemy_count:
+        return ""
+    fewer = "우리팀" if my_count < enemy_count else "상대팀"
+    return (
+        f"스탯창에 우리팀 {my_count}명, 상대팀 {enemy_count}명만 있다. 판 도중 나간 사람은 스탯창에 나오지 않으므로 "
+        f"{fewer}은 한동안 사람이 모자란 채로 싸웠다. 팀 합계(처치·피해·치유) 비교와 남은 사람의 데스는 이를 감안해 판단하고, "
+        "나간 사람의 역할 자리가 비었던 것을 남은 사람의 약점으로 돌리지 마라. 누가 언제 나갔는지는 모르니 추측하지 마라."
+    )
+
+
 TEAM_FEEDBACK_PROMPT_TEMPLATE = """너는 오버워치2 코치다. 방금 TAB 점수판에서
 추출한 이번 판 결과를 보고 코칭 피드백을 작성해라.
 
@@ -2135,6 +2234,7 @@ TEAM_FEEDBACK_PROMPT_TEMPLATE = """너는 오버워치2 코치다. 방금 TAB �
 
 {opponent_instruction}
 {recognition_instruction}
+{leaver_note}
 
 규칙:
 - 특정 닉네임이나 개인을 비난하듯 표현하지 말고 "탱커 라인", "딜러진",
@@ -2183,6 +2283,7 @@ def _generate_team_feedback(llm, my_team: List[Dict[str, Any]], enemy_team: List
         enemy_team_text=_format_team_for_feedback(enemy_team) if enemy_ok else "인식 실패/정보 부족",
         opponent_instruction=opponent_instruction,
         recognition_instruction=recognition_instruction,
+        leaver_note=_leaver_note(len(my_team), len(enemy_team)),
     )
     try:
         raw = call_llm_text(llm, prompt)
@@ -2421,11 +2522,11 @@ def analyze_scoreboard_image(
     # layout 좌표는 이미 원본 기준이므로 sub_image가 아니라 원본 image를 넘긴다.
     my_team, ally_detected_count, self_row_idx, self_reason, ally_row_crops, ally_hero_crops = _build_team_rows(
         cv2, np, image, layout["ally"]["row_boxes"], templates, team="ally", team_box=layout["ally"]["team_box"],
-        role_codes=layout["ally"]["role_codes"],
+        role_codes=layout["ally"]["role_codes"], open_roles=layout["ally"].get("open_roles", False),
     )
     enemy_team, enemy_detected_count, _, _, enemy_row_crops, enemy_hero_crops = _build_team_rows(
         cv2, np, image, layout["enemy"]["row_boxes"], templates, team="enemy", team_box=layout["enemy"]["team_box"],
-        role_codes=layout["enemy"]["role_codes"],
+        role_codes=layout["enemy"]["role_codes"], open_roles=layout["enemy"].get("open_roles", False),
     )
 
     # 양쪽 팀 패널을 하나도 못 찾으면 Gemini를 부르기 전에 조기 반려한다.
@@ -2468,6 +2569,9 @@ def analyze_scoreboard_image(
         if self_known and with_feedback:
             personal_entries = entries_from_scoreboard_rows(my_team, enemy_team if enemy_ok else [])
             personal_verdicts = stat_verdict_block(personal_entries, only_me=True)
+            leaver_note = _leaver_note(len(my_team), len(enemy_team))
+            if leaver_note:
+                personal_verdicts = "\n\n".join(p for p in (personal_verdicts, leaver_note) if p)
         team_feedback, personal_feedback = None, None
         # 질문과 함께 올린 이미지는 채팅 답변이 스탯을 다루므로 코치 피드백을 만들지 않는다.
         if with_feedback:
@@ -2506,6 +2610,11 @@ def analyze_scoreboard_image(
         roster_size_diag=meta.get("roster_size_diag"),
     )
     admin_log["self_feedback_eligible"] = self_known
+    # 영웅을 못 알아본 판은 원본도 남긴다(crop 위치가 틀렸는지 로컬에서 다시 돌려 보려고). 로그를 지우면 폴더째 지워진다.
+    if turn_id and total_unknown:
+        original_path = os.path.join(_scoreboard_debug_dir(turn_id), "original.png")
+        if _imwrite_unicode(cv2, original_path, image):
+            admin_log["original_image_path"] = f"logs/{SCOREBOARD_DEBUG_DIR_NAME}/{turn_id}/original.png"
     admin_log["enemy_composition_analysis_allowed"] = enemy_ok
     admin_log["low_hero_recognition"] = low_hero_recognition
     admin_log["gemini_stats_and_feedback_enabled"] = ENABLE_GEMINI_STATS_AND_FEEDBACK
