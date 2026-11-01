@@ -70,6 +70,8 @@ class ChatbotGraphState(TypedDict, total=False):
     # is_full은 아군만으로 정원이 찼는지.
     roster_size: Optional[int]
     roster_size_effective: int
+    # 이 기기에서 스탯창으로 분석한 판 중 자주 한 영웅([{"hero", "count"}], 많은 순, 최대 3명).
+    main_heroes: List[Dict[str, Any]]
     roster_is_full: bool
     # 되묻지 않고 답할 때 답변 끝에 붙이는 판단 근거 한 줄.
     role_basis_note: str

@@ -270,6 +270,7 @@ def run_chatbot_graph(
     answer_style: Optional[str] = None,
     focus_hero_pick: Optional[str] = None,
     roster_size: Optional[int] = None,
+    main_heroes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     logger.info(
         "[GRAPH START] message=%s role_filter=%s answer_style=%s focus_hero_pick=%s "
@@ -286,6 +287,7 @@ def run_chatbot_graph(
         "answer_style": answer_style,
         "focus_hero_pick": focus_hero_pick,
         "roster_size": roster_size,
+        "main_heroes": main_heroes or [],
     })
 
     logger.info("[TIMING] run_chatbot_graph 전체: %.2fs (answer_style=%s)", time.time() - t0, answer_style)

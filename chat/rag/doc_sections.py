@@ -121,6 +121,23 @@ def _build_profiles(fields: List[str] = PROFILE_FIELDS) -> Dict[str, str]:
     return profiles
 
 
+_playstyle_cache: Optional[Dict[str, str]] = None
+_PLAYSTYLE_LINE_RE = re.compile(r"^-\s*(역할|운영 태그|기본 위치)\s*:")
+
+
+def get_hero_playstyle(hero: Optional[str]) -> Optional[str]:
+    """영웅 절 맨 위의 "역할 / 운영 태그 / 기본 위치" 줄(운용이 비슷한 영웅을 고를 근거)."""
+    global _playstyle_cache
+    if not hero:
+        return None
+    if _playstyle_cache is None:
+        _playstyle_cache = {
+            name: "\n".join(line.strip() for line in body if _PLAYSTYLE_LINE_RE.match(line.strip()))
+            for name, body in _hero_section_bodies().items()
+        }
+    return _playstyle_cache.get(normalize_hero_name(hero)) or None
+
+
 def get_hero_perk_section(hero: Optional[str]) -> Optional[str]:
     """영웅의 "특전 데이터" 절 원문. 문서에 없으면 None."""
     global _perk_sections_cache
@@ -468,19 +485,54 @@ def continued_line_label(chunk_body: str) -> Optional[str]:
 _SKILL_NAME_MIN_LENGTH = 3
 
 
+_exclusive_terms_cache: Optional[Dict[str, str]] = None
+
+
+def _exclusive_search_terms() -> Dict[str, str]:
+    """영웅 절의 "검색어" 줄 용어 중 그 영웅의 절에만 나오는 것({용어: 영웅}). 주입처럼 스킬 이름이 아닌 고유 용어를 찾는다."""
+    global _exclusive_terms_cache
+    if _exclusive_terms_cache is not None:
+        return _exclusive_terms_cache
+    terms: Dict[str, str] = {}
+    lines_of = _hero_section_bodies()
+    compact = {h: "".join(b).replace(" ", "") for h, b in lines_of.items()}
+    for hero, body in lines_of.items():
+        for line in body:
+            if not line.lstrip("- ").startswith("검색어:"):
+                continue
+            for term in line.split(":", 1)[1].split(","):
+                term = term.strip()
+                key = term.replace(" ", "")
+                if len(key) < 2 or not re.fullmatch(r"[가-힣]+", key) or resolve_hero_name(term) or key.endswith(("힐러", "딜러", "탱커", "지원가", "영웅")):
+                    continue
+                # 다른 영웅 절의 상성 줄처럼 그 영웅 이름과 함께 나온 언급은 세지 않는다.
+                clash = any(
+                    key in compact[h] and any(key in ln.replace(" ", "") and hero not in ln for ln in lines_of[h])
+                    for h in compact if h != hero
+                )
+                if not clash:
+                    terms[key] = hero
+    _exclusive_terms_cache = terms
+    return terms
+
+
 def find_heroes_by_skill_name(text: str) -> List[str]:
-    """텍스트에 나온 스킬 이름의 주인 영웅들(여러 영웅이 같이 쓰는 이름은 뺀다)."""
+    """텍스트에 나온 스킬 이름의 주인 영웅들(여러 영웅이 같이 쓰는 이름은 뺀다). 스킬 이름이 아닌 고유 용어도 찾는다."""
     if not text:
         return []
     owners: Dict[str, set] = {}
     for hero, skills in get_skill_keys().items():
         for name in skills:
             owners.setdefault(name, set()).add(hero)
+    for key, hero in _exclusive_search_terms().items():
+        if len(key) >= 2:
+            owners.setdefault(key, set()).add(hero)
     found: List[tuple] = []
     compact = text.replace(" ", "")
     for name, heroes in owners.items():
         key = name.replace(" ", "")
-        if len(heroes) != 1 or len(key) < _SKILL_NAME_MIN_LENGTH:
+        exclusive = key in _exclusive_search_terms()
+        if len(heroes) != 1 or (len(key) < _SKILL_NAME_MIN_LENGTH and not exclusive):
             continue
         position = compact.find(key)
         if position != -1:
