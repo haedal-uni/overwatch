@@ -191,6 +191,7 @@
       data.played = (data.played || 0) + 1;
       if (g.win > g.lose) data.won = (data.won || 0) + 1;
       save(data);
+      if (window.OwEvents) window.OwEvents.cardGame({ won: g.win > g.lose, perfect: g.win === ROUNDS });
       return renderEnd();
     }
     g.round += 1;
