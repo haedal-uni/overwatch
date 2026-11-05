@@ -422,6 +422,7 @@
       flex-direction: column;
     }
 
+    .more-item[hidden] { display: none; }
     .more-menu[hidden] {
       display: none
     }
@@ -3413,6 +3414,10 @@
                 <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v6h8V4"/><path d="M8 14h8v6H8z"/></svg>
                 <span>대화 저장</span>
               </button>
+              <button type="button" class="more-item" id="opinionBtn" role="menuitem">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>
+                <span>의견 보내기</span>
+              </button>
               <button type="button" class="more-item" id="helpBtn" role="menuitem">
                 <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.2h.01"/></svg>
                 <span>사용법 보기</span>
@@ -3521,6 +3526,7 @@
   <script src="{% static 'chat/event_progress.js' %}"></script>
   <script src="{% static 'chat/voice_input.js' %}"></script>
   <script src="{% static 'chat/my_records.js' %}"></script>
+  <script src="{% static 'chat/batch_upload.js' %}"></script>
   <script src="{% static 'chat/sync.js' %}"></script>
   <script src="{% static 'chat/hero_ask.js' %}"></script>
   <script src="{% static 'chat/death_btn.js' %}"></script>
@@ -3910,9 +3916,13 @@
       });
     }
 
+    // 하나만 분석할지 일괄로 올릴지 먼저 고른다(일괄 올리기는 batch_upload.js).
+    const startSingleUpload = () => openScoreboardGuideModal(() => screenshotInput?.click());
     uploadBtn?.addEventListener('click', () => {
-      openScoreboardGuideModal(() => screenshotInput?.click());
+      if (window.OwBatch) window.OwBatch.choose({ single: startSingleUpload });
+      else startSingleUpload();
     });
+    window.OwBatch?.resume();
     screenshotInput?.addEventListener('change', () => {
       const file = screenshotInput.files?.[0];
       if (file) attachImage(file);
@@ -4730,7 +4740,7 @@
       moreBtn.setAttribute('aria-expanded', String(open));
     }
     moreBtn.addEventListener('click', (e) => { e.stopPropagation(); setMoreMenu(moreMenu.hidden); });
-    moreMenu.addEventListener('click', (e) => { if (e.target.closest('#saveChatBtn, #helpBtn, #cardBattleBtn, #syncBtn')) setMoreMenu(false); });
+    moreMenu.addEventListener('click', (e) => { if (e.target.closest('#saveChatBtn, #helpBtn, #cardBattleBtn, #syncBtn, #opinionBtn')) setMoreMenu(false); });
     $('syncBtn').addEventListener('click', () => window.OwSync?.open());
     document.addEventListener('click', (e) => { if (!moreMenu.hidden && !moreMenu.contains(e.target)) setMoreMenu(false); });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !moreMenu.hidden) setMoreMenu(false); });
@@ -4916,6 +4926,42 @@
     }
 
     helpBtn.addEventListener('click', openTour);
+
+    // ── 의견 보내기(답변 불만족과 별개로 챗봇 전반에 대한 의견) ──
+    $('opinionBtn')?.addEventListener('click', () => {
+      const overlay = document.createElement('div'); overlay.className = 'save-modal-overlay';
+      const modal = document.createElement('div'); modal.className = 'save-modal';
+      modal.innerHTML = `
+        <div class="save-modal-header"><h3>의견 보내기</h3><button type="button" class="save-modal-close" aria-label="닫기">×</button></div>
+        <div class="save-modal-sub">불편한 점, 있었으면 하는 기능, 답변 말고 화면이나 기능에 대한 이야기도 좋아요. 답변이 마음에 안 들 때는 답변 아래 "만족스럽지 않았나요?"로 알려 주세요.</div>
+        <textarea id="opinionText" maxlength="1000" rows="6" placeholder="의견을 적어 주세요 (1,000자까지)" style="width:100%;box-sizing:border-box;border:1px solid var(--line-strong);border-radius:12px;background:var(--soft);color:var(--text);padding:10px 12px;font:inherit;font-size:15px;resize:vertical;margin-bottom:12px"></textarea>
+        <div id="opinionMsg" class="save-modal-sub" style="margin-bottom:10px" hidden></div>
+        <button type="button" class="save-modal-save-btn" id="opinionSend">보내기</button>`;
+      overlay.appendChild(modal);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+      modal.querySelector('.save-modal-close').addEventListener('click', () => overlay.remove());
+      const text = modal.querySelector('#opinionText'); const msg = modal.querySelector('#opinionMsg'); const send = modal.querySelector('#opinionSend');
+      const say = (t) => { msg.textContent = t; msg.hidden = false; };
+      send.addEventListener('click', async () => {
+        const message = text.value.trim();
+        if (message.length < 2) { say('의견을 적어 주세요.'); return; }
+        send.disabled = true; send.textContent = '보내는 중...';
+        try {
+          const res = await fetch('/chat/api/opinion/', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
+            body: JSON.stringify({ message, device: gameDeviceId() })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || '보내지 못했어요. 잠시 뒤에 다시 해 주세요.');
+          modal.innerHTML = '<div class="save-modal-header"><h3>고마워요!</h3></div><div class="save-modal-sub">보내 주신 의견은 서비스를 고치는 데 쓸게요.</div><button type="button" class="save-modal-save-btn">닫기</button>';
+          modal.querySelector('button').addEventListener('click', () => overlay.remove());
+        } catch (err) {
+          say(err.message || '보내지 못했어요.'); send.disabled = false; send.textContent = '보내기';
+        }
+      });
+      text.focus();
+    });
 
     // ── 대화 저장/불러오기 ──
     // 저장 버튼을 눌렀을 때만 최대 2개까지 localStorage에 보관한다.

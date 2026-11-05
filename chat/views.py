@@ -8,8 +8,9 @@ from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
+from chat import batch as batch_service
 from chat import sync as sync_service
-from chat.match_stats import record_match, set_result
+from chat.match_stats import record_match, set_result, unknown_flags
 from chat.graph.pipeline import (
     is_session_timed_out,
     role_filter_label,
@@ -18,7 +19,7 @@ from chat.graph.pipeline import (
 )
 from chat.domain.answer_format import ANSWER_STYLES
 from chat.domain.heroes import resolve_hero_name
-from chat.models import ChatLog
+from chat.models import BatchJob, ChatLog, ChatOpinion
 from chat.rag.death_tips import get_death_tip
 from chat.rag.hero_guides import get_hero_guide
 from chat.rag.matchup_tables import get_hero_matchup, get_matchup_roster
@@ -539,6 +540,7 @@ def chat_scoreboard_ocr(request):
             metadata={
                 "source": "chat_scoreboard_analysis",
                 "admin_log": admin_log,
+                **unknown_flags(admin_log),
                 "elapsed_ms": round((time.monotonic() - started) * 1000),
             },
         )
@@ -596,6 +598,72 @@ def chat_scoreboard_ocr(request):
         save_error_log(request, e, source="chat_scoreboard_ocr")
 
         return JsonResponse({"error": "이미지 분석 중 오류가 발생했습니다."}, status=500)
+
+MAX_OPINION_LENGTH = 1000
+MAX_OPINIONS_PER_DAY = 10
+
+
+@require_http_methods(["POST"])
+def chat_opinion(request):
+    """챗봇 화면의 "의견 보내기"로 보낸 글을 저장한다(답변 불만족과 별개)."""
+    try:
+        data = json.loads(request.body or b"{}")
+    except ValueError:
+        return JsonResponse({"error": "잘못된 요청입니다."}, status=400)
+    message = str(data.get("message") or "").strip()
+    if len(message) < 2:
+        return JsonResponse({"error": "의견을 적어 주세요."}, status=400)
+    if len(message) > MAX_OPINION_LENGTH:
+        return JsonResponse({"error": f"의견은 {MAX_OPINION_LENGTH}자까지 보낼 수 있어요."}, status=400)
+    # 세션당 하루 10개까지(도배 방지).
+    today = time.strftime("%Y-%m-%d")
+    sent = request.session.get("opinion_sent") or {}
+    if sent.get("day") != today:
+        sent = {"day": today, "n": 0}
+    if sent["n"] >= MAX_OPINIONS_PER_DAY:
+        return JsonResponse({"error": "오늘은 더 보낼 수 없어요. 내일 다시 보내 주세요."}, status=429)
+    ChatOpinion.objects.create(
+        message=message, device_id=str(data.get("device") or "")[:64],
+        user_agent=(request.META.get("HTTP_USER_AGENT") or "")[:200],
+    )
+    sent["n"] += 1
+    request.session["opinion_sent"] = sent
+    return JsonResponse({"ok": True})
+
+
+@require_http_methods(["POST"])
+def chat_batch_create(request):
+    """스탯창 이미지 여러 장을 한 번에 받아 두고(승패는 모두 같은 값) 서버가 한 장씩 분석한다."""
+    result = request.POST.get("result", "")
+    if result not in ("win", "loss", "draw"):
+        return JsonResponse({"error": "이긴 판인지 진 판인지 먼저 골라 주세요."}, status=400)
+    uploads = request.FILES.getlist("images")
+    if not uploads:
+        return JsonResponse({"error": "이미지 파일이 없습니다."}, status=400)
+    if len(uploads) > batch_service.MAX_IMAGES_PER_JOB:
+        return JsonResponse({"error": f"한 번에 {batch_service.MAX_IMAGES_PER_JOB}장까지 올릴 수 있어요."}, status=400)
+    files = []
+    for f in uploads:
+        mime = f.content_type or "image/png"
+        if f.size > MAX_IMAGE_BYTES or mime not in ALLOWED_IMAGE_TYPES:
+            return JsonResponse({"error": "이미지 형식이나 크기를 확인해 주세요. (png·jpg·webp, 8MB 이하)"}, status=400)
+        files.append((f.read(), mime))
+    if batch_service.pending_total() + len(files) > batch_service.MAX_PENDING_TOTAL:
+        return JsonResponse({"error": "지금 분석 대기가 많아요. 잠시 뒤에 다시 올려 주세요."}, status=429)
+    job = batch_service.create_job(result, files)
+    return JsonResponse({"job_id": str(job.id), "total": len(files)})
+
+
+@require_http_methods(["GET"])
+def chat_batch_status(request, job_id):
+    """일괄 올리기 진행 상황과 끝난 판의 요약."""
+    job = BatchJob.objects.filter(pk=job_id).first()
+    if job is None:
+        return JsonResponse({"error": "작업을 찾을 수 없어요."}, status=404)
+    if job.images.filter(status__in=["pending", "processing"]).exists():
+        batch_service.ensure_worker()
+    return JsonResponse(batch_service.job_status(job))
+
 
 @require_http_methods(["POST"])
 def chat_match_result(request):
