@@ -78,6 +78,7 @@ class ChatbotGraphState(TypedDict, total=False):
     compared_heroes: List[str]
     is_team_comp_question: bool
     is_ally_target_choice: bool
+    ally_choice_candidates: List[str]
     # 주제 영웅의 스킬·궁극기·특전을 묻는 질문인지.
     is_hero_kit_question: bool
     # 앞 목록 질문에 영웅을 덧붙여 묻는 후속 질문인지.
