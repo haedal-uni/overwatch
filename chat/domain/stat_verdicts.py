@@ -17,7 +17,7 @@ METRIC_LABELS = {
 STAT_TYPES: Dict[str, Dict[str, Any]] = {
     "absorb_tank": {
         "label": "경감형 탱커", "role": "tank",
-        "weights": {"kills": 25, "damage": 25, "mitigation": 20, "deaths": 30},
+        "weights": {"kills": 30, "damage": 30, "mitigation": 10, "deaths": 30},
     },
     "plain_tank": {
         "label": "비경감형 탱커", "role": "tank",
@@ -29,7 +29,7 @@ STAT_TYPES: Dict[str, Dict[str, Any]] = {
     },
     "sub_damage": {
         "label": "서브 딜러", "role": "damage",
-        "weights": {"kills": 35, "assists": 15, "damage": 25, "deaths": 25},
+        "weights": {"kills": 40, "assists": 5, "damage": 30, "deaths": 25},
     },
     "main_support": {
         "label": "메인 힐러", "role": "support",
@@ -73,6 +73,12 @@ MIN_HEROES_FOR_TEAM_CONTEXT = 3
 
 TEAM_LABELS = {"my": "우리팀", "enemy": "상대팀"}
 
+# 방벽만 든 탱커: 피해량이 같은 팀 딜러 평균의 이 비율 미만(딜러 평균이 너무 낮은 판은 제외).
+SHIELD_ONLY_DAMAGE_RATIO = 0.1
+SHIELD_ONLY_MIN_DEALER_AVG = 3000
+SHIELD_ONLY_MAX_KILLS = 1
+SHIELD_ONLY_REASON = "공격 스킬을 거의 쓰지 않고 방벽만 든 판 — 경감·데스를 잘했다고 보지 않으며 평가하지 않음"
+
 SWITCHED_HERO_REASON = "경감 기술이 없는 영웅인데 경감이 찍힘 — 판 도중 다른 영웅을 하다 바꿔 다른 영웅의 기록이 섞였다"
 
 
@@ -80,6 +86,23 @@ def _profile(entry: Dict[str, Any]) -> Dict[str, Any]:
     from chat.rag.hero_stat_profiles import hero_stat_profile
 
     return hero_stat_profile(entry["hero"])
+
+
+def is_shield_only(entry: Dict[str, Any], entries: List[Dict[str, Any]]) -> bool:
+    """경감형 탱커의 피해가 같은 팀 딜러 평균에 비해 거의 없으면 방벽만 든 판이다."""
+    if entry["type"] != "absorb_tank":
+        return False
+    damage, kills = entry["stats"]["damage"], entry["stats"]["kills"]
+    if damage is None or (kills or 0) > SHIELD_ONLY_MAX_KILLS:
+        return False
+    dealers = [
+        e["stats"]["damage"] for e in entries
+        if e["team"] == entry["team"] and e["role"] == "damage" and e["stats"]["damage"] is not None
+    ]
+    if len(dealers) < 2:
+        return False
+    average = _mean(dealers)
+    return average >= SHIELD_ONLY_MIN_DEALER_AVG and damage < average * SHIELD_ONLY_DAMAGE_RATIO
 
 
 def hero_switched(entry: Dict[str, Any]) -> bool:
@@ -291,7 +314,10 @@ def _healing_shortfall_reason(
 
 def _comparison_group(entry, entries, metric):
     """비교 대상(본인 제외)과, 같은 유형이 없어 같은 역할로 넓혔는지 여부."""
-    others = [e for e in entries if e is not entry and e["stats"][metric] is not None]
+    others = [
+        e for e in entries
+        if e is not entry and e["stats"][metric] is not None and not is_shield_only(e, entries)
+    ]
     same_type = [e for e in others if e["type"] == entry["type"]]
     if same_type or metric == "mitigation":
         return same_type, False
@@ -321,6 +347,15 @@ def judge_entry(
     """{지표: {verdict, value, mean, reason}}. verdict는 강점/비슷/약점/판정 제외."""
     weights = STAT_TYPES[entry["type"]]["weights"]
     result: Dict[str, Dict[str, Any]] = {}
+
+    if is_shield_only(entry, entries):
+        return {
+            metric: {
+                "verdict": "판정 제외", "value": value, "mean": None,
+                "reason": SHIELD_ONLY_REASON if metric == "mitigation" else None,
+            }
+            for metric, value in entry["stats"].items() if value is not None
+        }
 
     for metric in METRICS:
         value = entry["stats"][metric]
@@ -409,6 +444,7 @@ def _score_peers(entry, entries, metric, team, *, solo_fallback: bool) -> List[D
     candidates = [
         e for e in entries
         if e is not entry and e["team"] == team and e["stats"][metric] is not None
+        and not is_shield_only(e, entries)
     ]
     if metric == "mitigation":
         return [e for e in candidates if e["type"] == entry["type"]]
@@ -449,7 +485,7 @@ def score_breakdown(
     result: Dict[int, Dict[str, Any]] = {}
     has_enemy = any(e["team"] == "enemy" for e in entries)
     for entry in entries:
-        if entry["team"] != "my":
+        if entry["team"] != "my" or is_shield_only(entry, entries):
             continue
         team_score, team_metrics = _component_score(entry, entries, context, "my", solo_fallback=True)
         enemy_score, enemy_metrics = (
@@ -520,6 +556,9 @@ def format_score_ranking(entries: List[Dict[str, Any]], context=None) -> str:
     ranked = ranked_scores(entries, context)
     if not ranked:
         return ""
+    excluded = [
+        e["hero"] for e in entries if e["team"] == "my" and is_shield_only(e, entries)
+    ]
     parts = [
         f"{r['rank']}위 {r['entry']['hero']}({STAT_TYPES[r['entry']['type']]['label']}) {r['final']:.1f}"
         for r in ranked
@@ -527,6 +566,7 @@ def format_score_ranking(entries: List[Dict[str, Any]], context=None) -> str:
     return (
         f"- {TEAM_LABELS['my']} 종합 점수 순위(50 = 비교 대상과 동등, {score_basis_label(entries)}): "
         + ", ".join(parts)
+        + (f" / 순위 제외(방벽만 든 판): {', '.join(excluded)}" if excluded else "")
     )
 
 

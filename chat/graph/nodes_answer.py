@@ -525,8 +525,18 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "\"영웅: 그 영웅으로 상대를 어떻게 상대하는지(스킬 이름)\"으로 적어라(한 명도 빠뜨리지 마라)."
             )
         # 이름을 댄 아군 중 스킬 대상을 고르는 질문은 "기본 대상 → 바꿀 상황"으로 답한다.
-        if state.get("is_ally_target_choice") and not swap_last:
-            choice_candidates = ", ".join(display_ally_team) or "질문에 나온 영웅들"
+        if state.get("is_ally_target_choice") and not swap_last and not state.get("ally_choice_candidates"):
+            # 후보 이름 없이 "아군 누구한테"로 물었다. 역할로 우선순위를 답한다.
+            situation = f"상대 {state.get('target_enemy')}이(가) 들어온 상황처럼 질문에 나온 상황 기준으로, " if state.get("target_enemy") else "질문에 나온 상황 기준으로, "
+            pick_answer_rule = (
+                "이 질문은 사용자가 자기 스킬을 아군 중 누구에게 쓸지 묻는다. 아군 이름은 말하지 않았으니 "
+                f"{situation}받을 아군을 역할(탱커, 진입하는 딜러, 뒤에 있는 딜러, 힐러 등)로 답해라. 답변 전체를 이 형식으로만 써라: "
+                "첫 줄은 \"기본은 OO\"처럼 가장 먼저 줄 역할 1개와 그 이유 1문장, 빈 줄, 그다음 우선순위 순서로 "
+                "역할마다 한 줄씩 \"OO에게: ~할 때\"(2~4줄). 상대 영웅을 아군처럼 쓰지 마라. "
+                "포지션·콤보·생존 같은 다른 운영 팁, \"추천 영웅\" 머리줄, 영웅 교체 추천은 쓰지 마라."
+            )
+        elif state.get("is_ally_target_choice") and not swap_last:
+            choice_candidates = ", ".join(state.get("ally_choice_candidates") or display_ally_team) or "질문에 나온 영웅들"
             pick_answer_rule = (
                 f"이 질문은 {choice_candidates} 중 누구에게 스킬을 쓸지 고르는 질문이다. 답변 전체를 "
                 "이 형식으로만 써라: 첫 줄은 \"기본은 OO\"처럼 평소에 줄 대상 1명과 그 이유 1문장, "

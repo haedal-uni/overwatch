@@ -118,6 +118,14 @@ def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
             text,
         ):
             return True
+        # 로/으로 + 진입·공격 동사 + 1인칭 의도(~려고): 가는 쪽이 말하는 사람이다.
+        if re.search(
+            rf"{escaped}\s*(?:로|으로)\s*[가-힣]{{0,6}}\s*"
+            rf"(?:들어가|진입|접근|돌진|덮치|잡|죽이|노리|싸우)[가-힣]*\s*[^,.?!]{{0,15}}?"
+            rf"(?:려고|려는데|려다가|고\s*싶)",
+            text,
+        ):
+            return True
         # 목적격 조사(을/를) + 희망/유지 표현.
         if re.search(
             rf"{escaped}\s*(?:을|를)?\s*(?:하고\s*있|하는\s*중|하고\s*싶|하고싶|할\s*거|할건데|"
@@ -132,11 +140,15 @@ def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
         if re.search(rf"{escaped}\s*(?:하는데요|하는데|할\s*때|하다가)", text):
             return True
         # 로/으로 뒤에 다른 영웅명이 끼는 상대법 질문.
-        if (
-            any(word in text for word in _STAY_OPERATION_WORDS)
-            and re.search(rf"{escaped}\s*(?:로|으로)", text)
-        ):
-            return True
+        if any(word in text for word in _STAY_OPERATION_WORDS):
+            ro = re.search(rf"{escaped}\s*(?:로|으로)", text)
+            enemy_side = ro and re.search(
+                r"(?:상대|상대팀|적|적팀)(?:가|이|는|은|의)?\s*$", text[:ro.start()]
+            )
+            if ro and not enemy_side and any(
+                h != normalized for h in find_all_heroes(text[ro.end():])
+            ):
+                return True
         # 확정 전 고려 표현.
         if re.search(
             rf"{escaped}\s*(?:을|를)?\s*(?:고르면|고를까|고르는\s*게|고르는게|"
@@ -260,6 +272,29 @@ def is_pick_request(message: str) -> bool:
     return _pick_question_match(message or "") is not None
 
 
+_OTHER_HERO_REQUEST_RE = re.compile(
+    r"(다른|딴|새로운)\s*(탱커|딜러|힐러|영웅|픽)\s*(은|는|이|가|으로|로)?\s*(없|추천|알려|뭐|뭘|있|해볼|써볼|바꿔|갈아)"
+    r"|(바꿀|갈아탈|교체할)\s*(만한|수 있는)?\s*(탱커|딜러|힐러|영웅)"
+)
+
+
+def is_other_hero_request(message: str) -> bool:
+    """"다른 영웅은 없어?"처럼 지금 영웅 대신 쓸 영웅을 구하는 질문인지."""
+    return bool(_OTHER_HERO_REQUEST_RE.search(message or ""))
+
+
+# "독트린이나 키리코로 겐지에게 대응하는 방법은 없어?"처럼 이름을 댄 영웅으로 상대하는 법을 묻는 표현.
+_NAMED_HERO_HOWTO_RE = re.compile(
+    r"(으로|로|이나|나|라면|으로는|로는)\s*[^?]{0,20}?(대응|상대|잡|이기|막|카운터)[^?]{0,8}?(방법|법|수)"
+)
+
+
+def is_named_hero_howto_question(message: str) -> bool:
+    """영웅을 댄 채 그 영웅으로 상대하는 방법을 묻는 질문인지(추천을 구하는 질문은 제외)."""
+    text = message or ""
+    return bool(_NAMED_HERO_HOWTO_RE.search(text)) and bool(find_all_heroes(text)) and not is_pick_request(text) and not is_other_hero_request(text)
+
+
 # 조건에 맞는 영웅을 빠짐없이 묻는 표현("뭐가 있어", "누가 있어", "누구누구").
 _HERO_ENUMERATION_RE = re.compile(r"(뭐|무엇|누가|누구)\s*(가|이)?\s*있|누구\s*누구|다\s*알려|말해|전부|모두")
 
@@ -298,10 +333,23 @@ _ALLY_TARGET_CHOICE_RE = re.compile(
 _PICK_VERB_WORDS = ("추천", "골라", "고르", "픽", "뽑", "바꿔", "교체")
 
 
-def is_ally_target_choice_question(message: str) -> bool:
+def asks_skill_recipient(message: str) -> bool:
+    """스킬을 누구에게 쓸지 묻는 질문인지(대상 후보가 아군인지 상대인지는 따로 본다)."""
     if not message or any(w in message for w in _PICK_VERB_WORDS):
         return False
-    return bool(_ALLY_TARGET_CHOICE_RE.search(message)) and len(find_all_heroes(message)) >= 2
+    return bool(_ALLY_TARGET_CHOICE_RE.search(message))
+
+
+def is_ally_target_choice_question(message: str) -> bool:
+    return asks_skill_recipient(message) and len(find_all_heroes(message)) >= 2
+
+
+# 대상 후보를 이름 대신 "아군"으로 가리키는 표현("아군 누구한테", "우리팀 누구").
+_ALLY_WORDS = ("아군", "우리팀", "우리 팀", "팀원", "같은 팀")
+
+
+def mentions_ally_word(message: str) -> bool:
+    return any(w in (message or "") for w in _ALLY_WORDS)
 
 
 # 영웅의 스킬·궁극기·특전을 가리키는 표현.
@@ -745,6 +793,7 @@ ENEMY_MENTION_PATTERNS = [
     rf"([가-힣A-Za-z0-9\.]+)[을를]?{_NARROWING_FILLER}\s*처리",
     r"상대[가은는]?\s*([가-힣A-Za-z0-9\.]+)",
     r"상대\s*([가-힣A-Za-z0-9\.]+)",
+    r"(?<![가-힣])적(?:군|팀)?[은는이가]?\s*([가-힣A-Za-z0-9\.]+)",
 ]
 
 # 역할로만 카운터 대상을 좁히는 경우.
@@ -840,8 +889,7 @@ def find_synergy_ally_heroes(text: str) -> List[str]:
 
 def find_enemy_mentioned_hero(text: str) -> Optional[str]:
     for pattern in ENEMY_MENTION_PATTERNS:
-        match = re.search(pattern, text)
-        if match:
+        for match in re.finditer(pattern, text):
             candidate = normalize_hero_candidate(match.group(1))
             if candidate:
                 return candidate
@@ -1093,9 +1141,18 @@ _KOREAN_WORD_RE = re.compile(r"[가-힣A-Za-z]{2,}")
 _TRAILING_JOSA_RE = re.compile(r"(이라는|라는|다는|이란|이|가|은|는|을|를|의|에|로|으로|도|게|건)$")
 
 
+# 둘의 차이를 묻는 표현("~와 ~ 차이는 뭐야?", "뭐가 달라?").
+_DIFFERENCE_QUESTION_RE = re.compile(r"차이\s*(가|는|점|좀)?\s*(뭐|머|무엇|있|궁금|알려)|뭐가\s*(어떻게\s*)?달라|어떻게\s*달라|다른\s*점")
+# 알아내는 방법을 묻는 표현("스킬 빠진 거 어떻게 알아?").
+_KNOW_HOW_RE = re.compile(r"어떻게\s*알(?![가-힣]*\s*고)|알\s*수\s*(있|없)")
+
+
 def is_explanation_question(message: str) -> bool:
-    """할 일이 아니라 뜻·이유·사실 여부를 묻는 질문인지("3가지"를 붙이지 않는다)."""
-    return bool(message and (_MEANING_QUESTION_RE.search(message) or _CHECK_QUESTION_RE.search(message)))
+    """할 일이 아니라 뜻·이유·사실 여부·차이를 묻는 질문인지("3가지"를 붙이지 않는다)."""
+    return bool(message and (
+        _MEANING_QUESTION_RE.search(message) or _CHECK_QUESTION_RE.search(message) or _DIFFERENCE_QUESTION_RE.search(message)
+        or _KNOW_HOW_RE.search(message)
+    ))
 
 
 def is_previous_answer_followup(message: str, previous_answer: str) -> bool:
