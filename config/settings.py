@@ -26,20 +26,32 @@ SECRET_KEY = os.environ.get('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['*']
+# 실제 도메인·IP는 코드에 적지 않고 .env(쉼표로 구분)에서 읽는다.
+ALLOWED_HOSTS = ['localhost', '127.0.0.1'] + [
+    h.strip() for h in os.environ.get('DJANGO_ALLOWED_HOSTS', '').split(',') if h.strip()
+]
+
+# https 주소에서 보낸 POST를 CSRF 검사에서 허용한다(.env의 DJANGO_CSRF_TRUSTED_ORIGINS, 쉼표 구분).
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '').split(',') if o.strip()
+]
+
+# Cloudflare Tunnel이 https로 받았다는 X-Forwarded-Proto 헤더를 믿는다.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    # chat이 admin보다 앞이라야 chat/templates/admin/base_site.html(관리자 테마)이 쓰인다.
+    "chat.apps.ChatConfig",
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # "chat", # 앱 이름 
-    "chat.apps.ChatConfig",
+    "game.apps.GameConfig",
 ]
 
 MIDDLEWARE = [
@@ -50,14 +62,22 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'config.middleware.ChatActivityMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
 
+# 진단용: CSRF 403이 왜 나는지(쿠키/세션 상태) 확실한 증거 없이 추측하지
+# 않기 위해, 실패 시점의 쿠키/헤더 상태를 로그로 남기는 뷰를 임시로 연결한다.
+# 응답 자체는 Django 기본 403 페이지를 그대로 반환한다(chat/views.py의
+# csrf_failure_debug 참고). 원인이 실제로 확인되면 이 설정은 필요 없어질 수
+# 있다.
+CSRF_FAILURE_VIEW = 'chat.views.csrf_failure_debug'
+
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'config' / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -130,6 +150,12 @@ USE_TZ = False
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# 정적 파일 주소에 수정 시각을 붙인다(config/storage.py).
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "config.storage.VersionedStaticStorage"},
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
