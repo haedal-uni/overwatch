@@ -824,3 +824,23 @@ def replace_dying_word(text: str) -> str:
     text = _DYING_STATE_RE.sub("생명력이 거의 없는 상태", text)
     text = _DYING_BEFORE_NOUN_RE.sub("생명력이 거의 없는 ", text)
     return text.replace("빈사", "생명력이 거의 없는 상태")
+
+
+_PARAGRAPH_SPLIT_MIN = 40
+_LIST_LINE_RE = re.compile(r"^\s*(?:[-*•⚠]|\d+[.)]|#|\|)")
+
+
+def split_paragraph_sentences(answer: str) -> str:
+    """자세히 답변의 일반 문단을 문장마다 한 줄로, 긴 문장은 쉼표에서 나눠 보여 준다."""
+    out: List[str] = []
+    for line in (answer or "").split("\n"):
+        if not line.strip() or _LIST_LINE_RE.match(line) or len(line) < _PARAGRAPH_SPLIT_MIN:
+            out.append(line)
+            continue
+        for sentence in re.split(r"(?<=[.!?])\s+", line.strip()):
+            if len(sentence) >= _PARAGRAPH_SPLIT_MIN:
+                parts = [p.strip() for p in re.split(r"(?<=,)\s+", sentence) if p.strip()]
+            else:
+                parts = [sentence]
+            out.extend(parts)
+    return "\n".join(out)

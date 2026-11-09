@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from chat.domain.answer_format import (
     _format_stat_text,
     drop_echo_title,
+    split_paragraph_sentences,
     drop_intro_announcement,
     fix_known_slips,
     drop_role_labels_for,
@@ -74,6 +75,7 @@ from chat.domain.prompts import (
     stat_judgement_rules,
     stat_verdict_block,
 )
+from chat.domain.records_summary import records_prompt_block
 from chat.domain.stat_verdicts import entries_from_stat_dicts, ranked_scores, team_context
 
 logger = logging.getLogger(__name__)
@@ -454,6 +456,18 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
             f"이 블록은 빼라. \"바로 할 것 3가지\"도 {playing_hero} 기준 행동으로만 채워라."
         ) if swap_last else ""
 
+        # "노릴 대상: " 줄은 문서의 처리 순서가 있을 때만 쓰고 그 순서의 1순위를 가리킨다(없으면 줄 자체를 쓰지 않는다).
+        opponent_order = state.get("opponent_order") or []
+        if opponent_order and current_hero and not current_hero_uncertain:
+            order_text = ", ".join(f"{i}. {row['hero']}" for i, row in enumerate(opponent_order, start=1))
+            target_line_rule = (
+                f" \"노릴 대상: \" 줄을 쓴다면 아래 처리 순서(문서 기준)의 1순위 영웅 이름과 {current_hero}가 그 영웅을 잡는 방법만 적어라. "
+                "순서에 없는 영웅이나 \"멀리 떨어진 적\"처럼 영웅을 정하지 않은 말은 쓰지 마라. "
+                "처리 순서: " + order_text
+            )
+        else:
+            target_line_rule = " 어떤 영웅을 먼저 노릴지 근거가 없으니 \"노릴 대상: \" 줄은 쓰지 마라."
+
         # "바로 할 것 3가지"의 주어: 사용자 역할을 알면 그 역할, 모르면 아군과의 연계.
         quick_actions_subject_rule = ""
         explicit_roles = parse_role_filter(role_filter) if role_filter_explicit else []
@@ -633,9 +647,10 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                     f"\n4. {'본문 뒤에' if swap_last else '마지막에'} 빈 줄 하나를 두고, 지금 할 행동을 한 줄에 하나씩 "
                     "최대 5줄 적어라. 줄마다 다른 측면을 다루고 \"포지션: \", \"콤보: \", \"노릴 대상: \", "
                     "\"생존: \", \"궁극기: \"처럼 짧은 항목 이름을 앞에 붙여라(이 다섯 개는 예시다). "
-                    "질문과 상관있는 측면만 쓰고 줄 수를 억지로 채우지 마라. 제목 줄, 숫자 목록, \"- \"는 쓰지 마라 "
+                    "먼저 질문이 정확히 무엇을 묻는지 정하고, 줄마다 그것에 답하는 방법만 써라. 스킬 하나나 한 가지 행동(거리·타이밍·위치 등)을 묻는 좁은 질문이면 그 한 가지에 대한 줄만 2~3줄 쓰고, 묻지 않은 항목(콤보·노릴 대상·궁극기)은 쓰지 마라. 이미 앞 턴에 답한 내용을 되풀이하지 말고 줄 수를 억지로 채우지 마라. 제목 줄, 숫자 목록, \"- \"는 쓰지 마라 "
                     "— 다른 규칙에서 \"바로 할 것 3가지\"라고 부르는 것이 이 줄들이다."
                     + quick_actions_subject_rule
+                    + target_line_rule
                 )
             stay_preference_instruction = (
                 "\"추천 영웅\" 블록과 \"운영 팁:\" 블록 없이 상황 판단 한 줄 뒤 4번의 할 일 줄만 적어라."
@@ -769,6 +784,25 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
     함께 쓸 때의 운영 방식을 답변의 중심 내용으로 다뤄라. 부족한 역할이나
     약점이 있다면 "이런 부분이 아쉽다" 정도로 짧게만 짚고, 그걸 보완할 구체적인
     영웅을 여러 명 나열해서 추천하지는 마라 — 그건 이 답변이 할 일이 아니다.{roster_line}"""
+
+        # 사용자가 자기 기록으로 플레이 스타일을 묻는 질문: 기록 요약만 근거로 답한다.
+        records_instruction = ""
+        if state.get("is_records_question"):
+            records_summary = state.get("records_summary") or {}
+            nl = chr(10)
+            style_refs = nl.join(
+                f"   [{h['hero']} 운용] " + (get_hero_playstyle(h["hero"]) or "문서 없음").replace(nl, " / ")
+                for h in (records_summary.get("heroes") or [])[:2]
+            )
+            records_instruction = f"""
+12. 사용자는 자신의 누적 기록(스탯창으로 분석한 판들)으로 자기 플레이 스타일을 묻고 있다. 아래 "내 기록 요약"만 근거로 답해라.
+    영웅을 되묻지 말고, 일반론이나 영웅 소개를 쓰지 마라. 요약의 "판정" 줄을 그대로 근거로 삼고 없는 특징은 지어내지 마라.
+    판 수가 적다고 적힌 영웅은 스타일을 단정하지 말고 "판 수가 적어 더 지켜봐야 한다"고 말해라. 승률은 판정에 적힌 것만 말해라.
+    "허수 딜" 같은 단정 표현은 쓰지 말고 "피해량에 비해 처치가 적다"처럼 수치로 말해라.
+    영웅별로 어떤 스타일인지, 그다음 전체적으로 장점·아쉬운 점을 말하고, 할 일은 그 약점에 맞는 행동으로 채워라.
+    내 기록 요약:
+{records_prompt_block(records_summary)}
+{style_refs}"""
 
         # 두 스타일에 같은 형식을 적용하려고 style_rules 밖에 둔다.
         perk_instruction = ""
@@ -970,7 +1004,7 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
 
 답변 작성 규칙:
 {style_rules_1to5}{enemy_naming_instruction}{swap_decision_instruction}{stay_intent_block}{performance_improve_instruction}{map_strategy_instruction}{composition_evaluation_instruction}{suggested_questions_rules}
-{perk_instruction}{position_instruction}
+{perk_instruction}{position_instruction}{records_instruction}
 {target_priority_instruction}
 
 절대 금지:
@@ -1800,6 +1834,9 @@ def format_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
     # 질문을 되풀이한 제목 줄은 프롬프트로 막아도 가끔 나온다.
     answer = drop_echo_title(answer, state.get("message", ""))
     answer = fix_known_slips(drop_intro_announcement(answer))
+    # 자세히 문단은 문장마다 줄을 바꿔 읽기 쉽게 한다(특전 답변은 자체 형식이 있다).
+    if answer_style == "detailed" and not state.get("is_perk_question"):
+        answer = split_paragraph_sentences(answer)
     # 사용자가 말한 영웅(내 영웅·아군·상대)은 역할을 이미 안다.
     known_heroes = [state.get("current_hero")] + list(state.get("ally_team") or []) + list(state.get("enemy_team") or [])
     known_heroes += find_all_heroes(state.get("message", ""))

@@ -1026,6 +1026,36 @@ _MULTI_ROLE_PATTERN = re.compile(
 )
 
 
+# 카운터를 묻는 말에 "힐러도 알려줘"처럼 추천받을 역할이 직접 들어 있는 경우.
+_COUNTER_WORD_RE = re.compile(r"카운터|상대법|상대하는|이기는|잡는|대처")
+_COUNTER_ROLE_AFTER_RE = re.compile(
+    r"(?:카운터|상대법|이기는|잡는)\s*(?:영웅\s*(?:중\s*)?)?"
+    r"((?:탱커|딜러|힐러|지원가)(?:\s*(?:랑|이랑|와|과|하고|이나|나|,|/)\s*(?:탱커|딜러|힐러|지원가))*)"
+)
+_COUNTER_ROLE_BEFORE_RE = re.compile(
+    r"(탱커|딜러|힐러|지원가)\s*(?:영웅\s*)?(?:쪽\s*)?"
+    r"(?:카운터|도\s*(?:알려|추천|보여|말해)|만\s*(?:알려|추천|보여)|로\s*(?:알려|추천)|중에서?)"
+)
+_ENEMY_BEFORE_ROLE_RE = re.compile(r"(상대|적|우리|아군|팀|내)\s*(?:팀\s*)?$")
+
+
+def counter_request_role(message: str) -> Optional[str]:
+    """카운터 질문 안에서 추천받을 역할을 직접 말했으면 그 필터를 돌려준다("겐지 카운터 힐러도 알려줘")."""
+    if not message or not _COUNTER_WORD_RE.search(message):
+        return None
+    roles = []
+    for pattern in (_COUNTER_ROLE_AFTER_RE, _COUNTER_ROLE_BEFORE_RE):
+        for m in pattern.finditer(message):
+            # "상대 힐러", "우리 탱커"처럼 편을 가리키는 역할 말은 추천받을 역할이 아니다.
+            if _ENEMY_BEFORE_ROLE_RE.search(message[: m.start(1)].rstrip()):
+                continue
+            roles += [_ROLE_WORDS[w] for w in re.findall(r"탱커|딜러|힐러|지원가", m.group(1))]
+    roles = list(dict.fromkeys(roles))
+    if not roles:
+        return None
+    return roles[0] if len(roles) == 1 else make_role_filter(roles)
+
+
 def role_filter_from_text(message: str) -> Optional[str]:
     stripped = re.sub(r"[\s,.!?~]+", "", message)
     # 역할 단어 하나에 서술격 어미만 붙은 짧은 대답.
@@ -1039,6 +1069,11 @@ def role_filter_from_text(message: str) -> Optional[str]:
         if word in ("전체", "전부"):
             return "all"
         return _ROLE_WORDS[word]
+
+    # 앞 답을 이어 "힐러도 알려줘"처럼 역할만 바꿔 다시 묻는 짧은 말.
+    follow = re.match(r"^(탱커|딜러|힐러|지원가)(?:도|는|만|로|으로)?(?:알려|추천|보여|말해)", stripped)
+    if follow:
+        return _ROLE_WORDS[follow.group(1)]
 
     # 두 역할을 함께 고른 경우 복합 필터로 만든다.
     multi = _MULTI_ROLE_PATTERN.search(message)
@@ -1060,7 +1095,7 @@ def role_filter_from_text(message: str) -> Optional[str]:
         return "support"
     if any(word in message for word in ["전체로", "전체 추천", "전부 알려", "다 알려"]):
         return "all"
-    return None
+    return counter_request_role(message)
 
 
 # 정정 메시지에서 지워도 되는 표현(역할/인원수/조사/요청 표현).
@@ -1072,7 +1107,7 @@ _ROLE_CORRECTION_FILLER_PATTERN = re.compile(
     r"|기준으로|기준|중에서|중|으로만|로만|만"
     r"|입니다|이에요|에요|예요|이야|였어|이고|인데요|인데|임|이라|야|고|요"
     r"|할게요|할래요|할게|할래|맞아요|맞아|입장|플레이"
-    r"|은|는|이|가|을|를|로|으로|랑|이랑|하고|와|과)"
+    r"|은|는|이|가|을|를|도|로|으로|랑|이랑|하고|와|과)"
 )
 
 

@@ -29,6 +29,7 @@ from chat.domain.heroes import (
     resolve_hero_name,
     role_filter_label,
 )
+from chat.domain.records_summary import is_records_question
 from chat.domain.intent_rules import (
     ENEMY_ROLE_FOCUS_LABELS,
     ROLE_NARROWING_MAX_AGE_SECONDS,
@@ -1197,6 +1198,10 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     )
     # 세션에는 사용자가 직접 밝힌 값만 남기고, 답변 기준은 이 값을 쓴다.
     effective_roster_size = resolve_roster_size(roster_size)
+    # 내 기록(브라우저에서 요약해 보낸 숫자)으로 내 플레이 스타일을 묻는 질문은 영웅을 되묻지 않고 그 요약으로 답한다.
+    records_question = bool(state.get("records_summary")) and is_records_question(
+        effective_message, bool(context.get("my_stats") or context.get("my_team_stats"))
+    )
     # 아군·상대가 아닌 영웅의 플레이를 묻는 질문은 앞 조합과 무관하다(역할 좁히기·인원수 버튼을 붙이지 않는다).
     topic_hero_question = bool(
         intent in TOPIC_HERO_INTENTS and not current_hero and not ally_team_this_turn
@@ -1204,7 +1209,8 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
     )
     # 조건에 맞는 영웅 목록이나 영웅·스킬 사실을 묻는 질문도 사용자 자리와 무관하다(역할을 좁히거나 고정하지 않는다).
     role_neutral_question = bool(
-        not is_team_comp_question
+        records_question
+        or not is_team_comp_question
         and (
             answer_followup
             or bool(state.get("llm_skill_tag"))
@@ -1274,6 +1280,11 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         intent = "performance_improve"
     elif ally_target_choice and intent in ("composition", "swap", "counter", "general"):
         logger.info("[ALLY TARGET CHOICE] intent %s → performance_improve (스킬 대상 선택 질문)", intent)
+        intent = "performance_improve"
+
+    # 내 기록 기반 질문은 위에서 계산한 records_question으로 intent를 교정한다.
+    if records_question and intent not in ("off_topic", "performance_improve"):
+        logger.info("[RECORDS QUESTION] intent %s → performance_improve (내 기록 기반 질문)", intent)
         intent = "performance_improve"
 
     # 특전 질문의 "추천"은 영웅 추천 요청이 아니라 개선 질문이다.
@@ -1473,7 +1484,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
             skill_name_focus = bool(focus_heroes)
         # 영웅을 골라 달라거나 스킬 성질로 영웅을 찾는 질문은 앞 영웅을 생략한 후속 질문이 아니다.
         if (
-            not focus_heroes and not state.get("llm_skill_tag") and not is_pick_request(effective_message)
+            not focus_heroes and not records_question and not state.get("llm_skill_tag") and not is_pick_request(effective_message)
             and is_ellipsis_followup(effective_message)
         ):
             if len(previous_focus_heroes) == 1:
@@ -1605,6 +1616,7 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         and wants_composition_recommendation(effective_message)
         and not roster_is_full
         and not perk_question
+        and not records_question
     ):
         recommend_card_mode = "composition"
     elif intent == "swap" and current_hero and not current_hero_uncertain:
@@ -1639,8 +1651,10 @@ def merge_context_node(state: ChatbotGraphState) -> ChatbotGraphState:
         "matchup_subject_is_enemy": matchup_subject_is_enemy,
         "recommend_card_mode": recommend_card_mode,
         "is_perk_question": perk_question,
+        "is_records_question": records_question,
         "is_target_priority_question": target_priority_question,
         "target_priority": rank_opponents(current_hero, enemy_team) if target_priority_question else [],
+        "opponent_order": rank_opponents(current_hero, enemy_team) if (current_hero and enemy_team and not target_priority_question) else [],
         "ally_team": ally_team,
         "compared_heroes": compared_heroes,
         "is_team_comp_question": is_team_comp_question,
