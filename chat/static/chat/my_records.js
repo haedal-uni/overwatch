@@ -65,14 +65,65 @@
       .map(([hero, count]) => ({ hero, count }));
   }
 
+  // 내 플레이 스타일을 묻는 질문에 함께 보내는 요약(숫자만). 내 줄을 알아본 판만 쓰고, 영웅별로
+  // "같은 판 같은 역할의 다른 선수(양 팀) 평균 대비 몇 %"를 평균한다. 닉네임·팀 구성은 보내지 않는다.
+  function recordsSummary(maxHeroes = 5) {
+    const mine = load().filter((r) => {
+      const me = r.match && (r.match.ally || []).find((p) => p.is_self);
+      return me && me.hero && !/^미확인|unknown/i.test(me.hero);
+    });
+    if (!mine.length) return null;
+    const mean = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+    const round1 = (v) => (v == null ? null : Math.round(v * 10) / 10);
+    const byHero = {};
+    mine.forEach((r) => {
+      const me = r.match.ally.find((p) => p.is_self);
+      (byHero[me.hero] = byHero[me.hero] || []).push(r);
+    });
+    const heroes = Object.entries(byHero).sort((a, b) => b[1].length - a[1].length).slice(0, maxHeroes).map(([hero, games]) => {
+      const mes = games.map((r) => r.match.ally.find((p) => p.is_self));
+      const peers = {};
+      ["damage", "healing", "mitigation", "kills", "deaths"].forEach((key) => {
+        const pcts = games.map((r, i) => {
+          const me = mes[i];
+          const others = (r.match.ally || []).concat(r.match.enemy || []).filter((p) => p !== me && p.role === me.role && p[key] != null);
+          const base = mean(others.map((p) => Number(p[key])));
+          return me[key] != null && base ? (Number(me[key]) / base - 1) * 100 : null;
+        }).filter((v) => v != null);
+        peers[key] = pcts.length ? round1(mean(pcts)) : null;
+      });
+      const ranked = games.filter((r) => r.match.self_rank);
+      const kda = (key) => round1(mean(mes.map((p) => p[key]).filter((v) => v != null)));
+      return {
+        hero, role: mes[0].role || null, games: games.length,
+        wins: games.filter((r) => r.result === "win").length,
+        losses: games.filter((r) => r.result === "loss").length,
+        avg_rank: ranked.length ? round1(mean(ranked.map((r) => r.match.self_rank))) : null,
+        avg_kda: { kills: kda("kills"), deaths: kda("deaths"), assists: kda("assists") },
+        vs_peers: peers,
+      };
+    });
+    const ranked = mine.filter((r) => r.match.self_rank);
+    return {
+      games: mine.length,
+      wins: mine.filter((r) => r.result === "win").length,
+      losses: mine.filter((r) => r.result === "loss").length,
+      draws: mine.filter((r) => r.result === "draw").length,
+      avg_rank: ranked.length ? round1(mean(ranked.map((r) => r.match.self_rank))) : null,
+      heroes,
+    };
+  }
+
   const hasNumbers = (match) => !!match && (match.ally || []).some((p) => p.kills != null || p.damage != null);
 
   // 숫자를 읽은 판만 남긴다(같은 분석을 두 번 넣지 않는다).
-  function save(match, id) {
+  // result(win·loss·draw)를 주면 그 승패로 기록한다(일괄 올리기).
+  function save(match, id, result) {
     if (!hasNumbers(match)) return null;
     const list = load();
     if (id && list.some((r) => r.id === id)) return list.find((r) => r.id === id);
     const record = { id: id || String(Date.now()), ts: Date.now(), match };
+    if (result === "win" || result === "loss" || result === "draw") record.result = result;
     list.unshift(record);
     store(list);
     if (window.OwEvents) window.OwEvents.scoreboard(match);
@@ -323,6 +374,12 @@
       if (lines.length) html += '<div class="rec-trend"><div class="rec-sec">최근 5판 vs 그 전</div>' + lines.map((l) => "<div>" + l + "</div>").join("") + "</div>";
     }
 
+    const mains = mainHeroes();
+    html += '<div class="rec-trend"><div class="rec-sec">챗봇 추천에 반영돼요</div><div>' + (mains.length
+      ? "자주 한 영웅(<b>" + mains.map((m) => escapeHtml(m.hero)).join(", ") + "</b>)과 운용이 비슷한 영웅을 먼저 추천해요."
+      : "같은 영웅을 2판 이상 하면, 챗봇이 그 영웅과 운용이 비슷한 영웅을 먼저 추천해요.") +
+      " 기록이 쌓일수록 정확해져요.</div></div>";
+
     const heroes = Object.keys(heroCount).sort((a, b) => heroCount[b] - heroCount[a]);
     if (heroes.length) {
       html += '<div class="rec-sec">영웅별</div><div class="rec-heroes">' + heroes.map((h) => {
@@ -457,5 +514,7 @@
     actionBar,
     openRecords,
     mainHeroes,
+    recordsSummary,
+    save,
   };
 })();
