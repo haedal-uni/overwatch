@@ -6,6 +6,46 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="csrf-token" content="{{ csrf_token }}" />
+  <script src="/pwa/device.js"></script>
+  <script>
+    (function () {
+      var id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+        : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+            var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16);
+          });
+      window.OW_VISIT_ID = id;
+      // 이 브라우저의 챗봇 기기 ID(처음 열 때 한 번 만들어 둔다)와 같은 브라우저의 게임 기기 ID(읽기만 한다, 없으면 비움).
+      function newId() {
+        return (window.crypto && crypto.randomUUID) ? crypto.randomUUID().replace(/-/g, '')
+          : Array.from({ length: 32 }, function () { return (Math.random() * 16 | 0).toString(16); }).join('');
+      }
+      var deviceId = '';
+      try { deviceId = (window.OwDevice && OwDevice.id()) || ''; } catch (e) { deviceId = ''; }
+      if (!/^[A-Za-z0-9_-]{8,64}$/.test(deviceId)) {
+        try {
+          deviceId = localStorage.getItem('owcoach.device.v1') || '';
+          if (!/^[A-Za-z0-9_-]{8,64}$/.test(deviceId)) { deviceId = newId(); localStorage.setItem('owcoach.device.v1', deviceId); }
+        } catch (e) { deviceId = ''; }
+      }
+      var gameId = '';
+      try { gameId = (JSON.parse(localStorage.getItem('game.player') || '{}') || {}).id || ''; } catch (e) {}
+      var orig = window.fetch;
+      window.fetch = function (input, init) {
+        try {
+          var url = typeof input === 'string' ? input : (input && input.url) || '';
+          if (url.charAt(0) === '/' && url.indexOf('//') !== 0) {
+            init = init || {};
+            var h = new Headers(init.headers || (typeof input !== 'string' && input.headers) || {});
+            h.set('X-Visit-Id', id);
+            if (deviceId) h.set('X-Device-Id', deviceId);
+            if (/^[A-Za-z0-9_-]{8,64}$/.test(gameId)) h.set('X-Game-Device', gameId);
+            init.headers = h;
+          }
+        } catch (e) {}
+        return orig.call(this, input, init);
+      };
+    })();
+  </script>
   <script src="/pwa/inset.js"></script>
   <title>오버워치 코치 AI</title>
   <link rel="manifest" href="/manifest.json">
@@ -2570,6 +2610,26 @@
       cursor: not-allowed
     }
 
+    .send-btn.stop {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      box-shadow: 0 12px 26px rgba(220, 38, 38, .22)
+    }
+
+    .style-btn:disabled {
+      opacity: .5;
+      cursor: not-allowed
+    }
+
+    /* 아이폰(사파리)은 글자 크기가 16px보다 작은 입력칸을 누르면 화면을 확대한다 */
+    @media (hover: none) and (pointer: coarse) {
+      textarea,
+      input[type="text"],
+      input:not([type]),
+      select {
+        font-size: 16px !important
+      }
+    }
+
     .upload-btn {
       height: 42px;
       width: 42px;
@@ -3754,7 +3814,7 @@
       });
       list.innerHTML = html;
     }
-    function openSelect() { $('mapSelect').classList.add('open'); $('mapSearch').focus(); renderMapList(); }
+    function openSelect() { $('mapSelect').classList.add('open'); if (!window.matchMedia('(pointer: coarse)').matches) $('mapSearch').focus(); renderMapList(); }
     function closeSelect() { $('mapSelect').classList.remove('open'); }
     $('mapTrigger').addEventListener('click', () => $('mapSelect').classList.contains('open') ? closeSelect() : openSelect());
     $('mapSearch').addEventListener('input', renderMapList);
@@ -3785,6 +3845,7 @@
 
     // 간단히/자세히/명령조 토글. 고른 값은 다음 질문에 answer_style로 함께 보낸다.
     document.querySelectorAll('.style-btn').forEach(btn => btn.addEventListener('click', () => {
+      if (state.busy) return;
       document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       state.answerStyle = btn.dataset.style;
@@ -3859,11 +3920,15 @@
       const formData = new FormData();
       formData.append('image', file, file.name || 'scoreboard.png');
       formData.append('with_feedback', withFeedback ? '1' : '0');
-      const res = await fetch('/chat/api/scoreboard/', {
-        method: 'POST',
-        headers: { 'X-CSRFToken': getCsrf() },
-        body: formData,
-      });
+      let res;
+      try {
+        res = await fetch('/chat/api/scoreboard/', {
+          method: 'POST',
+          headers: { 'X-CSRFToken': getCsrf() },
+          body: formData,
+          signal: chatAbort ? chatAbort.signal : undefined,
+        });
+      } catch (e) { throw abortAsCancel(e); }
       const data = await parseJsonOrThrow(res);
       if (!res.ok || data.error) throw new Error(data.error || '이미지 분석에 실패했습니다.');
       return data;
@@ -3874,7 +3939,7 @@
       addMessage('user', text || '스탯창 분석해줘', { context: '스탯창 이미지 첨부', stats: text ? hasStats(text) : false, recent: Boolean(text) });
       input.value = ''; autoResize();
       clearAttachedImage();
-      state.busy = true; sendBtn.disabled = true; uploadBtn.disabled = true; addTyping(IMAGE_TYPING_STEPS);
+      setBusyUI(true); uploadBtn.disabled = true; addTyping(IMAGE_TYPING_STEPS);
       try {
         const board = await requestScoreboard(file, !text);
         if (!text) {
@@ -3890,7 +3955,7 @@
       } catch (err) {
         removeTyping(); showError(err.message || '이미지 분석에 실패했습니다.');
       } finally {
-        state.busy = false; sendBtn.disabled = false; uploadBtn.disabled = false; input.focus();
+        setBusyUI(false); uploadBtn.disabled = false; input.focus();
       }
     }
 
@@ -4630,6 +4695,8 @@
         body.question_source = input.dataset.source || 'typed'; setSource('typed');
         const mains = window.MatchRecords?.mainHeroes?.() || [];
         if (mains.length) body.main_heroes = mains;
+        const summary = window.MatchRecords?.recordsSummary?.();
+        if (summary) body.records_summary = summary;
       }
       if (roleFilter) body.role_filter = roleFilter;
       if (focusHero) body.focus_hero = focusHero;
@@ -4640,12 +4707,30 @@
       if (Object.keys(extra).length) body.extra_context = extra;
       return body;
     }
+    // 답변을 기다리는 동안: 전송 버튼이 '중지'가 되고, 답변 스타일은 바꿀 수 없다.
+    let chatAbort = null;
+    function setBusyUI(on) {
+      state.busy = on;
+      sendBtn.disabled = false;
+      sendBtn.textContent = on ? '중지' : '전송';
+      sendBtn.classList.toggle('stop', on);
+      document.querySelectorAll('.style-btn').forEach(b => { b.disabled = on; });
+      chatAbort = on ? new AbortController() : null;
+    }
+    function abortAsCancel(e) {
+      if (e && e.name === 'AbortError') { const c = new Error('답변을 중지했어요. 다시 질문해 주세요.'); c.cancelled = true; return c; }
+      return e;
+    }
     async function requestChat(body) {
-      const res = await fetch('/chat/api/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
-        body: JSON.stringify(body)
-      });
+      let res;
+      try {
+        res = await fetch('/chat/api/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
+          body: JSON.stringify(body),
+          signal: chatAbort ? chatAbort.signal : undefined
+        });
+      } catch (e) { throw abortAsCancel(e); }
       const data = await parseJsonOrThrow(res);
       if (!res.ok || data.error) throw new Error(data.error || '응답 중 오류가 발생했습니다.');
       return data;
@@ -4662,53 +4747,55 @@
       const ctx = contextLabel();
       addMessage('user', text, { stats: hasStats(text), context: ctx, recent: true, heroes });
       input.value = ''; autoResize();
-      state.busy = true; sendBtn.disabled = true; addTyping();
+      setBusyUI(true); addTyping();
       try {
         const data = await requestChat(buildRequestBody(text));
         removeTyping();
-        if (window.OwEvents) OwEvents.chat();
+        // 오버워치와 무관한 질문(고정 문구로 답한 것)은 미션 횟수에 세지 않는다.
+        if (window.OwEvents && data.intent !== 'off_topic' && data.recommendation_type !== 'off_topic') OwEvents.chat(text);
         addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card });
       } catch (err) {
         removeTyping(); showError(err.message || '연결에 실패했습니다.');
+        if (err.cancelled) { input.value = text; autoResize(); }
       } finally {
-        state.busy = false; sendBtn.disabled = false; input.focus();
+        setBusyUI(false); input.focus();
       }
     }
     async function sendRoleFilter(value, label) {
       if (state.busy) return;
       const roleLabel = label || ({ all: '전체', tank: '탱커', damage: '딜러', support: '힐러' }[value]) || value;
       addMessage('user', roleLabel, { context: '역할 선택' });
-      state.busy = true; sendBtn.disabled = true; addTyping();
+      setBusyUI(true); addTyping();
       try {
         const data = await requestChat(buildRequestBody('', value));
         removeTyping();
         addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card });
       } catch (err) { removeTyping(); showError(err.message || '연결에 실패했습니다.'); }
-      finally { state.busy = false; sendBtn.disabled = false; }
+      finally { setBusyUI(false); }
     }
     async function sendRosterSize(value, label) {
       if (state.busy) return;
       addMessage('user', label || `${value}대${value}예요`, { context: '인원수 선택' });
-      state.busy = true; sendBtn.disabled = true; addTyping();
+      setBusyUI(true); addTyping();
       try {
         const data = await requestChat(buildRequestBody('', null, null, value));
         removeTyping();
         addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card });
       } catch (err) { removeTyping(); showError(err.message || '연결에 실패했습니다.'); }
-      finally { state.busy = false; sendBtn.disabled = false; }
+      finally { setBusyUI(false); }
     }
     async function sendFocusHero(value, label) {
       if (state.busy) return;
       addMessage('user', label || value, { context: '영웅 선택' });
-      state.busy = true; sendBtn.disabled = true; addTyping();
+      setBusyUI(true); addTyping();
       try {
         const data = await requestChat(buildRequestBody('', null, value));
         removeTyping();
         addMessage('ai', data.answer || '답변이 비어 있습니다.', { suggested: data.suggested_questions || [], choiceButtons: data.choice_buttons || [], turnId: data.turn_id, matchupCard: data.matchup_card, recommendCard: data.recommend_card });
       } catch (err) { removeTyping(); showError(err.message || '연결에 실패했습니다.'); }
-      finally { state.busy = false; sendBtn.disabled = false; }
+      finally { setBusyUI(false); }
     }
-    sendBtn.addEventListener('click', sendMessage);
+    sendBtn.addEventListener('click', () => { if (state.busy) { if (chatAbort) chatAbort.abort(); return; } sendMessage(); });
 
     function resetScreen() {
       state.answerStyle = 'simple';
