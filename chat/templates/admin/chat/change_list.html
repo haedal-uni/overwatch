@@ -1,6 +1,9 @@
 {% extends "admin/change_list.html" %}
 
 {% block content %}
+<div style="margin:0 0 12px;">
+  <a class="button default" href="{% url 'admin:chat_chatlog_users' %}">👥 사용자별 대화 기록 보기 (날짜별·방문별)</a>
+</div>
 <details class="intent-legend">
   <summary>intent(질문 의도) 값 설명 펼치기/접기</summary>
   <table>

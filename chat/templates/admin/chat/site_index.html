@@ -1,5 +1,5 @@
 {% extends "admin/index.html" %}
-{% load chat_dashboard %}
+{% load chat_dashboard chat_pending %}
 {% comment %}관리자 홈. "최근 활동" 칸은 빼고, 앱 목록 위에 챗봇 분석 요약을 둔다.{% endcomment %}
 
 {% block coltype %}colM{% endblock %}
@@ -16,6 +16,8 @@
   .db-card b small { font-size: 14px; font-weight: 600; margin-left: 2px; }
   .db-card span { display: block; margin-top: 4px; font-size: 12px; color: var(--body-quiet-color); }
   .db-card.warn b { color: #d6455d; }
+  a.db-card { display: block; text-decoration: none; }
+  a.db-card.todo b { color: #d6455d; }
   .db-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
   .db-box { padding: 18px; border-radius: 16px; background: var(--body-bg); box-shadow: var(--card-shadow); min-width: 0; }
   .db-box h3 { margin: 0 0 12px; font-size: 14px; color: var(--body-fg); }
@@ -50,7 +52,15 @@
 {% endblock %}
 
 {% block content %}
-{% chat_dashboard as d %}
+{% chat_dashboard as d %}{% pending_map as pend %}
+<div class="db">
+  <h2 class="db-title">처리할 것</h2>
+  <p class="db-sub">큰 숫자는 그 목록을 마지막으로 연 뒤 새로 올라온 것(새 글)이고, 옆의 미반영은 반영함 체크가 안 된 것 전부입니다. 목록을 열기만 하면 새 글은 확인한 것으로 칩니다. 오류 로그는 반영 표시가 없어 새 글만 셉니다.</p>
+  <div class="db-cards">
+    {% for app in available_apps %}{% for model in app.models %}{% with n=pend|unseen:model.admin_url o=pend|openn:model.admin_url %}{% if n or o %}<a class="db-card{% if n %} todo{% endif %}" href="{{ model.admin_url }}"><b>{{ n|default:0 }}</b><span>{{ model.name }} 새 글{% if o %} · 미반영 {{ o }}{% endif %}</span></a>{% endif %}{% endwith %}{% endfor %}{% endfor %}
+    {% if not pend %}<div class="db-card"><b>0</b><span>확인할 것이 없어요</span></div>{% endif %}
+  </div>
+</div>
 <div class="db">
   <h2 class="db-title">챗봇 한눈에 보기</h2>
   <p class="db-sub">질문 수는 사용자 메시지(버튼 선택 포함) 기준이고, 1분마다 새로 계산합니다. 게임 분석은 "게임 이용 현황"에 있습니다.</p>

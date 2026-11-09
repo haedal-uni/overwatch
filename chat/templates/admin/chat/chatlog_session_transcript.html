@@ -15,7 +15,9 @@
     <div>
       <h1 style="margin-bottom:4px;">대화 전체 보기</h1>
       <p style="color:#6b7280; margin-top:0;">
-        세션: <code>{{ log_session_id }}</code> · 총 {{ transcript_messages|length }}개 메시지
+        방문(세션): <code>{{ log_session_id }}</code> · 총 {{ transcript_messages|length }}개 메시지
+        {% if visit_start %}<br>{{ visit_start|date:"Y-m-d H:i" }} ~ {{ visit_end|date:"H:i" }} ({% if visit_minutes %}{{ visit_minutes }}분 동안{% else %}1분 미만{% endif %}, 챗봇을 켠 순간부터 끈 순간까지){% endif %}
+        {% if device_id %}<br>사용자: <a href="{{ user_url }}"><code>{{ device_id|slice:":8" }}</code></a> · <a href="{{ user_url }}">이 사람의 전체 기록(날짜별) 보기</a>{% if game_id %} · 🎮 선물함 번호 <code>{{ game_id|slice:":8" }}</code>{% endif %}{% else %}<br><span style="color:#9ca3af;">기기 정보가 없는 예전 기록입니다.</span>{% endif %}
       </p>
     </div>
     <form method="post" action="{% url 'admin:chat_chatlog_session_delete' log_session_id %}"
@@ -32,8 +34,9 @@
   <div style="display:flex; flex-direction:column; gap:16px; margin-top:20px;">
     {% for m in transcript_messages %}
       {% with obj=m.obj %}
-      <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px;
-                  {% if obj.role == 'ERROR' %}border-color:#fdba74;{% endif %}">
+      <div id="t-{{ obj.turn_id }}" style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px;
+                  {% if obj.role == 'ERROR' %}border-color:#fdba74;{% endif %}{% if highlight_turn and obj.turn_id == highlight_turn %}border:2px solid #6366f1; box-shadow:0 0 0 4px #6366f133;{% endif %}">
+        {% if highlight_turn and obj.turn_id == highlight_turn and obj.role == 'USER' %}<div style="color:#4f46e5; font-weight:700; font-size:12px; margin-bottom:6px;">◀ 보고 계시던 턴</div>{% endif %}
         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
           <div>{{ m.role_badge }}</div>
           <div style="color:#9ca3af; font-size:12px;">
@@ -82,4 +85,8 @@
     {% endfor %}
   </div>
 </div>
+{% if highlight_turn %}<script>
+  (function () { var el = document.getElementById('t-{{ highlight_turn }}'); if (el) el.scrollIntoView({ block: 'center' }); })();
+</script>{% endif %}
 {% endblock %}
+

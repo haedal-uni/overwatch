@@ -6,6 +6,23 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
+def _no_cache_static():
+    """runserver가 내보내는 정적 파일에 Cache-Control: no-cache를 붙인다(폰이 옛 파일을 몇 시간씩 쓰지 않게, 바뀌지 않았으면 304)."""
+    from django.contrib.staticfiles.handlers import StaticFilesHandlerMixin
+
+    if getattr(StaticFilesHandlerMixin, "_ow_no_cache", False):
+        return
+    original = StaticFilesHandlerMixin.serve
+
+    def serve(self, request):
+        response = original(self, request)
+        response["Cache-Control"] = "no-cache"
+        return response
+
+    StaticFilesHandlerMixin.serve = serve
+    StaticFilesHandlerMixin._ow_no_cache = True
+
+
 class ChatConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "chat"
@@ -13,6 +30,7 @@ class ChatConfig(AppConfig):
     _initialized = False
 
     def ready(self):
+        _no_cache_static()
         from chat.domain.intent_rules import set_meta_roster_provider
         from chat.site_settings import meta_roster_size
         set_meta_roster_provider(meta_roster_size)

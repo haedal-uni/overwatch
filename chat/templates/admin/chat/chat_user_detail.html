@@ -1,0 +1,75 @@
+{% extends "admin/base_site.html" %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">홈</a>
+  &rsaquo; <a href="{% url 'admin:chat_chatlog_changelist' %}">채팅 로그</a>
+  &rsaquo; <a href="{% url 'admin:chat_chatlog_users' %}">사용자별 대화 기록</a>
+  &rsaquo; {{ device_id|slice:":8" }}
+</div>
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 1100px; margin: 0 auto;">
+  <h1 style="margin-bottom:4px;">사용자 <code>{{ device_id|slice:":8" }}</code></h1>
+  <p style="color:#6b7280; margin-top:0;">기기 ID <code>{{ device_id }}</code></p>
+
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin:14px 0;">
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 14px;"><div style="color:#6b7280;font-size:12px;">처음 쓴 날</div><b>{{ first|date:"Y-m-d H:i" }}</b></div>
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 14px;"><div style="color:#6b7280;font-size:12px;">마지막으로 쓴 날</div><b>{{ last|date:"Y-m-d H:i" }}</b></div>
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 14px;"><div style="color:#6b7280;font-size:12px;">챗봇을 쓴 날 수</div><b>{{ active_days }}일</b></div>
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 14px;"><div style="color:#6b7280;font-size:12px;">켠 횟수(방문)</div><b>{{ visit_count }}번</b></div>
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 14px;"><div style="color:#6b7280;font-size:12px;">질문</div><b>{{ question_count }}개</b></div>
+  </div>
+
+  <h2 style="font-size:15px;">최근 14일 질문 수</h2>
+  <div style="display:flex; align-items:flex-end; gap:6px; height:60px; margin-bottom:6px;">
+    {% for d in strip %}
+    <div title="{{ d.date|date:'m/d' }} · {{ d.n }}개" style="flex:1; text-align:center;">
+      <div style="height:{{ d.h }}px; background:{% if d.n %}#6366f1{% else %}#e5e7eb{% endif %}; border-radius:3px 3px 0 0;"></div>
+    </div>
+    {% endfor %}
+  </div>
+  <div style="display:flex; gap:6px; color:#9ca3af; font-size:10px; margin-bottom:18px;">
+    {% for d in strip %}<div style="flex:1; text-align:center;">{{ d.date|date:"j" }}</div>{% endfor %}
+  </div>
+
+  <h2 style="font-size:15px;">게임도 하는 사람인지</h2>
+  {% if game_ids %}
+    <p style="margin:4px 0;">같은 브라우저의 게임 기기 번호(선물함 "내 기기 번호"와 같은 값, 앞 8자리): {% for g in game_ids %}<code>{{ g|slice:":8" }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}</p>
+    {% if game_rows %}
+    <table style="width:auto; min-width:320px;">
+      <thead><tr><th>게임</th><th>이용한 날</th><th>마지막</th></tr></thead>
+      <tbody>{% for r in game_rows %}<tr><td>{{ r.title }}</td><td>{{ r.days }}일</td><td>{{ r.last|date:"m/d" }}</td></tr>{% endfor %}</tbody>
+    </table>
+    {% else %}<p style="color:#9ca3af;">게임 앱을 연 기록은 아직 없습니다.</p>{% endif %}
+  {% else %}
+    <p style="color:#9ca3af; margin:4px 0;">게임 기기 ID가 연결되지 않았습니다(이 브라우저에서 게임을 연 적이 없거나, 게임 앱이 없습니다).</p>
+  {% endif %}
+
+  <h2 style="font-size:15px; margin-top:22px;">날짜별 대화(챗봇을 켠 순간부터 끈 순간까지가 한 방문)</h2>
+  {% for day in day_rows %}
+  <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 16px;margin-bottom:12px;">
+    <div style="display:flex; justify-content:space-between; font-weight:700; margin-bottom:6px;">
+      <span>{{ day.date|date:"Y년 n월 j일 (D)" }}</span>
+      <span style="color:#6b7280; font-weight:400;">방문 {{ day.visits|length }}번 · 질문 {{ day.questions }}개</span>
+    </div>
+    <table style="width:100%;">
+      <thead><tr><th>시간</th><th>머문 시간</th><th>질문</th><th>첫 질문</th><th>영웅</th><th></th></tr></thead>
+      <tbody>
+      {% for v in day.visits %}
+        <tr>
+          <td style="white-space:nowrap;">{{ v.start|date:"H:i" }} ~ {{ v.end|date:"H:i" }}</td>
+          <td style="white-space:nowrap;">{% if v.minutes %}{{ v.minutes }}분{% else %}1분 미만{% endif %}</td>
+          <td>{{ v.q }}개</td>
+          <td style="max-width:360px;">{{ v.first|default:"-" }}</td>
+          <td>{{ v.heroes|default:"-" }}</td>
+          <td>{% if v.url %}<a href="{{ v.url }}">대화 보기</a>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
