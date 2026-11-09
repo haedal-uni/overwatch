@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 import uuid
 import traceback
@@ -19,6 +20,7 @@ from chat.graph.pipeline import (
 )
 from chat.domain.answer_format import ANSWER_STYLES
 from chat.domain.heroes import resolve_hero_name
+from chat.domain.records_summary import clean_records_summary
 from chat.models import BatchJob, ChatLog, ChatOpinion
 from chat.rag.death_tips import get_death_tip
 from chat.rag.hero_guides import get_hero_guide
@@ -102,12 +104,30 @@ def csrf_failure_debug(request, reason=""):
     return django_csrf_failure(request, reason=reason)
 
 def ensure_log_session_id(request):
-    """대화 묶음 추적용 UUID를 세션에 보장하고 돌려준다(Django 세션키와 별개)."""
+    """로그 묶음 ID. 화면을 열 때마다 브라우저가 만드는 방문 ID(UUID)를 그대로 쓰고, 없으면 세션 값을 쓴다."""
+    visit_id = (request.headers.get("X-Visit-Id") or "").strip()
+    try:
+        return str(uuid.UUID(visit_id))
+    except ValueError:
+        pass
     if not request.session.get("log_session_id"):
         request.session["log_session_id"] = str(uuid.uuid4())
         request.session.modified = True
 
     return request.session["log_session_id"]
+
+
+_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def request_devices(request):
+    """요청 헤더의 챗봇 기기 ID·게임 기기 ID(형식이 맞을 때만)를 save_chat_log 인자로 돌려준다."""
+    out = {}
+    for key, header in (("device_id", "X-Device-Id"), ("game_device_id", "X-Game-Device")):
+        value = (request.headers.get(header) or "").strip()
+        if _DEVICE_ID_RE.match(value):
+            out[key] = value
+    return out
 
 
 def save_error_log(request, exc, *, source=None, extra_metadata=None):
@@ -125,6 +145,7 @@ def save_error_log(request, exc, *, source=None, extra_metadata=None):
             role="ERROR",
             message=str(exc),
             metadata=metadata,
+            **request_devices(request),
         )
     except Exception:
         logger.exception("ERROR 로그 저장 실패")
@@ -140,6 +161,8 @@ def save_chat_log(
     current_hero=None,
     target_enemy=None,
     metadata=None,
+    device_id="",
+    game_device_id="",
 ):
     """USER / AI / ERROR 메시지를 ChatLog에 저장한다."""
     ChatLog.objects.create(
@@ -151,6 +174,8 @@ def save_chat_log(
         current_hero=current_hero,
         target_enemy=target_enemy,
         metadata=metadata or {},
+        device_id=device_id,
+        game_device_id=game_device_id,
     )
 
 
@@ -185,6 +210,8 @@ def chat_api(request):
                 count = 0
             if hero and count > 0 and all(m["hero"] != hero for m in main_heroes):
                 main_heroes.append({"hero": hero, "count": count})
+        # 브라우저 "내 기록"을 요약한 숫자(내 플레이 스타일을 묻는 질문에만 쓴다).
+        records_summary = clean_records_summary(data.get("records_summary"))
         # 질문과 함께 첨부한 스탯창의 분석 로그 turn_id(관리자 페이지 연결용).
         scoreboard_turn_id = (data.get("scoreboard_turn_id") or "").strip()[:64] or None
 
@@ -247,6 +274,7 @@ def chat_api(request):
                 focus_hero_pick=focus_hero,
                 roster_size=roster_size,
                 main_heroes=main_heroes,
+                records_summary=records_summary,
             )
 
         context_patch = result.get("context_patch", {})
@@ -301,6 +329,7 @@ def chat_api(request):
             user_log_message = f"[{' · '.join(tags)}] {user_log_message}"
 
         save_chat_log(
+            **request_devices(request),
             log_session_id=log_session_id,
             turn_id=turn_id,
             role="USER",
@@ -321,6 +350,7 @@ def chat_api(request):
         if graph_error:
             # 그래프 내부 오류는 예외가 아니라 state["error"]로 온다.
             save_chat_log(
+                **request_devices(request),
                 log_session_id=log_session_id,
                 turn_id=turn_id,
                 role="ERROR",
@@ -337,6 +367,7 @@ def chat_api(request):
             )
         else:
             save_chat_log(
+                **request_devices(request),
                 log_session_id=log_session_id,
                 turn_id=turn_id,
                 role="AI",
@@ -432,11 +463,13 @@ def chat_death(request):
     turn_id = str(uuid.uuid4())
     try:
         save_chat_log(
+            **request_devices(request),
             log_session_id=log_session_id, turn_id=turn_id, role="USER",
             message=f"[죽었어요] {hero} → {killer}에게 처치", intent="death_tip",
             current_hero=hero, target_enemy=killer,
         )
         save_chat_log(
+            **request_devices(request),
             log_session_id=log_session_id, turn_id=turn_id, role="AI",
             message=f"{tip['do']}\n{tip['why']}" if tip else "(상성표에 없는 짝 — 채팅으로 넘김)",
             intent="death_tip", current_hero=hero, target_enemy=killer,
@@ -531,6 +564,7 @@ def chat_scoreboard_ocr(request):
         admin_log = result.get("admin_log", {})
 
         save_chat_log(
+            **request_devices(request),
             log_session_id=ensure_log_session_id(request),
             turn_id=turn_id,
             role="AI",
