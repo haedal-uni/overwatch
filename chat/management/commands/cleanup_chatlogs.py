@@ -65,10 +65,16 @@ class Command(BaseCommand):
 
         deleted_count, _ = old_logs.delete()
         failed = delete_scoreboard_debug_dirs(turn_ids + orphan_turn_ids)
+        # 3개월 동안 어느 기기도 오지 않은 PC·폰 연결 묶음(기기·기록 포함)도 지운다.
+        from chat.sync import cleanup_stale
+        stale_groups = cleanup_stale()
+        # 3일 지난 스탯창 일괄 올리기 작업(임시 파일 포함)도 지운다.
+        from chat.batch import purge_old
+        purge_old()
 
         self.stdout.write(
             f"로그 {deleted_count}건을 삭제했습니다"
-            f"(고아 디버그 폴더 {len(orphan_turn_ids)}개 포함 정리)."
+            f"(고아 디버그 폴더 {len(orphan_turn_ids)}개 포함 정리, 오래 안 쓴 기기 연결 {stale_groups}개)."
         )
         if failed:
             self.stderr.write(

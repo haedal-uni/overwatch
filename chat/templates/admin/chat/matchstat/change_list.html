@@ -1,0 +1,40 @@
+{% extends "admin/change_list.html" %}
+
+{% block content %}
+{% if stats %}
+<style>
+  .ms { margin: 0 0 18px; }
+  .ms-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .ms-card { padding: 14px 16px; border-radius: 14px; background: var(--body-bg); box-shadow: var(--card-shadow); }
+  .ms-card b { display: block; font-size: 22px; color: var(--body-fg); }
+  .ms-card span { font-size: 12px; color: var(--body-quiet-color); }
+  .ms-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .ms-box { padding: 14px 16px; border-radius: 14px; background: var(--body-bg); box-shadow: var(--card-shadow); min-width: 0; }
+  .ms-box h3 { margin: 0 0 8px; font-size: 14px; }
+  .ms-box table { width: 100%; font-size: 12.5px; border-collapse: collapse; }
+  .ms-box th, .ms-box td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--hairline-color); background: none; }
+  .ms-box th:first-child, .ms-box td:first-child { text-align: left; }
+  .ms-note { margin: 8px 0 0; font-size: 11.5px; color: var(--body-quiet-color); line-height: 1.5; }
+  @media (max-width: 767px) { .ms-grid { grid-template-columns: 1fr; } }
+</style>
+<div class="ms">
+  <div class="ms-cards">
+    <div class="ms-card"><b>{{ stats.total }}</b><span>저장된 판</span></div>
+    <div class="ms-card"><b>{{ stats.with_result }}</b><span>승패가 적힌 판</span></div>
+    <div class="ms-card"><b>{% if stats.win_rate is not None %}{{ stats.win_rate }}%{% else %}-{% endif %}</b><span>승률 (승 {{ stats.wins }} · 패 {{ stats.losses }} · 무 {{ stats.draws }})</span></div>
+    <div class="ms-card"><b>{% if stats.deaths %}{{ stats.deaths.win_ally }} / {{ stats.deaths.loss_ally }}{% else %}-{% endif %}</b><span>우리팀 평균 데스 (이긴 판 / 진 판)</span></div>
+    <div class="ms-card"><b>{% if stats.deaths %}{{ stats.deaths.win_enemy }} / {{ stats.deaths.loss_enemy }}{% else %}-{% endif %}</b><span>상대팀 평균 데스 (이긴 판 / 진 판)</span></div>
+  </div>
+  <div class="ms-grid">
+    <div class="ms-box">
+      <h3>내 영웅별</h3>
+      <table><thead><tr><th>영웅</th><th>판</th><th>승패 있음</th><th>승률</th></tr></thead><tbody>
+        {% for r in stats.heroes %}<tr><td>{{ r.label }}</td><td>{{ r.n }}</td><td>{{ r.known }}</td><td>{% if r.rate is not None %}{{ r.rate }}%{% else %}-{% endif %}</td></tr>{% empty %}<tr><td colspan="4">아직 없어요.</td></tr>{% endfor %}
+      </tbody></table>
+    </div>
+  </div>
+  <p class="ms-note">승패는 사용자가 누른 판만 집계합니다. 데스는 최근 {{ stats.sample }}판 중 승패가 있는 판의 평균입니다. 목록의 줄을 누르면 양 팀 전체 스탯과 순위 계산이 나옵니다. 필터로 영웅·승패·기간을 좁힐 수 있어요.</p>
+</div>
+{% endif %}
+{{ block.super }}
+{% endblock %}

@@ -6,7 +6,7 @@
 import logging
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from chat.domain.heroes import HERO_TO_ROLE, ROLE_LABELS, normalize_hero_name, resolve_hero_name
 from chat.rag.vectorstore import MD_PATH
@@ -19,10 +19,13 @@ _NEXT_H3_RE = re.compile(r"^###\s")
 
 # 우선 타겟 답변이 영웅마다 참고하는 항목.
 PROFILE_FIELDS = ["기본 위치", "취약한 상대 판정/상황", "조합 내 담당"]
+# 우선 타겟 근거는 상대가 어디 있고 무엇에 약한지만(그 상대 자신의 처리 우선·협업은 내 영웅 이유로 섞인다).
+TARGET_PROFILE_FIELDS = ["기본 위치", "취약한 상대 판정/상황"]
 
 # 원본 문서는 실행 중 바뀌지 않으므로 최초 1회만 파싱한다.
 _perk_sections_cache: Optional[Dict[str, str]] = None
 _profile_cache: Optional[Dict[str, str]] = None
+_target_profile_cache: Optional[Dict[str, str]] = None
 
 
 def read_source_markdown() -> Optional[str]:
@@ -103,12 +106,12 @@ def _build_perk_sections() -> Dict[str, str]:
     return sections
 
 
-def _build_profiles() -> Dict[str, str]:
+def _build_profiles(fields: List[str] = PROFILE_FIELDS) -> Dict[str, str]:
     profiles = {}
     for hero, body in _hero_section_bodies().items():
         blocks = [
             block for block in
-            (_extract_block(body, field) for field in PROFILE_FIELDS)
+            (_extract_block(body, field) for field in fields)
             if block
         ]
         if blocks:
@@ -116,6 +119,23 @@ def _build_profiles() -> Dict[str, str]:
 
     logger.info("[HERO PROFILE] 영웅 %d명 프로필 로드", len(profiles))
     return profiles
+
+
+_playstyle_cache: Optional[Dict[str, str]] = None
+_PLAYSTYLE_LINE_RE = re.compile(r"^-\s*(역할|운영 태그|기본 위치)\s*:")
+
+
+def get_hero_playstyle(hero: Optional[str]) -> Optional[str]:
+    """영웅 절 맨 위의 "역할 / 운영 태그 / 기본 위치" 줄(운용이 비슷한 영웅을 고를 근거)."""
+    global _playstyle_cache
+    if not hero:
+        return None
+    if _playstyle_cache is None:
+        _playstyle_cache = {
+            name: "\n".join(line.strip() for line in body if _PLAYSTYLE_LINE_RE.match(line.strip()))
+            for name, body in _hero_section_bodies().items()
+        }
+    return _playstyle_cache.get(normalize_hero_name(hero)) or None
 
 
 def get_hero_perk_section(hero: Optional[str]) -> Optional[str]:
@@ -130,6 +150,35 @@ def get_hero_perk_section(hero: Optional[str]) -> Optional[str]:
     return _perk_sections_cache.get(normalize_hero_name(hero))
 
 
+_PERK_SLOT_RE = re.compile(r"^\s*(?:-|#+)\s*(보조|주요)\s*특전")
+_PERK_LINE_RE = re.compile(r"^\s*-\s*(?P<name>[^/(]+?)\s*(?:\((?P<paren>[^)]*)\))?\s*/\s*(?P<effect>[^/]+)")
+_PERK_KEY_RE = re.compile(r"(좌클릭|우클릭|좌클|우클)")
+
+
+def get_hero_perks(hero: Optional[str]) -> Dict[str, List[Dict[str, Optional[str]]]]:
+    """특전 데이터 절의 특전 목록 {"minor"/"major": [{name, effect, key}]}. key는 문서에 적힌 좌클릭/우클릭(없으면 None)."""
+    perks: Dict[str, List[Dict[str, Optional[str]]]] = {"minor": [], "major": []}
+    slot = None
+    for line in (get_hero_perk_section(hero) or "").splitlines():
+        heading = _PERK_SLOT_RE.match(line)
+        if heading:
+            slot = "minor" if heading.group(1) == "보조" else "major"
+            continue
+        if re.match(r"^\s*(?:-|#+)\s*운용", line):
+            slot = None
+            continue
+        match = _PERK_LINE_RE.match(line) if slot else None
+        if not match:
+            continue
+        key = _PERK_KEY_RE.search(match.group("paren") or "")
+        perks[slot].append({
+            "name": match.group("name").strip(),
+            "effect": match.group("effect").strip(),
+            "key": ("좌클릭" if key.group(1).startswith("좌") else "우클릭") if key else None,
+        })
+    return perks
+
+
 def get_hero_profile(hero: Optional[str]) -> Optional[str]:
     """우선 타겟 답변이 쓰는 영웅 정보(기본 위치 / 취약한 상대 / 조합 내 담당)."""
     global _profile_cache
@@ -142,7 +191,29 @@ def get_hero_profile(hero: Optional[str]) -> Optional[str]:
     return _profile_cache.get(normalize_hero_name(hero))
 
 
+def get_hero_target_profile(hero: Optional[str]) -> Optional[str]:
+    """우선 타겟 답변에 넣을 상대 정보(기본 위치 / 취약한 상대)."""
+    global _target_profile_cache
+
+    if not hero:
+        return None
+    if _target_profile_cache is None:
+        _target_profile_cache = _build_profiles(TARGET_PROFILE_FIELDS)
+
+    return _target_profile_cache.get(normalize_hero_name(hero))
+
+
 _TEAMPLAY_LINE_RE = re.compile(r"^\s*-\s*(기본 위치|협업):")
+_POSITION_LINE_RE = re.compile(r"^\s*-\s*기본 위치:")
+
+
+def get_hero_position(hero: Optional[str]) -> Optional[str]:
+    """영웅 프로필의 "기본 위치" 줄(포지션 질문의 근거)."""
+    profile = get_hero_profile(hero)
+    if not profile:
+        return None
+    lines = [line.strip() for line in profile.splitlines() if _POSITION_LINE_RE.match(line)]
+    return "\n".join(lines) or None
 
 
 def get_hero_teamplay(hero: Optional[str]) -> Optional[str]:
@@ -152,6 +223,50 @@ def get_hero_teamplay(hero: Optional[str]) -> Optional[str]:
         return None
     lines = [line.strip() for line in profile.splitlines() if _TEAMPLAY_LINE_RE.match(line)]
     return "\n".join(lines) or None
+
+
+_COMBO_WORD_RE = re.compile(r"연계|콤보")
+_COMBO_STOP_HEADING_RE = re.compile(r"^#{3,4}\s+.*(상성|궁합)")
+_COMBO_SKIP_LINE_RE = re.compile(r"^\s*-\s*(운영 태그|검색어|유리|불리)\s*:")
+# 줄 앞부분에서 연계를 말하는 줄(연계 설명 자체)을 먼저 두고, 합쳐서 이 길이까지만 쓴다.
+_COMBO_HEAD_CHARS = 40
+_COMBO_MAX_CHARS = 4000
+_combo_cache: Optional[Dict[str, str]] = None
+
+
+def _build_combo_lines() -> Dict[str, str]:
+    combos = {}
+    for hero, body in _hero_section_bodies().items():
+        lines = []
+        for line in body:
+            if _COMBO_STOP_HEADING_RE.match(line):
+                break
+            if not line.strip().startswith("-") or not _COMBO_WORD_RE.search(line):
+                continue
+            if _COMBO_SKIP_LINE_RE.match(line) or _SKILL_TAG_LINE_RE.match(line):
+                continue
+            lines.append(line.strip())
+        lines.sort(key=lambda l: not _COMBO_WORD_RE.search(l[:_COMBO_HEAD_CHARS]))
+        picked, total = [], 0
+        for line in lines:
+            if total + len(line) > _COMBO_MAX_CHARS and picked:
+                continue
+            picked.append(line)
+            total += len(line)
+        if picked:
+            combos[hero] = "\n".join(picked)
+    return combos
+
+
+def get_hero_combo_lines(hero: Optional[str]) -> Optional[str]:
+    """영웅 절(상성·궁합 표 앞)에서 연계·콤보를 말하는 줄만. 스킬 데이터·태그 줄은 뺀다."""
+    global _combo_cache
+
+    if not hero:
+        return None
+    if _combo_cache is None:
+        _combo_cache = _build_combo_lines()
+    return _combo_cache.get(normalize_hero_name(hero))
 
 
 # 스킬 데이터 줄의 괄호 속 첫 항목 → 표준 단축키.
@@ -228,6 +343,58 @@ def _build_skill_keys() -> Dict[str, Dict[str, str]]:
 
     logger.info("[SKILL KEYS] 영웅 %d명 스킬 단축키 로드", len(table))
     return table
+
+
+_DISPLAY_SKILL_LINE_RE = re.compile(r"^\s+-\s+(?:설정:\s*)?([^:()]+?)\s*(?:\(([^)]*)\))?\s*:")
+_DISPLAY_KEY_TOKEN_RE = re.compile(r"(좌클릭|우클릭|좌클|우클|좌Shift|Shift|(?<![A-Za-z])[EQ](?![A-Za-z]))")
+_DISPLAY_KEY_ORDER = ["좌클릭", "우클릭", "shift", "e", "q"]
+
+_skill_list_cache: Optional[Dict[str, List[Tuple[str, List[str]]]]] = None
+
+
+def _build_skill_list() -> Dict[str, List[Tuple[str, List[str]]]]:
+    table: Dict[str, List[Tuple[str, List[str]]]] = {}
+    keys_by_name = get_skill_keys()
+    for hero, body in _hero_section_bodies().items():
+        found: Dict[str, List[str]] = {}
+        in_block = False
+        for line in body:
+            if line.startswith("- "):
+                in_block = line.strip().rstrip(":") == "- 스킬 데이터"
+                continue
+            if not in_block:
+                continue
+            match = _DISPLAY_SKILL_LINE_RE.match(line)
+            if not match:
+                continue
+            name = match.group(1).strip()
+            keys = []
+            suffix = _NAME_SUFFIX_KEY_RE.match(name)
+            if suffix:
+                name, keys = suffix.group(1), [_SKILL_KEY_WORDS[suffix.group(2)]]
+            elif match.group(2):
+                keys = [_SKILL_KEY_WORDS[token] for token in _DISPLAY_KEY_TOKEN_RE.findall(match.group(2))]
+            for key in keys:
+                if key not in found.setdefault(name, []):
+                    found[name].append(key)
+        # 소제목 형태로 적힌 영웅은 단축키 표에만 있다.
+        for name, key in (keys_by_name.get(hero) or {}).items():
+            name = re.sub(r"^설정:\s*", "", name)
+            if not found.get(name):
+                found[name] = [key]
+        rows = [(name, keys) for name, keys in found.items() if keys]
+        rows.sort(key=lambda row: min(_DISPLAY_KEY_ORDER.index(key) for key in row[1]))
+        if rows:
+            table[hero] = rows
+    return table
+
+
+def get_skill_list(hero: Optional[str]) -> List[Tuple[str, List[str]]]:
+    """화면에 보여 줄 스킬 목록 [(이름, [단축키…])]. 답변 단축키 교정용 표(get_skill_keys)와 달리 키가 둘인 스킬도 남긴다."""
+    global _skill_list_cache
+    if _skill_list_cache is None:
+        _skill_list_cache = _build_skill_list()
+    return _skill_list_cache.get(normalize_hero_name(hero) or "", [])
 
 
 def get_skill_keys() -> Dict[str, Dict[str, str]]:
@@ -318,19 +485,54 @@ def continued_line_label(chunk_body: str) -> Optional[str]:
 _SKILL_NAME_MIN_LENGTH = 3
 
 
+_exclusive_terms_cache: Optional[Dict[str, str]] = None
+
+
+def _exclusive_search_terms() -> Dict[str, str]:
+    """영웅 절의 "검색어" 줄 용어 중 그 영웅의 절에만 나오는 것({용어: 영웅}). 주입처럼 스킬 이름이 아닌 고유 용어를 찾는다."""
+    global _exclusive_terms_cache
+    if _exclusive_terms_cache is not None:
+        return _exclusive_terms_cache
+    terms: Dict[str, str] = {}
+    lines_of = _hero_section_bodies()
+    compact = {h: "".join(b).replace(" ", "") for h, b in lines_of.items()}
+    for hero, body in lines_of.items():
+        for line in body:
+            if not line.lstrip("- ").startswith("검색어:"):
+                continue
+            for term in line.split(":", 1)[1].split(","):
+                term = term.strip()
+                key = term.replace(" ", "")
+                if len(key) < 2 or not re.fullmatch(r"[가-힣]+", key) or resolve_hero_name(term) or key.endswith(("힐러", "딜러", "탱커", "지원가", "영웅")):
+                    continue
+                # 다른 영웅 절의 상성 줄처럼 그 영웅 이름과 함께 나온 언급은 세지 않는다.
+                clash = any(
+                    key in compact[h] and any(key in ln.replace(" ", "") and hero not in ln for ln in lines_of[h])
+                    for h in compact if h != hero
+                )
+                if not clash:
+                    terms[key] = hero
+    _exclusive_terms_cache = terms
+    return terms
+
+
 def find_heroes_by_skill_name(text: str) -> List[str]:
-    """텍스트에 나온 스킬 이름의 주인 영웅들(여러 영웅이 같이 쓰는 이름은 뺀다)."""
+    """텍스트에 나온 스킬 이름의 주인 영웅들(여러 영웅이 같이 쓰는 이름은 뺀다). 스킬 이름이 아닌 고유 용어도 찾는다."""
     if not text:
         return []
     owners: Dict[str, set] = {}
     for hero, skills in get_skill_keys().items():
         for name in skills:
             owners.setdefault(name, set()).add(hero)
+    for key, hero in _exclusive_search_terms().items():
+        if len(key) >= 2:
+            owners.setdefault(key, set()).add(hero)
     found: List[tuple] = []
     compact = text.replace(" ", "")
     for name, heroes in owners.items():
         key = name.replace(" ", "")
-        if len(heroes) != 1 or len(key) < _SKILL_NAME_MIN_LENGTH:
+        exclusive = key in _exclusive_search_terms()
+        if len(heroes) != 1 or (len(key) < _SKILL_NAME_MIN_LENGTH and not exclusive):
             continue
         position = compact.find(key)
         if position != -1:
@@ -408,15 +610,16 @@ def get_hero_stat_types() -> Dict[str, str]:
 
 
 def skill_key_reference(heroes) -> str:
-    """프롬프트에 넣을 영웅별 스킬 단축키 줄("- 안란: 맹염 질주(shift), ...")."""
-    table = get_skill_keys()
+    """프롬프트에 넣을 영웅별 스킬 줄("- 안란: 맹염 질주(shift), ..."). 무기처럼 키가 둘인 스킬도 넣는다."""
     lines = []
     seen = set()
     for hero in heroes:
         name = normalize_hero_name(hero)
-        if not name or name in seen or name not in table:
+        if not name or name in seen:
+            continue
+        skills = get_skill_list(name)
+        if not skills:
             continue
         seen.add(name)
-        skills = ", ".join(f"{skill}({key})" for skill, key in table[name].items())
-        lines.append(f"- {name}: {skills}")
+        lines.append(f"- {name}: " + ", ".join(f"{skill}({'/'.join(keys)})" for skill, keys in skills))
     return "\n".join(lines)

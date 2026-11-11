@@ -183,12 +183,18 @@ _HERO_NAMES_LONGEST_FIRST = sorted(
 SHORT_HERO_NAME_MAX_LEN = 2
 _WORD_CHAR_BEFORE = r"(?<![가-힣A-Za-z0-9])"
 
+# 짧은 표기를 띄어 쓰지 않고 붙여도 영웅으로 보는 편 표지("상대겐지", "우리팀아나").
+GLUED_SIDE_MARKERS = ("상대팀", "상대", "적팀", "적", "우리팀", "우리", "아군팀", "아군")
+_GLUED_MARKER_BEFORE = "|".join(
+    rf"(?<={_WORD_CHAR_BEFORE}{marker})" for marker in GLUED_SIDE_MARKERS
+)
+
 
 def hero_name_regex(name: str) -> str:
-    """영웅 표기 하나를 텍스트에서 찾는 정규식 조각(짧은 표기는 단어 첫머리만)."""
+    """영웅 표기 하나를 텍스트에서 찾는 정규식 조각(짧은 표기는 단어 첫머리나 편 표지 바로 뒤만)."""
     escaped = re.escape(name)
     if len(name) <= SHORT_HERO_NAME_MAX_LEN:
-        return _WORD_CHAR_BEFORE + escaped
+        return rf"(?:{_WORD_CHAR_BEFORE}|{_GLUED_MARKER_BEFORE}){escaped}"
     return escaped
 
 
@@ -353,6 +359,16 @@ def has_final_consonant(word: Optional[str]) -> bool:
         return _DIGIT_HAS_FINAL_CONSONANT[last_char]
     code = ord(last_char)
     return 0xAC00 <= code <= 0xD7A3 and (code - 0xAC00) % 28 != 0
+
+
+def josa_euro(word: Optional[str]) -> str:
+    """받침 유무에 따라 '으로'/'로' 조사를 고른다(ㄹ 받침은 '로')."""
+    if not word or not has_final_consonant(word):
+        return "로"
+    code = ord(word[-1])
+    if 0xAC00 <= code <= 0xD7A3 and (code - 0xAC00) % 28 == 8:
+        return "로"
+    return "로" if word[-1] in "178" else "으로"
 
 
 def josa_eul_reul(word: Optional[str]) -> str:

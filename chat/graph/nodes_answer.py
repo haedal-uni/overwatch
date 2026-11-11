@@ -10,16 +10,25 @@ from typing import Any, Dict, List, Optional
 
 from chat.domain.answer_format import (
     _format_stat_text,
+    drop_echo_title,
+    split_paragraph_sentences,
+    drop_intro_announcement,
+    fix_known_slips,
+    drop_role_labels_for,
     drop_single_role_labels,
     enforce_ranking_order,
+    is_short_style,
     extract_inline_suggested_questions,
     fix_skill_keys,
     format_perk_answer,
+    label_swap_reasons,
+    replace_dying_word,
     recommended_heroes_in_answer,
     relabel_quick_actions_for_review,
     remove_from_recommendation_lines,
     sanitize_answer_for_user,
     shorten_polite_endings,
+    tidy_simple_sections,
     unify_role_labels,
 )
 from chat.rag import components as chatbot_service
@@ -31,6 +40,7 @@ from chat.domain.heroes import (
     ROLE_LABELS,
     find_all_heroes,
     heroes_for_role_filter,
+    make_role_filter,
     normalize_hero_name,
     parse_role_filter,
     role_filter_label,
@@ -39,14 +49,24 @@ from chat.domain.intent_rules import (
     is_performance_comparison_question,
     is_explanation_question,
     is_hero_enumeration_request,
+    is_named_hero_howto_question,
+    is_other_hero_request,
     is_pick_request,
+    is_position_question,
+    synergy_pair_ally,
+    is_tank_pair,
+    two_tanks_allowed,
+    asks_partner_for_self,
+    partner_open_roles,
     requested_pick_role,
     resolve_roster_size,
     roster_role_quota_text,
     roster_size_label,
 )
-from chat.rag.doc_sections import get_hero_teamplay, get_skill_keys, get_skill_tag_index, skill_key_reference
+from chat.rag.doc_sections import get_hero_playstyle, get_hero_teamplay, get_skill_keys, get_skill_tag_index, skill_key_reference
 from chat.rag.llm_utils import call_llm_text, call_llm_text_creative, safe_json_loads
+from chat.graph.nodes_retrieval import combo_question_hero
+from chat.rag.target_priorities import target_rule_line
 from chat.domain.prompts import (
     SUGGESTED_QUESTIONS_INLINE_RULES,
     SUGGESTED_QUESTIONS_INLINE_SCHEMA_LINE,
@@ -55,6 +75,7 @@ from chat.domain.prompts import (
     stat_judgement_rules,
     stat_verdict_block,
 )
+from chat.domain.records_summary import records_prompt_block
 from chat.domain.stat_verdicts import entries_from_stat_dicts, ranked_scores, team_context
 
 logger = logging.getLogger(__name__)
@@ -73,8 +94,8 @@ def _skill_reference_text(state: ChatbotGraphState, *extra_heroes) -> str:
     ]
     reference = skill_key_reference([h for h in heroes if h])
     return (
-        "스킬 이름에 단축키를 붙일 때는 아래 표를 그대로 따라라(원본 문서 기준). "
-        "표에 없는 스킬에는 단축키를 붙이지 말고 이름만 써라.\n" + (reference or "(해당 영웅 없음)")
+        "아래 영웅의 스킬은 이 표에 있는 이름으로만 부르고, 단축키를 붙일 때는 표를 그대로 따라라(원본 문서 기준). "
+        "표에 없는 스킬 이름을 지어내거나 다른 영웅의 스킬 이름을 섞지 마라.\n" + (reference or "(해당 영웅 없음)")
     )
 
 
@@ -98,9 +119,19 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         )
         # 뜻·이유·사실 여부를 묻는 질문은 할 일 목록을 만들지 않는다(합친 질문이면 이번에 물은 말만 본다).
         explanation_question = is_explanation_question((state.get("message") or "").split("이어서 묻는 말:")[-1])
+        # 탱커가 한 명뿐인 규격에서 탱커끼리 연계를 물으면 "같이 설 수 없다"는 사실만 답한다.
+        pair_ally = synergy_pair_ally(
+            state.get("message", ""), current_hero, state.get("ally_team") or [],
+            bool(state.get("enemy_named_this_turn")),
+        )
+        tank_pair_blocked = bool(
+            pair_ally and is_tank_pair(current_hero, pair_ally) and not two_tanks_allowed(state.get("roster_size_effective"))
+        )
+        explanation_question = explanation_question or tank_pair_blocked
         # 간단히/자세히 토글.
         answer_style = state.get("answer_style") or "detailed"
-        is_simple_style = answer_style == "simple"
+        is_simple_style = is_short_style(answer_style)
+        is_command_style = answer_style == "command"
         # "간단히"는 별도 LLM 호출 없이 이번 호출에서 추천 질문까지 함께 받는다.
         suggested_questions_schema_line = SUGGESTED_QUESTIONS_INLINE_SCHEMA_LINE if is_simple_style else ""
         suggested_questions_rules = SUGGESTED_QUESTIONS_INLINE_RULES if is_simple_style else ""
@@ -133,8 +164,22 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         if skill_tag:
             pick_request = True
             hero_enumeration = True
+        raw_message = (state.get("message") or "").split("이어서 묻는 말:")[-1]
+        # 지금 영웅 대신 쓸 영웅을 구하는 질문은 그 영웅의 사용법·콤보 없이 추천만 답한다.
+        other_hero_request = is_other_hero_request(raw_message) and not skill_tag
+        if other_hero_request:
+            pick_request = True
+        named_howto = is_named_hero_howto_question(raw_message) and not pick_request
         if pick_role and not role_filter_explicit and not current_hero_role:
             role_filter = pick_role
+        # 내 영웅과 함께 할 영웅을 물으면 교체가 아니라 자리가 남는 역할에서 고른다.
+        partner_roles = (
+            partner_open_roles(current_hero, state.get("ally_team") or [], state.get("roster_size_effective"))
+            if asks_partner_for_self(state.get("message") or "", current_hero) and not role_filter_explicit
+            else []
+        )
+        if partner_roles and pick_role in partner_roles:
+            partner_roles = [pick_role]
 
         if current_hero_uncertain:
             allowed_heroes_text = (
@@ -151,6 +196,18 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "역할과 무관하게 질문 조건에 맞는 영웅만 다루고, 조건과 상관없는 영웅을 추천하지 마라."
             )
             answer_allowed_hero_set = None
+        elif partner_roles:
+            roster = resolve_roster_size(state.get("roster_size_effective"))
+            partner_heroes = [h for role in partner_roles for h in ROLE_HEROES[role] if h != current_hero]
+            allowed_heroes_text = (
+                f"사용자는 {current_hero}({ROLE_LABELS.get(current_hero_role)})를 플레이 중이고, 같은 팀에서 함께 할 영웅을 묻고 있다. "
+                f"영웅 교체 추천이 아니다. 지금 {roster}대{roster} 규격에서 자리가 남는 "
+                f"{'/'.join(ROLE_LABELS[r] for r in partner_roles)} 역할 영웅만 추천하고, 각 추천이 어느 역할인지 밝혀라:\n"
+                f"{', '.join(partner_heroes)}"
+            )
+            answer_allowed_hero_set = (
+                None if len(partner_roles) == len(ROLE_HEROES) else set(partner_heroes) | {current_hero}
+            )
         elif parse_role_filter(role_filter):
             # 복합 필터면 두 역할 영웅이 함께 허용된다.
             filter_roles = parse_role_filter(role_filter)
@@ -395,9 +452,21 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         swap_last_rule = (
             f"본문은 {playing_hero}로 이 상황을 버티는 방법으로 채워라. 다른 영웅 추천은 "
             "\"바로 할 것 3가지\" 뒤, 답변 맨 끝에만 \"영웅을 바꾼다면: 영웅1(역할), 영웅2(역할)\" "
-            "한 줄과 영웅마다 짧은 이유 1개로 최대 2명까지 적어라. 교체할 만한 영웅이 없으면 "
+            "한 줄과 그 아래 영웅마다 \"- 영웅: 이유\" 한 줄로 최대 2명까지 적어라(이유 줄에도 영웅 이름을 쓴다). 교체할 만한 영웅이 없으면 "
             f"이 블록은 빼라. \"바로 할 것 3가지\"도 {playing_hero} 기준 행동으로만 채워라."
         ) if swap_last else ""
+
+        # "노릴 대상: " 줄은 문서의 처리 순서가 있을 때만 쓰고 그 순서의 1순위를 가리킨다(없으면 줄 자체를 쓰지 않는다).
+        opponent_order = state.get("opponent_order") or []
+        if opponent_order and current_hero and not current_hero_uncertain:
+            order_text = ", ".join(f"{i}. {row['hero']}" for i, row in enumerate(opponent_order, start=1))
+            target_line_rule = (
+                f" \"노릴 대상: \" 줄을 쓴다면 아래 처리 순서(문서 기준)의 1순위 영웅 이름과 {current_hero}가 그 영웅을 잡는 방법만 적어라. "
+                "순서에 없는 영웅이나 \"멀리 떨어진 적\"처럼 영웅을 정하지 않은 말은 쓰지 마라. "
+                "처리 순서: " + order_text
+            )
+        else:
+            target_line_rule = " 어떤 영웅을 먼저 노릴지 근거가 없으니 \"노릴 대상: \" 줄은 쓰지 마라."
 
         # "바로 할 것 3가지"의 주어: 사용자 역할을 알면 그 역할, 모르면 아군과의 연계.
         quick_actions_subject_rule = ""
@@ -454,10 +523,34 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "일반론이면 그 줄은 빼라. 질문에 없는 조합이나 상황(\"현재 조합\")을 전제하지 마라. "
                 "\"추천 영웅:\" 머리줄과 도입 문단은 쓰지 말고, 여러 역할이 섞일 때만 "
                 "이름 옆 괄호로 역할을 밝혀라."
+                + ("" if hero_enumeration else _main_heroes_rule(state, "※").replace("\n※.", " ※", 1))
+            )
+        if pick_request and other_hero_request and current_hero:
+            pick_answer_rule += (
+                f" 사용자는 {current_hero}를 그만 쓰고 싶어 한다 — {current_hero}는 추천하지 말고 "
+                f"{current_hero}의 사용법·콤보·운영 팁은 한 줄도 쓰지 마라. 이전에 추천한 영웅도 다시 고르지 마라."
+            )
+        # 이름을 댄 영웅으로 상대하는 법을 묻는 질문은 추천 블록 없이 영웅마다 대응법을 적는다.
+        named_howto_rule = ""
+        if named_howto and not swap_last:
+            named_howto_rule = (
+                "이 질문은 사용자가 이미 고른 영웅으로 상대하는 방법을 묻는다. \"추천 영웅:\" 머리줄은 쓰지 말고, "
+                "상대가 까다롭다는 말을 영웅 추천처럼 쓰지 마라. 질문에 나온 영웅마다 한 줄씩 "
+                "\"영웅: 그 영웅으로 상대를 어떻게 상대하는지(스킬 이름)\"으로 적어라(한 명도 빠뜨리지 마라)."
             )
         # 이름을 댄 아군 중 스킬 대상을 고르는 질문은 "기본 대상 → 바꿀 상황"으로 답한다.
-        if state.get("is_ally_target_choice") and not swap_last:
-            choice_candidates = ", ".join(display_ally_team) or "질문에 나온 영웅들"
+        if state.get("is_ally_target_choice") and not swap_last and not state.get("ally_choice_candidates"):
+            # 후보 이름 없이 "아군 누구한테"로 물었다. 역할로 우선순위를 답한다.
+            situation = f"상대 {state.get('target_enemy')}이(가) 들어온 상황처럼 질문에 나온 상황 기준으로, " if state.get("target_enemy") else "질문에 나온 상황 기준으로, "
+            pick_answer_rule = (
+                "이 질문은 사용자가 자기 스킬을 아군 중 누구에게 쓸지 묻는다. 아군 이름은 말하지 않았으니 "
+                f"{situation}받을 아군을 역할(탱커, 진입하는 딜러, 뒤에 있는 딜러, 힐러 등)로 답해라. 답변 전체를 이 형식으로만 써라: "
+                "첫 줄은 \"기본은 OO\"처럼 가장 먼저 줄 역할 1개와 그 이유 1문장, 빈 줄, 그다음 우선순위 순서로 "
+                "역할마다 한 줄씩 \"OO에게: ~할 때\"(2~4줄). 상대 영웅을 아군처럼 쓰지 마라. "
+                "포지션·콤보·생존 같은 다른 운영 팁, \"추천 영웅\" 머리줄, 영웅 교체 추천은 쓰지 마라."
+            )
+        elif state.get("is_ally_target_choice") and not swap_last:
+            choice_candidates = ", ".join(state.get("ally_choice_candidates") or display_ally_team) or "질문에 나온 영웅들"
             pick_answer_rule = (
                 f"이 질문은 {choice_candidates} 중 누구에게 스킬을 쓸지 고르는 질문이다. 답변 전체를 "
                 "이 형식으로만 써라: 첫 줄은 \"기본은 OO\"처럼 평소에 줄 대상 1명과 그 이유 1문장, "
@@ -494,11 +587,22 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "덧붙이지 않은 다른 영웅 이야기나 운영 팁은 쓰지 마라."
             )
 
+        # 우선 타겟 질문은 지금 영웅으로 누구를 노릴지 묻는다(교체 추천 블록을 만들지 않는다).
+        target_priority_rule = (
+            "추천 영웅 블록이나 다른 영웅으로 바꾸라는 이야기는 쓰지 마라 — 지금 영웅으로 상대 중 누구부터 노릴지 물었다."
+            if state.get("is_target_priority_question") and state.get("target_priority") else ""
+        )
+
+        quick_actions_requested = False
         if is_simple_style:
             if pick_answer_rule:
                 simple_recommend_rule = f"2. {pick_answer_rule}\n"
+            elif named_howto_rule:
+                simple_recommend_rule = f"2. {named_howto_rule}\n"
+            elif target_priority_rule:
+                simple_recommend_rule = f"2. {target_priority_rule}\n"
             elif swap_last:
-                simple_recommend_rule = f"2. {swap_last_rule} 이유는 \"- \"로 시작하는 줄로 적어라.\n"
+                simple_recommend_rule = f"2. {swap_last_rule}\n"
             else:
                 simple_recommend_rule = (
                     "2. 추천 영웅이 있으면 \"추천 영웅: 영웅1, 영웅2\" 한 줄 뒤 영웅마다 이름 줄과 "
@@ -509,9 +613,16 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                     "없으면(운영 개선/유지 등) 이 블록 없이 서론 없이 바로 4번만 적어라.\n"
                 )
             style_rules_1to5 = (
-                "1. 문단 대신 핵심 아이디어당 한 줄, \\n으로 구분해라. 격식체 종결(~입니다 등) "
-                "대신 \"~하기 좋음\", \"~가능\" 같은 짧은 구로 끝내고, 질문에 나온 영웅/상대를 "
-                "되짚는 서두 없이 바로 본론부터 써라. 같은 섹션 안 항목은 빈 줄 없이 \\n으로만 "
+                "1. 게임 시작 전에 5초 안에 읽을 분량으로 써라. 할 일 줄 앞의 상황 판단은 한 줄(40자 안팎)만 쓰고, "
+                "모든 줄은 한 줄에 45자 안팎으로 짧게 끊어라(이유를 길게 붙이지 마라). "
+                "\"정리해 줄게\", \"알려드릴게요\" 같은 안내 문장, 은어·줄임말(추노, 순삭 등)은 쓰지 마라. "
+                "문단 대신 핵심 아이디어당 한 줄, \\n으로 구분해라. "
+                + (
+                    "격식체 종결(~입니다 등) 대신 \"~하기 좋음\", \"~가능\" 같은 짧은 구로 끝내고, "
+                    if is_command_style else
+                    "줄마다 짧은 해요체 문장(~해요, ~좋아요)으로 끝내고 \"~하기 좋음\" 같은 명사형 끝맺음은 쓰지 말고, "
+                )
+                + "질문에 나온 영웅/상대를 되짚는 서두 없이 바로 본론부터 써라. 같은 섹션 안 항목은 빈 줄 없이 \\n으로만 "
                 "구분하고, 빈 줄은 섹션 사이에만 써라.\n"
                 + simple_recommend_rule
                 + "3. 스킬은 단축키를 괄호로 붙여라(단축키는 '스킬 단축키 참고' 표 그대로)."
@@ -531,21 +642,25 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                     "\n4. \"바로 할 것 3가지\"는 만들지 마라 — 운영법이 아니라 선택을 물었다."
                 )
             else:
+                quick_actions_requested = True
                 style_rules_1to5 += (
-                    f"\n4. {'본문 뒤에' if swap_last else '마지막에'} \"바로 할 것 3가지\" 아래 "
-                    "1~3개 항목을 \"1. \", \"2. \" 숫자 목록으로 적어라."
+                    f"\n4. {'본문 뒤에' if swap_last else '마지막에'} 빈 줄 하나를 두고, 지금 할 행동을 한 줄에 하나씩 "
+                    "최대 5줄 적어라. 줄마다 다른 측면을 다루고 \"포지션: \", \"콤보: \", \"노릴 대상: \", "
+                    "\"생존: \", \"궁극기: \"처럼 짧은 항목 이름을 앞에 붙여라(이 다섯 개는 예시다). "
+                    "먼저 질문이 정확히 무엇을 묻는지 정하고, 줄마다 그것에 답하는 방법만 써라. 스킬 하나나 한 가지 행동(거리·타이밍·위치 등)을 묻는 좁은 질문이면 그 한 가지에 대한 줄만 2~3줄 쓰고, 묻지 않은 항목(콤보·노릴 대상·궁극기)은 쓰지 마라. 이미 앞 턴에 답한 내용을 되풀이하지 말고 줄 수를 억지로 채우지 마라. 제목 줄, 숫자 목록, \"- \"는 쓰지 마라 "
+                    "— 다른 규칙에서 \"바로 할 것 3가지\"라고 부르는 것이 이 줄들이다."
                     + quick_actions_subject_rule
+                    + target_line_rule
                 )
             stay_preference_instruction = (
-                "\"추천 영웅\" 블록과 서두 결론 문장 없이 핵심 운영 아이디어부터 한 줄씩 "
-                "적어라. 그 아래 \"운영 팁:\" 한 줄과 구체적 팁을 줄마다 하나씩 적어라."
+                "\"추천 영웅\" 블록과 \"운영 팁:\" 블록 없이 상황 판단 한 줄 뒤 4번의 할 일 줄만 적어라."
             )
             markdown_ban_text = (
-                "answer에는 마크다운을 쓰지 마라. 단, 영웅별 이유 나열의 \"- \"만 허용한다. "
+                "answer에는 마크다운을 쓰지 마라. 단, 영웅별 이유·운영 팁·강점/약점 나열의 \"- \"만 허용한다. "
                 "줄바꿈은 \\n으로."
             )
             markdown_forbidden_line = (
-                "- 마크다운 문법(**, #, > 등). 단, 영웅별 이유 나열의 \"- \"만 예외로 허용."
+                "- 마크다운 문법(**, #, > 등). 단, 영웅별 이유·운영 팁·강점/약점 나열의 \"- \"만 예외로 허용."
             )
         else:
             style_rules_1to5 = (
@@ -556,6 +671,8 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "2. 영웅 교체를 추천할 때는 위 허용 목록 안에서만 골라라.\n"
                 + (
                     f"   {pick_answer_rule}\n" if pick_answer_rule else
+                    f"   {named_howto_rule}\n" if named_howto_rule else
+                    f"   {target_priority_rule}\n" if target_priority_rule else
                     f"   {swap_last_rule}\n" if swap_last else
                     "   추천 영웅 목록은 답변 전체에 한 번만 만들어라 — 여러 역할을 함께 "
                     "추천하더라도 역할마다 목록을 따로 만들지 말고 한 곳에 모아 적고,\n"
@@ -600,6 +717,16 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 "깨뜨릴 수 있으므로 절대 사용하지 마라."
             )
             markdown_forbidden_line = "- 마크다운 문법(**, *, #, - 등)"
+
+        # 답변 스타일 자체를 묻는 질문은 실제 규칙을 근거로 설명하게 한다(모델이 짐작으로 답하지 않게).
+        raw_question = (state.get("message") or "").split("이어서 묻는 말:")[-1]
+        if explanation_question and re.search(r"간단히|자세히|명령조", raw_question) and not find_all_heroes(raw_question):
+            style_rules_1to5 += (
+                "\n※ 이 질문은 이 챗봇의 답변 스타일을 묻는다. 아래 설명만 근거로 답하고 영웅 이름이나 게임 운영 이야기는 쓰지 마라: "
+                "간단히는 인게임에서 빠르게 읽도록 짧은 줄을 해요체(~해요)로 쓰는 스타일이다. "
+                "자세히는 복기용으로 문단으로 풀어 쓰고 마지막에 바로 적용할 것 3가지를 붙이는 스타일이다. "
+                "명령조는 간단히와 같은 짧은 줄 형식이지만 줄 끝을 \"~하기\", \"~가능\" 같은 짧은 구로 끝맺는 스타일이다."
+            )
 
         # 영웅 유지 안내는 stay일 때만 넣는다(우선 타겟 질문은 형식이 따로 있다).
         stay_intent_block = ""
@@ -658,6 +785,25 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
     약점이 있다면 "이런 부분이 아쉽다" 정도로 짧게만 짚고, 그걸 보완할 구체적인
     영웅을 여러 명 나열해서 추천하지는 마라 — 그건 이 답변이 할 일이 아니다.{roster_line}"""
 
+        # 사용자가 자기 기록으로 플레이 스타일을 묻는 질문: 기록 요약만 근거로 답한다.
+        records_instruction = ""
+        if state.get("is_records_question"):
+            records_summary = state.get("records_summary") or {}
+            nl = chr(10)
+            style_refs = nl.join(
+                f"   [{h['hero']} 운용] " + (get_hero_playstyle(h["hero"]) or "문서 없음").replace(nl, " / ")
+                for h in (records_summary.get("heroes") or [])[:2]
+            )
+            records_instruction = f"""
+12. 사용자는 자신의 누적 기록(스탯창으로 분석한 판들)으로 자기 플레이 스타일을 묻고 있다. 아래 "내 기록 요약"만 근거로 답해라.
+    영웅을 되묻지 말고, 일반론이나 영웅 소개를 쓰지 마라. 요약의 "판정" 줄을 그대로 근거로 삼고 없는 특징은 지어내지 마라.
+    판 수가 적다고 적힌 영웅은 스타일을 단정하지 말고 "판 수가 적어 더 지켜봐야 한다"고 말해라. 승률은 판정에 적힌 것만 말해라.
+    "허수 딜" 같은 단정 표현은 쓰지 말고 "피해량에 비해 처치가 적다"처럼 수치로 말해라.
+    영웅별로 어떤 스타일인지, 그다음 전체적으로 장점·아쉬운 점을 말하고, 할 일은 그 약점에 맞는 행동으로 채워라.
+    내 기록 요약:
+{records_prompt_block(records_summary)}
+{style_refs}"""
+
         # 두 스타일에 같은 형식을 적용하려고 style_rules 밖에 둔다.
         perk_instruction = ""
         if state.get("is_perk_question"):
@@ -686,9 +832,13 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
             if is_simple_style:
                 perk_brevity_rule = (
                     "\n- 도입부는 스탯을 짚는 한 줄 뒤에 짧은 진단 줄 1~2개만 붙여라"
-                    "(목록 기호 없이 줄만 나눈다).\n  조합 설명 줄은 격식체"
-                    "(~입니다/~합니다) 대신 \"~보완\", \"~때 적합\"처럼 짧은 구로 "
-                    "끝내라.\n  추천 이유(\"*\" 줄) 하나만 문장으로 써도 된다."
+                    "(목록 기호 없이 줄만 나눈다).\n  조합 설명 줄은 "
+                    + (
+                        "격식체(~입니다/~합니다) 대신 \"~보완\", \"~때 적합\"처럼 짧은 구로 끝내라."
+                        "\n  추천 이유(\"*\" 줄) 하나만 문장으로 써도 된다."
+                        if is_command_style else
+                        "짧은 해요체 문장 하나로 끝내라."
+                    )
                 )
             perk_instruction = f"""
 
@@ -699,6 +849,9 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
   특전 데이터에 있는 그대로만 따르고, 문서에 없는 특전 이름이나 조합을 지어내지
   마라. 문서에 그 영웅의 특전 데이터가 없으면 추측하지 말고 확인이 필요하다고
   밝혀라.
+- 특전은 같은 칸끼리만 서로 바꿀 수 있다. 보조 특전과 주요 특전을 "A 대신 B", "A보다 B"처럼
+  서로 바꾸는 것으로 쓰지 마라(보조 특전 하나와 주요 특전 하나는 함께 고르는 것이다).
+  "바로 할 것 3가지"에서 특전을 다시 고르거나 바꾸라고 하지 말고, 고른 특전으로 할 행동만 적어라.
 - 문서에 운용 조합(기본 운용/안정 운용/공격 운용 등)이 있으면 그 조합들을 각각
   언제 고르는지 판단 기준과 함께 제시해라.
 {perk_choice_rule}
@@ -713,6 +866,61 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
 - 같은 조합 안(제목 줄과 설명 줄들 사이, 설명 줄들끼리)에는 빈 줄을 넣지 말고
   줄을 붙여 써라. 빈 줄은 조합과 조합 사이에만 하나 넣는다.{perk_brevity_rule}"""
 
+        # 포지션 질문은 스킬 사용법이 아니라 서는 곳과 움직임을 답해야 한다.
+        position_instruction = ""
+        if is_position_question(state.get("message", "")):
+            position_hero = current_hero or ((state.get("focus_heroes") or [None])[0])
+            position_instruction = f"""
+
+포지션 질문 답변 규칙:
+- 사용자는 {position_hero or "그 영웅"}로 플레이할 때 어디에 서고 어떻게 움직여야 하는지를 묻고 있다. 검색된 문서의
+  "기본 위치"를 중심으로, 줄마다 서는 곳(본대·옆길·고지대·코너·후방 등)이나 움직이는 방법(언제 들어가고 언제
+  빠지는지, 누구 곁에 있는지)을 적어라.
+- 궁극기 충전, 스킬 연계, 처치 방법처럼 위치와 무관한 내용으로 줄을 채우지 마라. 스킬은 위치를 옮기거나
+  자리를 지키는 데 쓰일 때만 언급해라.
+- "바로 할 것 3가지"도 자리 잡기·이동에 관한 행동으로만 채워라."""
+
+        # 아군 한 명과의 연계 질문은 문서의 궁합·협업 줄에 있는 연계만 쓴다.
+        if tank_pair_blocked:
+            position_instruction += f"""
+
+연계 질문 답변 규칙:
+- 지금은 {resolve_roster_size(state.get("roster_size_effective"))}대{resolve_roster_size(state.get("roster_size_effective"))} 규격이라 탱커는 팀에 한 명뿐이다. {current_hero}와 {pair_ally}는 둘 다 탱커라 같은 팀에 설 수 없다.
+  첫 줄에 이 점을 짧게 말하고, 두 영웅의 연계법이나 궁합은 설명하지 마라. "바로 할 것 3가지"도 만들지 마라."""
+        elif pair_ally:
+            position_instruction += f"""
+
+연계 질문 답변 규칙:
+- 사용자는 {current_hero}로 플레이하면서 같은 팀 {pair_ally}와 어떻게 맞출지 묻고 있다. 검색 결과 맨 앞의
+  "{current_hero} · {pair_ally} 궁합" 줄(두 영웅의 궁합 표와 협업 줄)을 근거로, {current_hero}가 할 행동을 적어라.
+- 근거 문서에 없는 연계·타이밍·주의점을 지어내지 마라. 예를 들어 "A 직후 B를 쓰면 안 된다"는 문장은 문서에 그 내용이
+  있을 때만 쓴다. 근거가 모자라면 줄 수를 줄여라.
+- {pair_ally}의 스킬은 아래 스킬 표에 있는 이름으로만 부르고, 그 스킬이 실제로 하는 일과 맞게 써라.
+- 문서 문장을 옮길 때 누가 누구에게 무엇을 하는지 바꾸지 마라. {pair_ally}의 성질을 말한 문장을 {current_hero}가 조심할
+  행동으로 바꾸거나, 아군을 상대로 바꿔 읽지 마라. 뜻이 분명하지 않은 문장은 쓰지 말고 빼라.
+- 한 줄에 두 영웅의 행동이 함께 나오면 "(아군 영웅)이 ~할 때 (내 영웅)은 ~"처럼 행동마다 주어를 밝혀라. 문서 문장에
+  주어가 없으면 앞뒤 문장과 스킬 주인으로 누가 하는 행동인지 확인되는 경우에만 쓰고, 확인되지 않으면 빼라.
+- 문서의 연계 별명(예: 윈풍참)은 처음 쓸 때 어떤 스킬을 어떻게 잇는 것인지 풀어 써라."""
+        elif partner_roles:
+            position_instruction += f"""
+
+같이 할 영웅 질문 답변 규칙:
+- 추천 영웅은 검색 결과 맨 앞의 "{current_hero} 궁합이 좋은 아군" 목록에서 골라라. 목록에 없는 영웅은 넣지 마라.
+- 이유는 그 영웅 줄에 적힌 내용으로 쓰고, 줄에 없는 스킬 연계를 지어내지 마라. 스킬 이름은 그 스킬을 가진 영웅의 것으로만 써라
+  (예: {current_hero}의 스킬을 추천 영웅이 쓰는 것처럼 쓰지 마라).
+- 지난 패치·시즌 이야기("~이후", "~였다")는 옮기지 마라."""
+
+        # 한 영웅의 연계 질문은 문서의 연계 줄에 적힌 순서·피해량만 쓴다.
+        combo_hero = None if (pair_ally or partner_roles) else combo_question_hero(state)
+        if combo_hero:
+            position_instruction += f"""
+
+연계 질문 답변 규칙:
+- 검색 결과 맨 앞의 "{combo_hero} 연계" 줄들이 근거다. 연계마다 한 줄로 "연계 이름이나 목적: 스킬 순서(→로 잇기) — 피해량·쓰는 때"를 적어라.
+- 스킬 순서와 피해량은 문서에 적힌 그대로 옮기고, 문서에 없는 연계·순서·수치를 지어내지 마라. 문서의 연계 별명은 어떤 스킬을 잇는 것인지 풀어 써라.
+- 다른 영웅과 함께 하는 궁극기 연계는 사용자가 묻지 않았으면 한 줄 이내로만 덧붙여라.
+- "바로 할 것 3가지"는 연계를 연습하거나 실전에서 쓰는 행동으로 채워라."""
+
         # 순서는 문서 판정으로 정해져 있고 LLM은 이유와 방법만 채운다.
         target_priority_instruction = ""
         target_priority_rows = state.get("target_priority") or []
@@ -725,19 +933,27 @@ def generate_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
                 else:
                     verdict = f"유불리 {row['signed']:+.1f}"
                 note = f" · {row['note']}" if row["note"] else ""
-                ranked_lines.append(f"{idx}. {row['hero']}({role_label}) — {verdict}{note}")
+                tier_label = f"{row['tier_label']} · " if row.get("tier_label") else ""
+                ranked_lines.append(f"{idx}. {row['hero']}({role_label}) — {tier_label}{verdict}{note}")
             ranked_text = "\n".join(ranked_lines)
+            rule_line = target_rule_line(current_hero)
+            rule_text = f"\n- 문서의 {current_hero} 처리 우선 원칙: {rule_line}" if rule_line else ""
             target_priority_instruction = f"""
 
 우선 타겟 답변 규칙:
-- 아래는 문서의 상성 판정으로 정렬한 상대 목록이다(위쪽이 {current_hero}에게
-  유리한 상대 = 노리기 쉬운 상대). **이 순서를 그대로 쓰고 임의로 바꾸지 마라.**
+- 아래는 문서의 {current_hero} 처리 우선 원칙을 먼저, 같은 묶음 안에서는 상성 판정(유리한 상대 = 노리기
+  쉬운 상대)을 따라 정렬한 상대 목록이다. **이 순서를 그대로 쓰고 임의로 바꾸지 마라.**{rule_text}
 {ranked_text}
 - 답변 본문은 이 순서 그대로 "1순위 OO: ..." 목록 하나로만 적어라. 상대 한 명당
-  한 줄이고, 그 한 줄에 어디를 노려서 어떻게 잡는지를 적는다. 왜 그 순위인지를
-  따로 설명하지 마라 — 순서 자체가 답이다.
+  한 줄이고, 그 한 줄에 어디를 노려서 어떻게 잡는지를 적는다. 순위 이유를 따로 문단으로 설명하지 마라.
+- "처리 우선: 최우선/우선"으로 표시된 상대는 그 줄 끝에 원칙이 말한 이유(예: 부활로 처치를 무효화한다)를 짧게 붙여라.
+  "처리 우선: 피함"으로 표시된 상대는 "직접 노리지 말고 ~"처럼 어떻게 지나칠지를 적어라.
+  "처리 우선: …", "유불리 +2.0" 같은 표시 자체는 답변에 옮기지 마라.
 - 근거는 검색된 문서(각 상대의 기본 위치, 취약한 상대 판정/상황)에서만 가져와라.
   문서에 없는 스킬 이름이나 수치를 지어내지 마라.
+- 한 줄의 이유는 그 줄 상대에 대한 것만 쓴다: 그 상대가 서는 곳, 그 상대가 약한 것, 위 목록에서 그 상대 옆에 적힌
+  상성 설명, 그리고 {current_hero}의 스킬로 그 상대를 잡는 법. 다른 영웅에 대한 문장(그 상대가 노리는 영웅,
+  다른 영웅의 약점)을 옮겨 오지 마라. 상대의 스킬은 피하거나 빠지기를 기다릴 대상으로만 쓰고, {current_hero}가 쓰는 것처럼 쓰지 마라.
 - 목록 말고 다른 정리 문단("운영 팁", "정리" 등)을 새로 만들지 마라. 마무리는
   아래 답변 형식 규칙에 있는 것 하나만 쓴다.
 - 상성 판정이 없는 상대는 목록 끝에 두고, 다른 상대와 같은 형식으로 어떻게 잡는지만
@@ -788,7 +1004,7 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
 
 답변 작성 규칙:
 {style_rules_1to5}{enemy_naming_instruction}{swap_decision_instruction}{stay_intent_block}{performance_improve_instruction}{map_strategy_instruction}{composition_evaluation_instruction}{suggested_questions_rules}
-{perk_instruction}
+{perk_instruction}{position_instruction}{records_instruction}
 {target_priority_instruction}
 
 절대 금지:
@@ -796,6 +1012,10 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
 - "[문서 1]", "(문서 1)" 같은 어떤 형태의 출처 표시도 금지
 - "문서에 따르면", "~에서 언급했듯이" 같은 자료 인용 표현
 {markdown_forbidden_line}
+- 마우스·줌 감도, 키 설정, 그래픽 설정, 모니터·장비 같은 개인 환경 설정을 추천하지
+  마라. 맞는 값이 사람마다 달라서, 검색된 문서에 수치가 있어도 쓰지 않는다. 사용자가
+  직접 물었을 때만 특정 값을 정해 주지 말고 고르는 기준을 말해라.
+- 사용자 질문을 고쳐 쓴 제목 줄("~와 ~ 안내", "~ 방법 정리")로 답변을 시작하지 마라.
 - 사용자가 말하지 않은 상황을 단정적으로 지어내서 답변 서두에 전제로 깔지 마라.
   "이번 사용자 질문" 원문에 없는 상대의 의도나 행동을 사실처럼 서술하지 말고,
   사용자가 실제로 말한 내용과 위 컨텍스트에 있는 정보만 근거로 답해라.
@@ -849,8 +1069,11 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
         )
         if is_perk_answer:
             answer = format_perk_answer(answer)
-        if is_simple_style:
+        if is_command_style:
             answer = shorten_polite_endings(answer)
+        if is_simple_style:
+            answer = tidy_simple_sections(answer, quick_actions=quick_actions_requested)
+        answer = label_swap_reasons(answer)
         if score_ranking_heroes and len(compared_heroes) < 2:
             answer = enforce_ranking_order(answer, score_ranking_heroes)
         if stat_analysis_instruction:
@@ -918,10 +1141,17 @@ answer 값 안에 JSON을 다시 넣지 마라. answer는 사용자에게 보여
                 # 허용 역할 밖 영웅의 추천 줄·항목을 지운다.
                 answer = remove_from_recommendation_lines(answer, forbidden_in_answer)
 
-                notice = (
-                    f"\n\n⚠ 역할 고정 모드에서는 {role_label_kor} 역할만 선택 가능합니다. "
-                    f"위 추천은 {role_label_kor} 영웅 기준으로 제한되었습니다."
-                )
+                if partner_roles:
+                    roster = resolve_roster_size(state.get("roster_size_effective"))
+                    notice = (
+                        f"\n\n⚠ {roster}대{roster}에서는 같은 팀에 "
+                        f"{'/'.join(ROLE_LABELS[r] for r in partner_roles)} 자리만 남아 그 역할 영웅만 추천했어요."
+                    )
+                else:
+                    notice = (
+                        f"\n\n⚠ 역할 고정 모드에서는 {role_label_kor} 역할만 선택 가능합니다. "
+                        f"위 추천은 {role_label_kor} 영웅 기준으로 제한되었습니다."
+                    )
                 answer = answer + notice
 
         # 스킬 태그 목록 질문은 문서 태그 표에 없는 영웅 줄을 지운다(LLM이 비슷한 성질의 영웅을 덧붙인다).
@@ -1005,7 +1235,7 @@ def generate_matchup_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         subject_role_label = ROLE_LABELS.get(subject_role, "알 수 없음")
 
         answer_style = state.get("answer_style") or "detailed"
-        is_simple_style = answer_style == "simple"
+        is_simple_style = is_short_style(answer_style)
 
         role_filter = state.get("role_filter") or "all"
         role_filter_explicit = state.get("role_filter_explicit", False)
@@ -1139,6 +1369,27 @@ def generate_matchup_answer_node(state: ChatbotGraphState) -> ChatbotGraphState:
         return {"error": str(exc)}
 
 
+def _main_heroes_rule(state: ChatbotGraphState, number: str) -> str:
+    """이 기기에서 자주 한 영웅이 있으면, 운용이 비슷한 영웅을 먼저 추천하게 하는 지시."""
+    mains = state.get("main_heroes") or []
+    if not mains:
+        return ""
+    names = ", ".join(f"{m['hero']}({m['count']}판)" for m in mains)
+    styles = "\n".join(
+        f"   [자주 한 영웅] {m['hero']}: " + (get_hero_playstyle(m["hero"]) or "문서 없음").replace("\n", " / ")
+        for m in mains
+    )
+    return (
+        f"\n{number}. 사용자가 스탯창으로 분석한 판에서 자주 한 영웅은 {names}이다(사용자가 직접 말한 것이 아니다). "
+        "역할 제한 안에서 조합에 가장 맞는 영웅을 먼저 생각하고, 그 영웅의 운용이 자주 한 영웅과 다르면 "
+        "자주 한 영웅과 운용(사거리·진입 방식·서는 위치)이 비슷하면서 조합에도 맞는 영웅을 맨 앞에 추천해라. "
+        "이때 \"이 조합에는 X, Y가 잘 맞지만 주로 A, B를 하시니 운용이 비슷한 C를 추천해요\"처럼 이유를 밝히고, "
+        "그 영웅의 이유에는 자주 한 영웅과 무엇이 비슷한지 적어라. 자주 한 영웅이 역할 제한 안에 있고 조합에도 맞으면 "
+        "그 영웅을 맨 앞에 두고 그렇게 밝혀라. 운용이 비슷한지는 아래 줄(문서의 역할·운영 태그·기본 위치)로 판단하고, "
+        "비슷한 후보가 조합에 맞지 않으면 억지로 넣지 말고 이 지시는 무시해라.\n" + styles
+    )
+
+
 def generate_recommend_card_node(state: ChatbotGraphState) -> ChatbotGraphState:
     """추천 영웅 카드(단일 목록 + 이유)로 답한다(모드는 recommend_card_mode)."""
     if state.get("error"):
@@ -1149,7 +1400,7 @@ def generate_recommend_card_node(state: ChatbotGraphState) -> ChatbotGraphState:
 
         mode = state.get("recommend_card_mode")
         answer_style = state.get("answer_style") or "detailed"
-        is_simple_style = answer_style == "simple"
+        is_simple_style = is_short_style(answer_style)
         intro_length_instruction = (
             "결론 1문장만" if is_simple_style else "2~3문장으로 자연스럽게 풀어서"
         )
@@ -1170,6 +1421,12 @@ def generate_recommend_card_node(state: ChatbotGraphState) -> ChatbotGraphState:
         pick_role = requested_pick_role(state.get("message") or "")
         if not role_filter_explicit and not current_hero_role and pick_role:
             role_filter = pick_role
+        # 내 영웅과 함께 할 영웅이면 내 역할이 아니라 자리가 남는 역할에서 고른다.
+        if mode == "composition" and not role_filter_explicit and asks_partner_for_self(state.get("message") or "", current_hero):
+            partner_roles = partner_open_roles(current_hero, state.get("ally_team") or [], state.get("roster_size_effective"))
+            if pick_role in partner_roles:
+                partner_roles = [pick_role]
+            role_filter = make_role_filter(partner_roles) or role_filter
 
         if parse_role_filter(role_filter):
             role_constraint = (
@@ -1345,7 +1602,7 @@ def generate_recommend_card_node(state: ChatbotGraphState) -> ChatbotGraphState:
 6. 사용자 질문에 조건이 담겨 있으면(예: "자가 치유가 되는 영웅", "아군 ○○와
    맞는 영웅") 추천 영웅 전원이 그 조건을 만족해야 한다. 무난하다는 이유로
    조건과 무관한 영웅을 끼워 넣지 마라 — 조건에 맞는 후보가 모자라면 3명만
-   추천해라.{enemy_naming_rule}
+   추천해라.{enemy_naming_rule}{_main_heroes_rule(state, "8")}
 {SUGGESTED_QUESTIONS_INLINE_RULES if is_simple_style else ""}
 """
 
@@ -1458,6 +1715,8 @@ JSON 형식으로만 답해라.
 - AI가 추가 설명하는 형태 절대 금지.
 - 이번 답변 내용과 자연스럽게 이어지는 흐름으로 작성.
 - 버튼 라벨이므로 15자 이내의 짧은 문장.
+- "자리 잡기 좋은 명당"처럼 명사로 끝나는 제목 형태 금지. "~ 알려줘", "~ 어떻게 해?"처럼
+  요청이나 질문으로 끝내고, 맞춤법이 맞는 말만 써라.
 - 문서, 출처, 내부 시스템 용어 금지.
 - 카운터 대상이 있으면, 추천 질문 3개 중 최소 1개는 반드시 그 카운터 대상과 관련된 질문으로 작성해라.
 - 사용자가 언급하지 않은 상대 영웅 이름을 새로 만들지 마라.
@@ -1546,12 +1805,12 @@ def _fix_card_skill_keys(card: Optional[Dict[str, Any]], skill_keys) -> Optional
     for field in ("hard_heroes", "easy_heroes", "heroes"):
         if isinstance(card.get(field), list):
             fixed[field] = [
-                {**item, "note": unify_role_labels(fix_skill_keys(item.get("note", ""), skill_keys))}
+                {**item, "note": replace_dying_word(unify_role_labels(fix_skill_keys(item.get("note", ""), skill_keys)))}
                 if isinstance(item, dict) else item
                 for item in card[field]
             ]
     if fixed.get("caution"):
-        fixed["caution"] = unify_role_labels(fixed["caution"])
+        fixed["caution"] = replace_dying_word(unify_role_labels(fixed["caution"]))
     return fixed
 
 
@@ -1563,7 +1822,7 @@ def format_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
     # 특전 답변의 "- "는 형식의 일부라 여기서도 보존한다.
     answer = sanitize_answer_for_user(
         state.get("answer", ""),
-        keep_dash_bullets=answer_style == "simple" or bool(state.get("is_perk_question")),
+        keep_dash_bullets=is_short_style(answer_style) or bool(state.get("is_perk_question")),
     )
 
     # 스킬 단축키는 LLM이 틀리게 쓰는 일이 잦아 원본 문서 표로 다시 맞춘다.
@@ -1571,6 +1830,17 @@ def format_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
     answer = fix_skill_keys(answer, skill_keys)
     # 추천이 한 역할뿐이면 이름 옆 역할 괄호는 군더더기다.
     answer = drop_single_role_labels(unify_role_labels(answer))
+    answer = replace_dying_word(answer)
+    # 질문을 되풀이한 제목 줄은 프롬프트로 막아도 가끔 나온다.
+    answer = drop_echo_title(answer, state.get("message", ""))
+    answer = fix_known_slips(drop_intro_announcement(answer))
+    # 자세히 문단은 문장마다 줄을 바꿔 읽기 쉽게 한다(특전 답변은 자체 형식이 있다).
+    if answer_style == "detailed" and not state.get("is_perk_question"):
+        answer = split_paragraph_sentences(answer)
+    # 사용자가 말한 영웅(내 영웅·아군·상대)은 역할을 이미 안다.
+    known_heroes = [state.get("current_hero")] + list(state.get("ally_team") or []) + list(state.get("enemy_team") or [])
+    known_heroes += find_all_heroes(state.get("message", ""))
+    answer = drop_role_labels_for(answer, [normalize_hero_name(h) for h in known_heroes if h])
     matchup_card = _fix_card_skill_keys(state.get("matchup_card"), skill_keys)
     recommend_card = _fix_card_skill_keys(state.get("recommend_card"), skill_keys)
 
@@ -1591,7 +1861,7 @@ def format_response_node(state: ChatbotGraphState) -> ChatbotGraphState:
     # 버튼이 붙는 답변에는 추천 질문을 내보내지 않는다.
     choice_buttons = state.get("choice_buttons", [])
     suggested_questions = [] if choice_buttons else [
-        unify_role_labels(fix_skill_keys(q, skill_keys)) for q in state.get("suggested_questions", [])
+        fix_known_slips(replace_dying_word(unify_role_labels(fix_skill_keys(q, skill_keys)))) for q in state.get("suggested_questions", [])
     ]
 
     return {

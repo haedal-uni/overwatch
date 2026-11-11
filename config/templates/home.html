@@ -1,0 +1,390 @@
+{% load static %}<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eef5ff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#081120" media="(prefers-color-scheme: dark)">
+  <script src="/pwa/inset.js"></script>
+  <script src="/pwa/device.js"></script>
+  <title>OW 코치</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/pwa/icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="OW 코치">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #eef5ff; --bg2: #f8fbff; --card: #ffffff; --text: #16233b; --muted: #61708a;
+      --line: #dbe6f6; --accent: #ff9f1c; --shadow: 0 10px 28px rgba(40, 80, 140, .12);
+      --chat-a: #4f8cff; --chat-b: #7aa9ff; --game-a: #ff9f1c; --game-b: #ffc766;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #081120; --bg2: #0e1a2f; --card: #121f36; --text: #eaf1ff; --muted: #94a3bd;
+        --line: #22314d; --accent: #ffb84d; --shadow: 0 10px 28px rgba(0, 0, 0, .4);
+        --chat-a: #3d6fd6; --chat-b: #5b8be8; --game-a: #e08a10; --game-b: #f0a93d;
+      }
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      min-height: 100dvh; color: var(--text);
+      font-family: 'Noto Sans KR', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: linear-gradient(135deg, var(--bg), var(--bg2)) fixed;
+      display: flex; justify-content: center;
+    }
+    .wrap {
+      width: 100%; max-width: 480px; min-height: 100dvh; display: flex; flex-direction: column;
+      padding: calc(48px + env(safe-area-inset-top)) 20px calc(28px + var(--sab, env(safe-area-inset-bottom)));
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 15px; color: var(--accent); letter-spacing: .02em; }
+    .brand i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+    h1 { margin: 14px 0 8px; font-size: 30px; line-height: 1.3; font-weight: 800; letter-spacing: -.02em; }
+    .sub { margin: 0 0 32px; color: var(--muted); font-size: 15px; line-height: 1.6; }
+    .list { display: flex; flex-direction: column; gap: 16px; }
+    .card {
+      position: relative; display: flex; align-items: center; gap: 16px; padding: 22px 20px;
+      border-radius: 24px; text-decoration: none; color: var(--text);
+      background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow);
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .card:active { transform: scale(.98); }
+    .ico { flex: none; width: 88px; height: 64px; border-radius: 20px; display: grid; place-items: center; }
+    .card.chat .ico { background: linear-gradient(135deg, var(--chat-a), var(--chat-b)); display: flex; align-items: center; justify-content: center; }
+    .card.game .ico { background: linear-gradient(135deg, var(--game-a), var(--game-b)); }
+    .faces img { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; border: 2px solid #fff; margin-left: -10px; box-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
+    .faces img:first-child { margin-left: 0; }
+    .name { flex: 1; min-width: 0; font-size: 20px; font-weight: 800; }
+    .arrow { flex: none; color: var(--muted); font-size: 22px; }
+    .np-back { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(30, 24, 18, 0.55); }
+    .np-card { width: min(360px, 100%); box-sizing: border-box; padding: 24px 20px 16px; border-radius: 26px; background: #fffdf8; color: #2b2520; text-align: center; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.3); }
+    .np-card h2 { margin: 0 0 12px; font-size: 20px; }
+    .np-card p { margin: 0 0 18px; font-size: 15px; line-height: 1.65; white-space: pre-line; word-break: keep-all; text-align: left; max-height: 50vh; overflow-y: auto; }
+    .np-card button { width: 100%; height: 50px; border: 0; border-radius: 16px; background: #ff7aa2; color: #fff; font: inherit; font-size: 17px; font-weight: 800; cursor: pointer; box-shadow: 0 4px 0 #d9507c; }
+    .links { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 22px; }
+    .links .admin-link { margin-top: 0; font-family: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+    #pn-btn .dot { width: 8px; height: 8px; border-radius: 50%; background: #ff4f6e; }
+    #pn-btn .dot[hidden] { display: none; }
+    .pn-back { position: fixed; inset: 0; z-index: 880; display: flex; align-items: flex-end; justify-content: center; background: rgba(30, 24, 18, 0.55); }
+    .pn-sheet { width: min(760px, 100%); height: 92vh; height: 92dvh; display: flex; flex-direction: column; border-radius: 26px 26px 0 0; background: var(--card, #fff); color: inherit; box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.25); overflow: hidden; }
+    .pn-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 20px 12px; border-bottom: 1px solid var(--line); }
+    .pn-head h2 { margin: 0; font-size: 20px; flex: 1; }
+    .pn-head button { border: 1px solid var(--line); border-radius: 999px; background: rgba(127, 127, 127, 0.14); font: inherit; font-size: 15px; font-weight: 700; color: inherit; cursor: pointer; padding: 7px 14px; }
+    .pn-main { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; }
+    .pn-list, .pn-detail { overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px 28px; }
+    .pn-list { display: flex; flex-direction: column; gap: 8px; }
+    .pn-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+    .pn-row.on { border-color: #ff7aa2; background: rgba(255, 122, 162, 0.08); }
+    .pn-row b { font-size: 15px; }
+    .pn-row small { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .pn-detail h3 { margin: 0 0 4px; font-size: 22px; line-height: 1.35; }
+    .pn-detail .date { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+    .pn-detail .body { font-size: 15.5px; line-height: 1.85; word-break: keep-all; }
+    .pn-detail .body p { margin: 0 0 12px; white-space: pre-line; }
+    .pn-detail .body .pn-h1 { margin: 48px 0 12px; font-size: 22px; line-height: 1.4; font-weight: 800; }
+    .pn-detail .body .pn-h2 { margin: 32px 0 10px; font-size: 17.5px; line-height: 1.45; font-weight: 800; }
+    .pn-detail .body ul { margin: 0 0 12px; padding-left: 20px; }
+    .pn-detail .body li { margin-bottom: 4px; }
+    .pn-detail .body em { font-style: italic; }
+    .pn-detail .body del { opacity: 0.65; }
+    .pn-detail .body code { padding: 1px 6px; border-radius: 6px; background: rgba(127, 127, 127, 0.18); font-size: 0.92em; }
+    .pn-detail .body pre { margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; background: rgba(127, 127, 127, 0.16); overflow-x: auto; line-height: 1.6; }
+    .pn-detail .body pre code { padding: 0; background: none; font-size: 13.5px; white-space: pre; }
+    .pn-detail .body blockquote { margin: 0 0 14px; padding: 8px 14px; border-left: 4px solid #ff7aa2; background: rgba(255, 122, 162, 0.08); border-radius: 0 10px 10px 0; white-space: pre-line; }
+    .pn-detail .body a { color: #3b6cf0; text-decoration: underline; word-break: break-all; }
+    .pn-detail .body ol { margin: 0 0 12px; padding-left: 22px; }
+    .pn-detail .body li > ul, .pn-detail .body li > ol { margin: 4px 0 0; }
+    .pn-detail .body .pn-table { overflow-x: auto; margin: 0 0 14px; }
+    .pn-detail .body table { border-collapse: collapse; font-size: 14px; line-height: 1.5; min-width: 100%; }
+    .pn-detail .body th, .pn-detail .body td { padding: 8px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .pn-detail .body th { background: rgba(127, 127, 127, 0.12); font-weight: 800; }
+    .pn-detail .body .pn-img { margin: 6px auto 18px; width: min(100%, 300px); }
+    .pn-detail .body .pn-img.small { width: 88px; }
+    .pn-detail .body .pn-embed { width: 100%; }
+    .pn-detail .body .pn-embed iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 16px; background: #000; }
+    @media (min-width: 720px) {
+      .pn-detail .body .pn-img.pn-embed { width: min(100%, 900px); margin: 6px auto 18px; }
+      .pn-detail .body .pn-embed iframe { aspect-ratio: 16 / 9; }
+    }
+    .pn-detail .body .pn-img img { display: block; width: 100%; height: auto; border-radius: 16px; border: 1px solid var(--line); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12); }
+    .pn-detail .body .pn-img figcaption { margin-top: 6px; text-align: center; font-size: 12.5px; color: var(--muted); }
+    .pn-detail .body .pn-h1:first-child { margin-top: 12px; }
+    .pn-detail .body hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0; }
+    .pn-detail .body strong { font-weight: 800; }
+    .pn-new { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 99px; background: #ff4f6e; color: #fff; font-size: 11px; vertical-align: middle; }
+    .pn-empty { text-align: center; color: var(--muted); padding: 40px 0; }
+    .pn-main.detail .pn-list { display: none; }
+    .pn-main:not(.detail) .pn-detail { display: none; }
+    .pn-head .back { display: none; }
+    .pn-main.detail ~ * { }
+    @media (min-width: 720px) {
+      .pn-back { align-items: center; }
+      .pn-sheet { width: min(1180px, 94vw); height: 90vh; height: 90dvh; border-radius: 26px; }
+      .pn-detail { padding: 22px 44px 40px; }
+      .pn-detail .body { font-size: 16.5px; }
+      .pn-detail .body .pn-img { width: min(100%, 340px); }
+      .pn-main { grid-template-columns: 300px 1fr; }
+      .pn-main .pn-list, .pn-main .pn-detail { display: block !important; }
+      .pn-main .pn-list { display: flex !important; flex-direction: column; border-right: 1px solid var(--line); }
+      .pn-head .back { display: none !important; }
+    }
+    .notice { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 14px; padding: 12px 14px; border-radius: 16px; background: #fff7e0; border: 1px solid #f3d27a; color: #5b4100; font-size: 14px; line-height: 1.55; white-space: pre-line; word-break: keep-all; }
+    .notice b { flex: none; font-size: 16px; line-height: 1.4; }
+    .notice.bottom { margin: 18px 0 0; }
+    @media (prefers-color-scheme: dark) { .notice { background: #3a2f12; border-color: #6b5521; color: #ffe7a6; } }
+    .foot { margin-top: auto; padding-top: 32px; text-align: center; color: var(--muted); font-size: 12px; }
+    .admin-link { align-self: center; margin-top: 22px; padding: 10px 20px; border-radius: 99px; border: 1px solid var(--line); background: var(--card); color: var(--muted); text-decoration: none; font-weight: 700; font-size: 14px; }
+    @media (hover: hover) { .card:hover { box-shadow: 0 14px 34px rgba(40, 80, 140, .18); transform: translateY(-2px); } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    {% for n in notices_top %}<div class="notice" role="note"><b aria-hidden="true">📢</b><span>{{ n.message }}</span></div>{% endfor %}
+    <div class="brand"><i></i>OW 코치</div>
+    <h1>무엇을 하러 오셨나요?</h1>
+    <p class="sub">원하는 서비스를 골라 주세요.</p>
+    <nav class="list">
+      {% for s in services %}
+      <a class="card {{ s.tone }}" href="{{ s.url }}">
+        {% if s.tone == "chat" %}
+        <span class="ico faces" aria-hidden="true">
+          <img src="{% static 'chat/hero_icons/아나.png' %}" alt="">
+          <img src="{% static 'chat/hero_icons/겐지.png' %}" alt="">
+          <img src="{% static 'chat/hero_icons/트레이서.png' %}" alt="">
+        </span>
+        {% else %}
+        <span class="ico tiles" aria-hidden="true">
+          <svg viewBox="0 0 64 64" width="56" height="56">
+            <rect x="6" y="6" width="24" height="24" rx="7" fill="#ff6b8a"/>
+            <rect x="34" y="6" width="24" height="24" rx="7" fill="#ffd23f"/>
+            <rect x="6" y="34" width="24" height="24" rx="7" fill="#4fc98a"/>
+            <rect x="34" y="34" width="24" height="24" rx="7" fill="#5aa9ff"/>
+            <circle cx="18" cy="18" r="3" fill="#fff" opacity=".8"/>
+            <circle cx="46" cy="18" r="3" fill="#fff" opacity=".8"/>
+            <circle cx="18" cy="46" r="3" fill="#fff" opacity=".8"/>
+            <circle cx="46" cy="46" r="3" fill="#fff" opacity=".8"/>
+          </svg>
+        </span>
+        {% endif %}
+        <span class="name">{{ s.name }}</span>
+        <span class="arrow" aria-hidden="true">›</span>
+      </a>
+      {% endfor %}
+    </nav>
+    {% for n in notices_bottom %}<div class="notice bottom" role="note"><b aria-hidden="true">📢</b><span>{{ n.message }}</span></div>{% endfor %}
+    <div class="links">
+      <button type="button" class="admin-link" id="pn-btn" aria-haspopup="dialog">📝 패치 노트<i class="dot" id="pn-dot" hidden></i></button>
+      <a class="admin-link" href="/transfer/">기록 옮기기</a>
+    </div>
+    {% if is_staff %}
+    <a class="admin-link" href="/admin/">⚙ 관리자</a>
+    {% endif %}
+  </main>
+  <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(function () {});</script>
+{% if notices_popup %}{{ notices_popup|json_script:"notice-popups" }}
+<script>
+  (function () {
+    var KEY = "owcoach.notice.seen";
+    var seen = [];
+    try { seen = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) {}
+    var list = JSON.parse(document.getElementById("notice-popups").textContent).filter(function (n) { return seen.indexOf(n.key) < 0; });
+    function next() {
+      var n = list.shift();
+      if (!n) return;
+      var back = document.createElement("div");
+      back.className = "np-back";
+      back.setAttribute("role", "dialog");
+      back.setAttribute("aria-modal", "true");
+      var card = document.createElement("div");
+      card.className = "np-card";
+      card.innerHTML = '<h2>📢 공지사항</h2><p></p><button type="button">확인</button>';
+      card.querySelector("p").textContent = n.message;
+      card.querySelector("button").addEventListener("click", function () {
+        seen.push(n.key);
+        try { localStorage.setItem(KEY, JSON.stringify(seen.slice(-50))); } catch (e) {}
+        back.remove();
+        next();
+      });
+      back.appendChild(card);
+      document.body.appendChild(back);
+      card.querySelector("button").focus();
+    }
+    next();
+  })();
+</script>
+{% endif %}
+{{ patch_notes|json_script:"patch-notes" }}
+<script>
+  (function () {
+    var notes = JSON.parse(document.getElementById("patch-notes").textContent);
+    var KEY = "owcoach.patch.seen";
+    var seen = 0;
+    try { seen = Number(localStorage.getItem(KEY)) || 0; } catch (e) {}
+    var latest = notes.length ? Math.max.apply(null, notes.map(function (n) { return n.id; })) : 0;
+    var dot = document.getElementById("pn-dot");
+    if (latest > seen) dot.hidden = false;
+    document.getElementById("pn-btn").addEventListener("click", function () {
+      var back = document.createElement("div");
+      back.className = "pn-back";
+      back.setAttribute("role", "dialog");
+      back.setAttribute("aria-modal", "true");
+      back.innerHTML = '<div class="pn-sheet"><div class="pn-head"><button type="button" class="back">← 목록</button><h2>패치 노트</h2><button type="button" class="close">닫기</button></div>' +
+        '<div class="pn-main"><div class="pn-list"></div><div class="pn-detail"></div></div></div>';
+      document.body.appendChild(back);
+      var main = back.querySelector(".pn-main"), list = back.querySelector(".pn-list"), detail = back.querySelector(".pn-detail"), backBtn = back.querySelector(".back"), title = back.querySelector("h2");
+      var wide = function () { return window.matchMedia("(min-width: 720px)").matches; };
+      // 패치 노트는 마크다운 일부를 읽는다: # 제목(## 큰 제목, ### 작은 제목), **굵게**, *기울임*, ~~취소선~~, `코드`, [글자](주소), - 목록(번호 목록·들여쓴 하위 목록·들여쓴 이어지는 줄),
+      // > 인용, ``` 코드 블록, | 표 |, --- 구분선, ![설명](그림 주소), 빈 줄은 문단 나눔(빈 줄을 더 넣으면 그만큼 간격이 커지고 <br> 한 줄도 간격 하나).
+      // 글자를 HTML로 넣지 않고 요소로 만들어 붙인다. 링크·그림 주소는 /로 시작하거나 https://인 것만 받는다.
+      var safeUrl = function (u) { return /^\/(?!\/)/.test(u) || /^https:\/\//.test(u); };
+      // 같은 사이트의 /static/ 그림 주소 뒤에 버전을 붙인다: 파일을 올리기 전에 열어 본 폰·설치 앱(PWA)이 "없음" 응답을 기억해 두었다가
+      // 파일을 올린 뒤에도 그림을 안 보여 주는 일이 있었다(주소가 달라지면 새로 받는다).
+      var PN_IMG_V = "2";
+      function imgSrc(u) { return /^\/static\//.test(u) && u.indexOf("?") < 0 ? u + "?pv=" + PN_IMG_V : u; }
+      function inline(el, text) {
+        text.split(/(<br\s*\/?>|\*\*[^*]+\*\*|~~[^~]+~~|`[^`]+`|\*[^*\s][^*]*\*|\[[^\]]+\]\([^)\s]+\))/i).forEach(function (part) {
+          var m;
+          if (!part) return;
+          if (/^<br\s*\/?>$/i.test(part)) el.appendChild(document.createElement("br"));
+          else if (/^\*\*[^*]+\*\*$/.test(part)) { var st = document.createElement("strong"); inline(st, part.slice(2, -2)); el.appendChild(st); }
+          else if (/^~~[^~]+~~$/.test(part)) { var dl = document.createElement("del"); dl.textContent = part.slice(2, -2); el.appendChild(dl); }
+          else if (/^`[^`]+`$/.test(part)) { var cd = document.createElement("code"); cd.textContent = part.slice(1, -1); el.appendChild(cd); }
+          else if (/^\*[^*\s][^*]*\*$/.test(part)) { var em = document.createElement("em"); em.textContent = part.slice(1, -1); el.appendChild(em); }
+          else if ((m = part.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/)) && safeUrl(m[2])) { var an = document.createElement("a"); an.href = m[2]; an.target = "_blank"; an.rel = "noopener"; an.textContent = m[1]; el.appendChild(an); }
+          else el.appendChild(document.createTextNode(part));
+        });
+      }
+      var LIST_RE = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+      var HEAD_RE = /^(#{1,6})\s+(.*)$/;
+      var IMG_RE = /^!\[([^\]]*)\]\(([^)\s]+)\)$/;
+      function isTableRow(l) { return /\|/.test(l); }
+      function isTableSep(l) { return /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l); }
+      function startsBlock(l, next) {
+        var t = l.trim();
+        return /^```/.test(t) || /^-{3,}$/.test(t) || HEAD_RE.test(t) || IMG_RE.test(t) || /^>/.test(t) || LIST_RE.test(l) || /^(<br\s*\/?>\s*)+$/i.test(t) || (isTableRow(l) && next != null && isTableSep(next));
+      }
+      function cells(l) { return l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); }); }
+      function renderBody(box, text) {
+        var lines = text.split(/\r?\n/).map(function (x) { return x.replace(/\s+$/, ""); });
+        var i = 0, blanks = 0;
+        function gap(n) { var g = document.createElement("div"); g.className = "pn-gap"; g.style.height = (16 * n) + "px"; box.appendChild(g); }
+        while (i < lines.length) {
+          var line = lines[i], t = line.trim(), m;
+          if (!t) { blanks += 1; i += 1; continue; }
+          if (blanks > 1 && box.firstChild) gap(blanks - 1);
+          blanks = 0;
+          if (/^(<br\s*\/?>\s*)+$/i.test(t)) { gap(t.match(/<br/gi).length); i += 1; continue; } // <br>만 있는 줄은 개수만큼 간격
+          if (/^```/.test(t)) {
+            var code = []; i += 1;
+            while (i < lines.length && !/^```/.test(lines[i].trim())) { code.push(lines[i]); i += 1; }
+            i += 1;
+            var pre = document.createElement("pre"), cc = document.createElement("code"); cc.textContent = code.join("\n"); pre.appendChild(cc); box.appendChild(pre);
+            continue;
+          }
+          if (/^-{3,}$/.test(t)) { box.appendChild(document.createElement("hr")); i += 1; continue; }
+          if ((m = t.match(HEAD_RE))) {
+            var h = document.createElement(m[1].length <= 2 ? "h3" : "h4"); h.className = m[1].length <= 2 ? "pn-h1" : "pn-h2"; inline(h, m[2]); box.appendChild(h); i += 1; continue;
+          }
+          if ((m = t.match(IMG_RE)) && /^\/static\/[^?#]+\.html$/.test(m[2])) {
+            // 같은 사이트 /static/ 아래 .html은 재생 화면을 본문 안에 넣는다(예고편). 재생 버튼은 그 화면 안에 있다.
+            var emb = document.createElement("figure"); emb.className = "pn-img pn-embed";
+            var fr = document.createElement("iframe"); fr.src = m[2] + "?pv=" + PN_IMG_V; fr.title = m[1] || "영상"; fr.loading = "lazy"; fr.setAttribute("allow", "autoplay"); fr.setAttribute("sandbox", "allow-scripts allow-same-origin"); emb.appendChild(fr);
+            if (m[1]) { var ecap = document.createElement("figcaption"); ecap.textContent = m[1]; emb.appendChild(ecap); }
+            box.appendChild(emb); i += 1; continue;
+          }
+          if ((m = t.match(IMG_RE)) && safeUrl(m[2])) {
+            var fig = document.createElement("figure"); fig.className = "pn-img";
+            var small = /#small$/.test(m[2]); if (small) fig.classList.add("small"); // 주소 끝에 #small을 붙이면 작은 그림
+            var pic = document.createElement("img"); pic.src = imgSrc(m[2].replace(/#small$/, "")); pic.alt = m[1]; pic.loading = "lazy"; fig.appendChild(pic);
+            if (m[1]) { var cap = document.createElement("figcaption"); cap.textContent = m[1]; fig.appendChild(cap); }
+            box.appendChild(fig); i += 1; continue;
+          }
+          if (/^>/.test(t)) {
+            var bq = document.createElement("blockquote"), first = true;
+            while (i < lines.length && /^\s*>/.test(lines[i])) { if (!first) bq.appendChild(document.createTextNode("\n")); inline(bq, lines[i].replace(/^\s*>\s?/, "")); first = false; i += 1; }
+            box.appendChild(bq); continue;
+          }
+          if (isTableRow(line) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+            var tbl = document.createElement("table"), thead = document.createElement("thead"), tr = document.createElement("tr");
+            cells(line).forEach(function (x) { var th = document.createElement("th"); inline(th, x); tr.appendChild(th); });
+            thead.appendChild(tr); tbl.appendChild(thead);
+            var tb = document.createElement("tbody"); i += 2;
+            while (i < lines.length && lines[i].trim() && isTableRow(lines[i])) {
+              var rw = document.createElement("tr");
+              cells(lines[i]).forEach(function (x) { var td = document.createElement("td"); inline(td, x); rw.appendChild(td); });
+              tb.appendChild(rw); i += 1;
+            }
+            tbl.appendChild(tb);
+            var wrap = document.createElement("div"); wrap.className = "pn-table"; wrap.appendChild(tbl); box.appendChild(wrap);
+            continue;
+          }
+          // 목록: 들여쓴 줄은 바로 위 항목의 이어지는 내용(줄바꿈), 들여쓰기가 더 깊은 목록 줄은 하위 목록
+          if (LIST_RE.test(line)) {
+            var root = null, stack = [];
+            while (i < lines.length) {
+              var l = lines[i];
+              if (!l.trim()) break;
+              var lm = l.match(LIST_RE);
+              if (lm) {
+                var indent = lm[1].replace(/\t/g, "  ").length, ordered = /\d/.test(lm[2]);
+                while (stack.length && indent < stack[stack.length - 1].indent) stack.pop();
+                if (!stack.length || indent > stack[stack.length - 1].indent) {
+                  var list = document.createElement(ordered ? "ol" : "ul");
+                  if (stack.length && stack[stack.length - 1].last) stack[stack.length - 1].last.appendChild(list); else if (!root) root = list; else root.appendChild(list);
+                  stack.push({ indent: indent, list: list, last: null });
+                }
+                var top = stack[stack.length - 1], li = document.createElement("li");
+                inline(li, lm[3]); top.list.appendChild(li); top.last = li; i += 1; continue;
+              }
+              if (/^\s+\S/.test(l) && stack.length && stack[stack.length - 1].last) {
+                var cur = stack[stack.length - 1].last;
+                cur.appendChild(document.createElement("br")); inline(cur, l.trim()); i += 1; continue;
+              }
+              break;
+            }
+            if (root) box.appendChild(root);
+            continue;
+          }
+          var para = document.createElement("p"), firstLine = true;
+          while (i < lines.length && lines[i].trim() && (firstLine || !startsBlock(lines[i], lines[i + 1]))) {
+            if (!firstLine) para.appendChild(document.createTextNode("\n"));
+            inline(para, lines[i].trim()); firstLine = false; i += 1;
+          }
+          box.appendChild(para);
+        }
+      }
+      function open(i) {
+        var n = notes[i];
+        list.querySelectorAll(".pn-row").forEach(function (r, k) { r.classList.toggle("on", k === i); });
+        detail.innerHTML = "";
+        var h = document.createElement("h3"); h.textContent = n.title;
+        var d = document.createElement("div"); d.className = "date"; d.textContent = n.date;
+        var b = document.createElement("div"); b.className = "body"; renderBody(b, n.body);
+        detail.appendChild(h); detail.appendChild(d); detail.appendChild(b); detail.scrollTop = 0;
+        main.classList.add("detail"); backBtn.style.display = wide() ? "none" : "inline";
+        title.textContent = wide() ? "패치 노트" : "";
+      }
+      function showList() { main.classList.remove("detail"); backBtn.style.display = "none"; title.textContent = "패치 노트"; }
+      if (!notes.length) { list.innerHTML = '<p class="pn-empty">아직 올라온 패치 노트가 없어요.</p>'; }
+      notes.forEach(function (n, i) {
+        var r = document.createElement("button"); r.type = "button"; r.className = "pn-row";
+        var b = document.createElement("b"); b.textContent = n.title;
+        if (n.id > seen) { var tag = document.createElement("span"); tag.className = "pn-new"; tag.textContent = "NEW"; b.appendChild(tag); }
+        var s = document.createElement("small"); s.textContent = n.date;
+        r.appendChild(b); r.appendChild(s); r.addEventListener("click", function () { open(i); });
+        list.appendChild(r);
+      });
+      if (notes.length && wide()) open(0);
+      backBtn.addEventListener("click", showList);
+      var close = function () { back.remove(); };
+      back.querySelector(".close").addEventListener("click", close);
+      back.addEventListener("click", function (e) { if (e.target === back) close(); });
+      try { localStorage.setItem(KEY, String(latest)); } catch (e) {}
+      dot.hidden = true;
+    });
+  })();
+</script>
+</body>
+</html>

@@ -61,6 +61,8 @@ class ChatbotGraphState(TypedDict, total=False):
     # 우선 타겟 질문인지와, 문서 판정으로 정렬한 상대 목록.
     is_target_priority_question: bool
     target_priority: List[Dict[str, Any]]
+    # 우선 타겟 질문이 아니어도 내 영웅과 상대 조합을 알면 같은 기준으로 정렬한 상대 목록("노릴 대상" 줄의 근거).
+    opponent_order: List[Dict[str, Any]]
     ally_team: List[str]
     llm_ally_team: List[str]
     # 아군 조합으로 좁힌 역할 후보와, 그 조합이 최근 것인지.
@@ -70,12 +72,18 @@ class ChatbotGraphState(TypedDict, total=False):
     # is_full은 아군만으로 정원이 찼는지.
     roster_size: Optional[int]
     roster_size_effective: int
+    # 이 기기에서 스탯창으로 분석한 판 중 자주 한 영웅([{"hero", "count"}], 많은 순, 최대 3명).
+    main_heroes: List[Dict[str, Any]]
+    # 브라우저 "내 기록" 요약(숫자)과, 이번 질문이 그 기록으로 내 플레이 스타일을 묻는 질문인지.
+    records_summary: Dict[str, Any]
+    is_records_question: bool
     roster_is_full: bool
     # 되묻지 않고 답할 때 답변 끝에 붙이는 판단 근거 한 줄.
     role_basis_note: str
     compared_heroes: List[str]
     is_team_comp_question: bool
     is_ally_target_choice: bool
+    ally_choice_candidates: List[str]
     # 주제 영웅의 스킬·궁극기·특전을 묻는 질문인지.
     is_hero_kit_question: bool
     # 앞 목록 질문에 영웅을 덧붙여 묻는 후속 질문인지.

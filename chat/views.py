@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 import uuid
 import traceback
@@ -8,13 +9,21 @@ from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 
+from chat import batch as batch_service
+from chat import sync as sync_service
+from chat.match_stats import record_match, set_result, unknown_flags
 from chat.graph.pipeline import (
     is_session_timed_out,
     role_filter_label,
     run_chatbot_graph,
     try_canned_shortcut,
 )
-from chat.models import ChatLog
+from chat.domain.answer_format import ANSWER_STYLES
+from chat.domain.heroes import resolve_hero_name
+from chat.domain.records_summary import clean_records_summary
+from chat.models import BatchJob, ChatLog, ChatOpinion
+from chat.rag.death_tips import get_death_tip
+from chat.rag.hero_guides import get_hero_guide
 from chat.rag.matchup_tables import get_hero_matchup, get_matchup_roster
 from chat.vision.scoreboard import analyze_scoreboard_image, ScoreboardAnalysisError
 
@@ -24,6 +33,19 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB
 
 # 입력 길이 상한.
 MAX_MESSAGE_LENGTH = 500
+# 프론트가 보내는 질문 출처 값 → 관리자 로그 표시 이름.
+QUESTION_SOURCES = {
+    "typed": "직접 입력",
+    "voice": "음성 입력",
+    "example": "예시 질문",
+    "suggested": "추천 질문",
+    "hero_ask": "영웅으로 묻기",
+    "guide": "영웅 가이드",
+    "death": "죽었어요",
+    "card_battle": "카드 대결",
+    "button": "답변 버튼",
+}
+STYLE_LABELS = {"simple": "간단히", "detailed": "자세히", "command": "명령조"}
 MAX_FEEDBACK_REASON_LENGTH = 1000
 
 # content_type은 클라이언트가 보내는 값이라 화이트리스트로 검증한다.
@@ -82,12 +104,30 @@ def csrf_failure_debug(request, reason=""):
     return django_csrf_failure(request, reason=reason)
 
 def ensure_log_session_id(request):
-    """대화 묶음 추적용 UUID를 세션에 보장하고 돌려준다(Django 세션키와 별개)."""
+    """로그 묶음 ID. 화면을 열 때마다 브라우저가 만드는 방문 ID(UUID)를 그대로 쓰고, 없으면 세션 값을 쓴다."""
+    visit_id = (request.headers.get("X-Visit-Id") or "").strip()
+    try:
+        return str(uuid.UUID(visit_id))
+    except ValueError:
+        pass
     if not request.session.get("log_session_id"):
         request.session["log_session_id"] = str(uuid.uuid4())
         request.session.modified = True
 
     return request.session["log_session_id"]
+
+
+_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def request_devices(request):
+    """요청 헤더의 챗봇 기기 ID·게임 기기 ID(형식이 맞을 때만)를 save_chat_log 인자로 돌려준다."""
+    out = {}
+    for key, header in (("device_id", "X-Device-Id"), ("game_device_id", "X-Game-Device")):
+        value = (request.headers.get(header) or "").strip()
+        if _DEVICE_ID_RE.match(value):
+            out[key] = value
+    return out
 
 
 def save_error_log(request, exc, *, source=None, extra_metadata=None):
@@ -105,6 +145,7 @@ def save_error_log(request, exc, *, source=None, extra_metadata=None):
             role="ERROR",
             message=str(exc),
             metadata=metadata,
+            **request_devices(request),
         )
     except Exception:
         logger.exception("ERROR 로그 저장 실패")
@@ -120,6 +161,8 @@ def save_chat_log(
     current_hero=None,
     target_enemy=None,
     metadata=None,
+    device_id="",
+    game_device_id="",
 ):
     """USER / AI / ERROR 메시지를 ChatLog에 저장한다."""
     ChatLog.objects.create(
@@ -131,11 +174,15 @@ def save_chat_log(
         current_hero=current_hero,
         target_enemy=target_enemy,
         metadata=metadata or {},
+        device_id=device_id,
+        game_device_id=game_device_id,
     )
 
 
 @require_http_methods(["POST"])
 def chat_api(request):
+    # 응답 시간(관리자 분석용, AI 로그 metadata의 elapsed_ms).
+    started = time.monotonic()
     try:
         data = json.loads(request.body or b"{}")
 
@@ -151,12 +198,26 @@ def chat_api(request):
         if roster_size not in (5, 6):
             roster_size = None
         reset = bool(data.get("reset", False))
+        # 이 기기에서 자주 한 영웅(내 기록에서 센 값). 등록된 영웅 이름만 받는다.
+        main_heroes = []
+        for item in (data.get("main_heroes") or [])[:3]:
+            if not isinstance(item, dict):
+                continue
+            hero = resolve_hero_name(str(item.get("hero") or ""))
+            try:
+                count = int(item.get("count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if hero and count > 0 and all(m["hero"] != hero for m in main_heroes):
+                main_heroes.append({"hero": hero, "count": count})
+        # 브라우저 "내 기록"을 요약한 숫자(내 플레이 스타일을 묻는 질문에만 쓴다).
+        records_summary = clean_records_summary(data.get("records_summary"))
         # 질문과 함께 첨부한 스탯창의 분석 로그 turn_id(관리자 페이지 연결용).
         scoreboard_turn_id = (data.get("scoreboard_turn_id") or "").strip()[:64] or None
 
         # 알 수 없는 값이면 None으로 넘겨 세션 값을 쓰게 한다.
         answer_style = data.get("answer_style")
-        if answer_style not in ("simple", "detailed"):
+        if answer_style not in ANSWER_STYLES:
             answer_style = None
 
         if reset:
@@ -212,6 +273,8 @@ def chat_api(request):
                 answer_style=answer_style,
                 focus_hero_pick=focus_hero,
                 roster_size=roster_size,
+                main_heroes=main_heroes,
+                records_summary=records_summary,
             )
 
         context_patch = result.get("context_patch", {})
@@ -256,8 +319,17 @@ def chat_api(request):
 
         if scoreboard_turn_id:
             user_log_message = f"[스탯창 첨부] {user_log_message}"
+        # 관리자 로그에서 질문 출처와 답변 스타일을 바로 보이게 앞에 붙인다.
+        raw_source = str(data.get("question_source") or "") if message else ""
+        base_source = QUESTION_SOURCES.get(raw_source.removesuffix("_edited"))
+        question_source = (f"{base_source} 수정" if raw_source.endswith("_edited") else base_source) if base_source else None
+        style_used = result.get("answer_style") or answer_style
+        tags = [t for t in (question_source, STYLE_LABELS.get(style_used)) if t]
+        if tags:
+            user_log_message = f"[{' · '.join(tags)}] {user_log_message}"
 
         save_chat_log(
+            **request_devices(request),
             log_session_id=log_session_id,
             turn_id=turn_id,
             role="USER",
@@ -268,6 +340,8 @@ def chat_api(request):
             metadata={
                 "role_filter": role_filter,
                 "roster_size": roster_size,
+                "question_source": raw_source or None,
+                "answer_style": style_used,
                 "context_before": context_before,
                 **({"scoreboard_turn_id": scoreboard_turn_id} if scoreboard_turn_id else {}),
             },
@@ -276,6 +350,7 @@ def chat_api(request):
         if graph_error:
             # 그래프 내부 오류는 예외가 아니라 state["error"]로 온다.
             save_chat_log(
+                **request_devices(request),
                 log_session_id=log_session_id,
                 turn_id=turn_id,
                 role="ERROR",
@@ -292,6 +367,7 @@ def chat_api(request):
             )
         else:
             save_chat_log(
+                **request_devices(request),
                 log_session_id=log_session_id,
                 turn_id=turn_id,
                 role="AI",
@@ -311,6 +387,7 @@ def chat_api(request):
                     "answer_style": result.get("answer_style"),
                     "matchup_card": result.get("matchup_card"),
                     "recommend_card": result.get("recommend_card"),
+                    "elapsed_ms": round((time.monotonic() - started) * 1000),
                     **({"source": "canned_response"} if is_canned else {}),
                     **({"scoreboard_turn_id": scoreboard_turn_id} if scoreboard_turn_id else {}),
                 },
@@ -335,9 +412,9 @@ def chat_api(request):
 
 @require_http_methods(["GET"])
 def chat_matchups(request):
-    """상성표 모달이 쓰는 읽기 전용 데이터.
+    """영웅 가이드(상성표) 모달이 쓰는 읽기 전용 데이터.
 
-    `?hero=`가 있으면 그 영웅의 상성표만, 없으면 역할별 영웅 목록만 돌려준다.
+    `?hero=`가 있으면 그 영웅의 상성표와 가이드를, 없으면 역할별 영웅 목록만 돌려준다.
     """
     hero = (request.GET.get("hero") or "").strip()
 
@@ -349,7 +426,61 @@ def chat_matchups(request):
         return JsonResponse({"error": "상성 정보를 찾을 수 없는 영웅입니다."}, status=404)
 
     # 중립은 우선 타겟 정렬에만 쓰고 화면에는 안 띄운다.
-    return JsonResponse({"hero": {k: v for k, v in data.items() if k != "even"}})
+    return JsonResponse({
+        "hero": {k: v for k, v in data.items() if k != "even"},
+        "guide": get_hero_guide(data["hero"]),
+    })
+
+
+@require_http_methods(["GET", "POST"])
+def chat_death(request):
+    """'죽었어요' 버튼.
+
+    GET은 세션이 아는 내 영웅·상대 조합(버튼 창에 먼저 보여 줄 것), POST는 {hero, killer}의 두 줄 답.
+    그래프를 타지 않고, 상성표에 그 짝이 없으면 found=False를 돌려 화면이 평소 채팅으로 묻게 한다.
+    """
+    context = request.session.get("coach_context", {})
+    if is_session_timed_out(context):
+        context = {}
+
+    if request.method == "GET":
+        return JsonResponse({
+            "hero": context.get("current_hero"),
+            "enemies": list(context.get("enemy_team") or [])[:6],
+        })
+
+    try:
+        data = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "요청 형식이 올바르지 않습니다."}, status=400)
+    hero = str(data.get("hero") or "").strip()[:30]
+    killer = str(data.get("killer") or "").strip()[:30]
+    if not hero or not killer:
+        return JsonResponse({"error": "내 영웅과 상대 영웅을 골라 주세요."}, status=400)
+
+    tip = get_death_tip(hero, killer)
+    log_session_id = ensure_log_session_id(request)
+    turn_id = str(uuid.uuid4())
+    try:
+        save_chat_log(
+            **request_devices(request),
+            log_session_id=log_session_id, turn_id=turn_id, role="USER",
+            message=f"[죽었어요] {hero} → {killer}에게 처치", intent="death_tip",
+            current_hero=hero, target_enemy=killer,
+        )
+        save_chat_log(
+            **request_devices(request),
+            log_session_id=log_session_id, turn_id=turn_id, role="AI",
+            message=f"{tip['do']}\n{tip['why']}" if tip else "(상성표에 없는 짝 — 채팅으로 넘김)",
+            intent="death_tip", current_hero=hero, target_enemy=killer,
+            metadata={"death_tip": tip} if tip else {},
+        )
+    except Exception:
+        logger.exception("죽었어요 로그 저장 실패")
+
+    if not tip:
+        return JsonResponse({"found": False, "turn_id": turn_id})
+    return JsonResponse({"found": True, "turn_id": turn_id, **tip})
 
 
 @require_http_methods(["POST"])
@@ -373,10 +504,16 @@ def chat_feedback(request):
                 status=400,
             )
 
-        updated = ChatLog.objects.filter(turn_id=turn_id, role="AI").update(
-            is_unsatisfied=True,
-            feedback_reason=reason,
-        )
+        # 같은 주소의 게임 기기 ID(있으면). 좋은 의견에 관리자가 게임 선물을 보낼 때 쓴다.
+        device = str(data.get("device") or "").strip()[:64]
+        logs = list(ChatLog.objects.filter(turn_id=turn_id, role="AI"))
+        for log in logs:
+            log.is_unsatisfied = True
+            log.feedback_reason = reason
+            if device:
+                log.metadata = {**(log.metadata or {}), "feedback_device": device}
+            log.save(update_fields=["is_unsatisfied", "feedback_reason", "metadata"])
+        updated = len(logs)
 
         if not updated:
             return JsonResponse(
@@ -397,6 +534,7 @@ def chat_scoreboard_ocr(request):
 
     진단 정보(admin_log)는 ChatLog.metadata에만 남기고 응답에는 넣지 않는다.
     """
+    started = time.monotonic()
     try:
         image_file = request.FILES.get("image")
 
@@ -426,6 +564,7 @@ def chat_scoreboard_ocr(request):
         admin_log = result.get("admin_log", {})
 
         save_chat_log(
+            **request_devices(request),
             log_session_id=ensure_log_session_id(request),
             turn_id=turn_id,
             role="AI",
@@ -435,6 +574,8 @@ def chat_scoreboard_ocr(request):
             metadata={
                 "source": "chat_scoreboard_analysis",
                 "admin_log": admin_log,
+                **unknown_flags(admin_log),
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
             },
         )
 
@@ -473,7 +614,12 @@ def chat_scoreboard_ocr(request):
             request.session["coach_context"] = conversation_context
             request.session.modified = True
 
-        return JsonResponse({"report": result["report"], "turn_id": turn_id})
+        match = result.get("match")
+        if match:
+            key = record_match(match)
+            if key:
+                match["stat_key"] = key
+        return JsonResponse({"report": result["report"], "turn_id": turn_id, "match": match})
 
     except ScoreboardAnalysisError as e:
         logger.warning("chat_scoreboard_ocr 분석 실패: %s", e)
@@ -486,3 +632,135 @@ def chat_scoreboard_ocr(request):
         save_error_log(request, e, source="chat_scoreboard_ocr")
 
         return JsonResponse({"error": "이미지 분석 중 오류가 발생했습니다."}, status=500)
+
+MAX_OPINION_LENGTH = 1000
+MAX_OPINIONS_PER_DAY = 10
+
+
+@require_http_methods(["POST"])
+def chat_opinion(request):
+    """챗봇 화면의 "의견 보내기"로 보낸 글을 저장한다(답변 불만족과 별개)."""
+    try:
+        data = json.loads(request.body or b"{}")
+    except ValueError:
+        return JsonResponse({"error": "잘못된 요청입니다."}, status=400)
+    message = str(data.get("message") or "").strip()
+    if len(message) < 2:
+        return JsonResponse({"error": "의견을 적어 주세요."}, status=400)
+    if len(message) > MAX_OPINION_LENGTH:
+        return JsonResponse({"error": f"의견은 {MAX_OPINION_LENGTH}자까지 보낼 수 있어요."}, status=400)
+    # 세션당 하루 10개까지(도배 방지).
+    today = time.strftime("%Y-%m-%d")
+    sent = request.session.get("opinion_sent") or {}
+    if sent.get("day") != today:
+        sent = {"day": today, "n": 0}
+    if sent["n"] >= MAX_OPINIONS_PER_DAY:
+        return JsonResponse({"error": "오늘은 더 보낼 수 없어요. 내일 다시 보내 주세요."}, status=429)
+    ChatOpinion.objects.create(
+        message=message, device_id=str(data.get("device") or "")[:64],
+        user_agent=(request.META.get("HTTP_USER_AGENT") or "")[:200],
+    )
+    sent["n"] += 1
+    request.session["opinion_sent"] = sent
+    return JsonResponse({"ok": True})
+
+
+@require_http_methods(["POST"])
+def chat_batch_create(request):
+    """스탯창 이미지 여러 장을 한 번에 받아 두고(승패는 모두 같은 값) 서버가 한 장씩 분석한다."""
+    result = request.POST.get("result", "")
+    if result not in ("win", "loss", "draw"):
+        return JsonResponse({"error": "이긴 판인지 진 판인지 먼저 골라 주세요."}, status=400)
+    uploads = request.FILES.getlist("images")
+    if not uploads:
+        return JsonResponse({"error": "이미지 파일이 없습니다."}, status=400)
+    if len(uploads) > batch_service.MAX_IMAGES_PER_JOB:
+        return JsonResponse({"error": f"한 번에 {batch_service.MAX_IMAGES_PER_JOB}장까지 올릴 수 있어요."}, status=400)
+    files = []
+    for f in uploads:
+        mime = f.content_type or "image/png"
+        if f.size > MAX_IMAGE_BYTES or mime not in ALLOWED_IMAGE_TYPES:
+            return JsonResponse({"error": "이미지 형식이나 크기를 확인해 주세요. (png·jpg·webp, 8MB 이하)"}, status=400)
+        files.append((f.read(), mime))
+    if batch_service.pending_total() + len(files) > batch_service.MAX_PENDING_TOTAL:
+        return JsonResponse({"error": "지금 분석 대기가 많아요. 잠시 뒤에 다시 올려 주세요."}, status=429)
+    job = batch_service.create_job(result, files)
+    return JsonResponse({"job_id": str(job.id), "total": len(files)})
+
+
+@require_http_methods(["GET"])
+def chat_batch_status(request, job_id):
+    """일괄 올리기 진행 상황과 끝난 판의 요약."""
+    job = BatchJob.objects.filter(pk=job_id).first()
+    if job is None:
+        return JsonResponse({"error": "작업을 찾을 수 없어요."}, status=404)
+    if job.images.filter(status__in=["pending", "processing"]).exists():
+        batch_service.ensure_worker()
+    return JsonResponse(batch_service.job_status(job))
+
+
+@require_http_methods(["POST"])
+def chat_match_result(request):
+    """사용자가 고른 승패를 그 판 통계에 남긴다."""
+    try:
+        data = json.loads(request.body or "{}")
+    except ValueError:
+        return JsonResponse({"error": "잘못된 요청입니다."}, status=400)
+    return JsonResponse({"ok": set_result(str(data.get("stat_key") or ""), data.get("result"))})
+
+
+# ── PC·폰 기록 동기화 ──
+MAX_SYNC_BODY_BYTES = 1_000_000
+
+
+def _sync_request(request):
+    """동기화 요청 본문과 기기 ID. 기기 ID가 없거나 본문이 너무 크면 (None, None)."""
+    if len(request.body or b"") > MAX_SYNC_BODY_BYTES:
+        return None, None
+    try:
+        data = json.loads(request.body or b"{}")
+    except ValueError:
+        return None, None
+    device = str(data.get("device") or "").strip()[:64]
+    if len(device) < 16:
+        return None, None
+    return data, device
+
+
+@require_http_methods(["POST"])
+def chat_sync(request):
+    """이 기기의 기록을 연결 묶음에 합치고 묶음 전체 값을 돌려준다."""
+    data, device = _sync_request(request)
+    if data is None:
+        return JsonResponse({"error": "잘못된 요청입니다."}, status=400)
+    return JsonResponse(sync_service.sync(device, data))
+
+
+@require_http_methods(["POST"])
+def chat_sync_code(request):
+    """다른 기기를 붙일 6자리 코드(10분)를 만든다."""
+    data, device = _sync_request(request)
+    if data is None:
+        return JsonResponse({"error": "잘못된 요청입니다."}, status=400)
+    code = sync_service.make_code(device, request.META.get("HTTP_USER_AGENT", ""))
+    return JsonResponse({"code": code, "minutes": sync_service.CODE_MINUTES})
+
+
+@require_http_methods(["POST"])
+def chat_sync_link(request):
+    """6자리 코드로 이 기기를 그 묶음에 붙인다."""
+    data, device = _sync_request(request)
+    if data is None:
+        return JsonResponse({"error": "잘못된 요청입니다."}, status=400)
+    result = sync_service.link(device, str(data.get("code") or ""), request.META.get("HTTP_USER_AGENT", ""))
+    return JsonResponse(result, status=200 if result.get("ok") else 400)
+
+
+@require_http_methods(["POST"])
+def chat_sync_unlink(request):
+    """이 기기의 연결을 끊는다(wipe면 서버의 묶음 기록까지 지운다)."""
+    data, device = _sync_request(request)
+    if data is None:
+        return JsonResponse({"error": "잘못된 요청입니다."}, status=400)
+    sync_service.unlink(device, wipe=bool(data.get("wipe")))
+    return JsonResponse({"ok": True})

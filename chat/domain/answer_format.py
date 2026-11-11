@@ -11,6 +11,14 @@ from chat.domain.heroes import HERO_NAME_TO_CANONICAL, HERO_TO_ROLE
 
 logger = logging.getLogger(__name__)
 
+# 답변 스타일. 명령조는 간단히 형식에 짧은 구 어미를 쓴다.
+ANSWER_STYLES = ("simple", "detailed", "command")
+
+
+def is_short_style(answer_style: Optional[str]) -> bool:
+    """간단히 형식(간단히·명령조)인지."""
+    return answer_style in ("simple", "command")
+
 
 def sanitize_answer_for_user(answer: str, keep_dash_bullets: bool = False) -> str:
     if not answer:
@@ -186,9 +194,54 @@ _POLITE_ENDING_RULES = [
     (re.compile(r"([가-힣]{2,})입니다\.?$"), r"\1"),
 ]
 
+_PLAIN_ENDING_RE = re.compile(r"([가-힣]+)다\.?$")
+_JONG_NONE, _JONG_N, _JONG_L, _JONG_M, _JONG_B = 0, 4, 8, 16, 17
+# ㄹ 받침이 떨어진 "~ㄴ다" 동사(밀다 → 민다)는 받침만 바꾸면 말이 틀려 따로 적는다.
+_L_STEM_PLAIN = {"민": "밀기", "돈": "돌기", "든": "들기", "연": "열기", "건": "걸기", "논": "놀기", "판": "팔기", "몬": "몰기"}
+# "~워"로 바뀌는 ㅂ 불규칙 형용사의 받침 앞 글자.
+_B_IRREGULAR = set("쉽렵롭겁볍깝섭럽")
+
+
+def _jong(syllable: str) -> int:
+    return (ord(syllable) - 0xAC00) % 28
+
+
+def _with_jong(syllable: str, jong: int) -> str:
+    return chr(ord(syllable) - _jong(syllable) + jong)
+
+
+def _shorten_plain_word(word: str) -> Optional[str]:
+    """"~다"로 끝나는 어절(다 앞부분)을 짧은 구로 바꾼다. 모르는 모양이면 None."""
+    last = word[-1]
+    if last in "하한":
+        return word[:-1] if len(word) >= 3 else word[:-1] + "함"
+    if last == "된":
+        return word[:-1] + "됨"
+    if last == "는" and len(word) >= 2 and _jong(word[-2]) != _JONG_NONE:
+        return word[:-1] + "음"
+    jong = _jong(last)
+    if jong == _JONG_N:
+        if last in _L_STEM_PLAIN:
+            return word[:-1] + _L_STEM_PLAIN[last]
+        return word[:-1] + _with_jong(last, _JONG_M)
+    if jong == _JONG_B and last in _B_IRREGULAR:
+        return word[:-1] + _with_jong(last, _JONG_NONE) + "움"
+    if jong not in (_JONG_NONE, _JONG_L):
+        return word + "음"
+    # 받침 없는 말(목표다, 크다)은 명사인지 형용사인지 몰라 그대로 둔다.
+    return None
+
+
+def _shorten_plain_ending(line: str) -> str:
+    match = _PLAIN_ENDING_RE.search(line)
+    if not match:
+        return line
+    short = _shorten_plain_word(match.group(1))
+    return line if short is None else line[:match.start()] + short
+
 
 def shorten_polite_endings(answer: str) -> str:
-    """줄 끝의 격식체 종결을 짧은 구로 줄인다(추천 이유 줄은 그대로 둔다)."""
+    """줄 끝의 격식체·"~다" 종결을 짧은 구로 줄인다(추천 이유 줄은 그대로 둔다)."""
     if not answer:
         return answer
 
@@ -203,6 +256,8 @@ def shorten_polite_endings(answer: str) -> str:
             if count:
                 line = new_line.rstrip()
                 break
+        else:
+            line = _shorten_plain_ending(line)
         shortened.append(line)
     return "\n".join(shortened)
 
@@ -603,3 +658,189 @@ def relabel_quick_actions_for_review(answer: str) -> str:
     if not answer:
         return answer
     return _QUICK_ACTIONS_HEADER_RE.sub(r"\1다음 판에 해볼 것 3가지", answer)
+
+
+def drop_role_labels_for(answer: str, heroes: List[str]) -> str:
+    """사용자가 이미 아는 영웅(내 영웅·아군·상대) 이름 뒤 "(역할)"을 지운다."""
+    if not answer or not heroes:
+        return answer
+    known = set(heroes)
+    return _HERO_ROLE_LABEL_RE.sub(
+        lambda m: m.group(1) if HERO_NAME_TO_CANONICAL[m.group(1)] in known else m.group(0), answer
+    )
+
+
+_SWAP_HEADER_RE = re.compile(r"^\s*영웅을 바꾼다면\s*:\s*(.+)$")
+
+
+def label_swap_reasons(answer: str) -> str:
+    """"영웅을 바꾼다면" 아래 이유 줄에 영웅 이름이 빠졌으면 순서대로 붙인다."""
+    if not answer:
+        return answer
+    lines = answer.split("\n")
+    for i, line in enumerate(lines):
+        m = _SWAP_HEADER_RE.match(line)
+        if not m:
+            continue
+        names = [n.strip() for n in re.sub(r"\((탱커|딜러|힐러)\)", "", m.group(1)).split(",") if n.strip()]
+        reasons = []
+        for j in range(i + 1, len(lines)):
+            if not lines[j].lstrip().startswith("- "):
+                break
+            reasons.append(j)
+        if len(reasons) != len(names):
+            continue
+        surfaces = list(HERO_NAME_TO_CANONICAL)
+        for j in reasons:
+            if any(s in lines[j] for s in surfaces):
+                break
+        else:
+            for name, j in zip(names, reasons):
+                lines[j] = f"- {name}: {lines[j].lstrip()[2:].lstrip()}"
+    return "\n".join(lines)
+
+
+_SECTION_HEADER_RE = re.compile(
+    r"^\s*(운영 팁:|바로\s*(?:적용)?할\s*것\s*3가지|다음 판에 해볼 것 3가지|영웅을 바꾼다면\s*:|강점:|약점:)"
+)
+_NUMBERED_LINE_RE = re.compile(r"^\s*\d+\.\s")
+
+
+_QUICK_ACTIONS_LINE_RE = re.compile(r"^\s*(바로\s*(?:적용)?할\s*것|다음 판에 해볼 것)\s*\d*\s*가지\s*:?\s*$")
+QUICK_ACTIONS_MAX_LINES = 5
+
+
+def _flatten_quick_actions(lines: List[str]) -> List[str]:
+    """간단히의 할 일 줄은 제목 없이 한 줄씩이다. LLM이 붙인 제목 줄을 지우고 그 아래 줄의 번호·"- "를 뗀다."""
+    out: List[str] = []
+    in_block = False
+    count = 0
+    for line in lines:
+        if _QUICK_ACTIONS_LINE_RE.match(line):
+            in_block, count = True, 0
+            if out and out[-1].strip():
+                out.append("")
+            continue
+        if in_block:
+            if not line.strip() or _SECTION_HEADER_RE.match(line):
+                in_block = False
+            else:
+                count += 1
+                if count > QUICK_ACTIONS_MAX_LINES:
+                    continue
+                line = re.sub(r"^\s*(?:\d+\.|-)\s+", "", line)
+        out.append(line)
+    return out
+
+
+def tidy_simple_sections(answer: str, quick_actions: bool = False) -> str:
+    """간단히 답변의 섹션 모양을 맞춘다(할 일 줄의 제목·번호 떼기, "운영 팁" 항목의 "- ", 제목 앞 빈 줄)."""
+    if not answer:
+        return answer
+    lines = answer.split("\n")
+
+    if quick_actions:
+        lines = _flatten_quick_actions(lines)
+
+    in_tips = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if _SECTION_HEADER_RE.match(line):
+            in_tips = stripped.startswith("운영 팁")
+            continue
+        if not stripped:
+            in_tips = False
+            continue
+        if in_tips and not stripped.startswith("- ") and not _NUMBERED_LINE_RE.match(line):
+            lines[i] = "- " + stripped
+
+    out: List[str] = []
+    for line in lines:
+        if _SECTION_HEADER_RE.match(line) and out and out[-1].strip():
+            out.append("")
+        if not line.strip() and out and not out[-1].strip():
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+_ECHO_TITLE_END_RE = re.compile(r"(분석|안내|정리|요약|설명|가이드|방법)\s*:?\s*$")
+
+
+def drop_echo_title(answer: str, message: str) -> str:
+    """질문을 고쳐 쓴 제목 줄("~ 조합의 강점과 약점 분석")로 시작하면 그 줄을 지운다."""
+    if not answer or not message:
+        return answer
+    lines = answer.split("\n")
+    first = lines[0].strip()
+    if len(lines) < 2 or len(first) > 60 or not _ECHO_TITLE_END_RE.search(first):
+        return answer
+    words = {w for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", message)}
+    shared = sum(1 for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", first) if w in words or any(w.startswith(m) for m in words))
+    if shared < 2:
+        return answer
+    return "\n".join(lines[1:]).lstrip("\n")
+
+
+_INTRO_ANNOUNCE_RE = re.compile(
+    r"(정리해\s*(?:줄게|드릴게요|드리겠습니다)|알려\s*(?:줄게|드릴게요|드리겠습니다)|살펴\s*(?:볼게요|보겠습니다)|정리했어요|알아볼게요)\s*[.!~:]*\s*$"
+)
+
+
+def drop_intro_announcement(answer: str) -> str:
+    """첫 줄이 안내 문장(~해 줄게, ~드릴게요)이면 지운다."""
+    if not answer:
+        return answer
+    lines = answer.split("\n")
+    first = lines[0].strip()
+    if len(lines) < 2 or len(first) > 60 or not _INTRO_ANNOUNCE_RE.search(first):
+        return answer
+    return "\n".join(lines[1:]).lstrip("\n")
+
+
+_KNOWN_SLIPS = [
+    (re.compile(r"순단\s*이동"), "순간이동"),
+    (re.compile(r"추노"), "추격"),
+]
+
+
+def fix_known_slips(text: str) -> str:
+    """답변·추천 질문에서 LLM이 자주 내는 오타·은어를 고친다."""
+    if not text:
+        return text
+    for pattern, repl in _KNOWN_SLIPS:
+        text = pattern.sub(repl, text)
+    return text
+
+
+_DYING_STATE_RE = re.compile(r"빈사\s*상태")
+_DYING_BEFORE_NOUN_RE = re.compile(r"빈사(?:인|의)?\s+(?=[가-힣])")
+
+
+def replace_dying_word(text: str) -> str:
+    """문서의 "빈사"를 쉬운 말("생명력이 거의 없는")로 바꾼다."""
+    if not text or "빈사" not in text:
+        return text
+    text = _DYING_STATE_RE.sub("생명력이 거의 없는 상태", text)
+    text = _DYING_BEFORE_NOUN_RE.sub("생명력이 거의 없는 ", text)
+    return text.replace("빈사", "생명력이 거의 없는 상태")
+
+
+_PARAGRAPH_SPLIT_MIN = 40
+_LIST_LINE_RE = re.compile(r"^\s*(?:[-*•⚠]|\d+[.)]|#|\|)")
+
+
+def split_paragraph_sentences(answer: str) -> str:
+    """자세히 답변의 일반 문단을 문장마다 한 줄로, 긴 문장은 쉼표에서 나눠 보여 준다."""
+    out: List[str] = []
+    for line in (answer or "").split("\n"):
+        if not line.strip() or _LIST_LINE_RE.match(line) or len(line) < _PARAGRAPH_SPLIT_MIN:
+            out.append(line)
+            continue
+        for sentence in re.split(r"(?<=[.!?])\s+", line.strip()):
+            if len(sentence) >= _PARAGRAPH_SPLIT_MIN:
+                parts = [p.strip() for p in re.split(r"(?<=,)\s+", sentence) if p.strip()]
+            else:
+                parts = [sentence]
+            out.extend(parts)
+    return "\n".join(out)

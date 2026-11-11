@@ -118,6 +118,14 @@ def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
             text,
         ):
             return True
+        # 로/으로 + 진입·공격 동사 + 1인칭 의도(~려고): 가는 쪽이 말하는 사람이다.
+        if re.search(
+            rf"{escaped}\s*(?:로|으로)\s*[가-힣]{{0,6}}\s*"
+            rf"(?:들어가|진입|접근|돌진|덮치|잡|죽이|노리|싸우)[가-힣]*\s*[^,.?!]{{0,15}}?"
+            rf"(?:려고|려는데|려다가|고\s*싶)",
+            text,
+        ):
+            return True
         # 목적격 조사(을/를) + 희망/유지 표현.
         if re.search(
             rf"{escaped}\s*(?:을|를)?\s*(?:하고\s*있|하는\s*중|하고\s*싶|하고싶|할\s*거|할건데|"
@@ -132,11 +140,15 @@ def hero_mentioned_as_current_hero(hero: Optional[str], text: str) -> bool:
         if re.search(rf"{escaped}\s*(?:하는데요|하는데|할\s*때|하다가)", text):
             return True
         # 로/으로 뒤에 다른 영웅명이 끼는 상대법 질문.
-        if (
-            any(word in text for word in _STAY_OPERATION_WORDS)
-            and re.search(rf"{escaped}\s*(?:로|으로)", text)
-        ):
-            return True
+        if any(word in text for word in _STAY_OPERATION_WORDS):
+            ro = re.search(rf"{escaped}\s*(?:로|으로)", text)
+            enemy_side = ro and re.search(
+                r"(?:상대|상대팀|적|적팀)(?:가|이|는|은|의)?\s*$", text[:ro.start()]
+            )
+            if ro and not enemy_side and any(
+                h != normalized for h in find_all_heroes(text[ro.end():])
+            ):
+                return True
         # 확정 전 고려 표현.
         if re.search(
             rf"{escaped}\s*(?:을|를)?\s*(?:고르면|고를까|고르는\s*게|고르는게|"
@@ -260,6 +272,29 @@ def is_pick_request(message: str) -> bool:
     return _pick_question_match(message or "") is not None
 
 
+_OTHER_HERO_REQUEST_RE = re.compile(
+    r"(다른|딴|새로운)\s*(탱커|딜러|힐러|영웅|픽)\s*(은|는|이|가|으로|로)?\s*(없|추천|알려|뭐|뭘|있|해볼|써볼|바꿔|갈아)"
+    r"|(바꿀|갈아탈|교체할)\s*(만한|수 있는)?\s*(탱커|딜러|힐러|영웅)"
+)
+
+
+def is_other_hero_request(message: str) -> bool:
+    """"다른 영웅은 없어?"처럼 지금 영웅 대신 쓸 영웅을 구하는 질문인지."""
+    return bool(_OTHER_HERO_REQUEST_RE.search(message or ""))
+
+
+# "독트린이나 키리코로 겐지에게 대응하는 방법은 없어?"처럼 이름을 댄 영웅으로 상대하는 법을 묻는 표현.
+_NAMED_HERO_HOWTO_RE = re.compile(
+    r"(으로|로|이나|나|라면|으로는|로는)\s*[^?]{0,20}?(대응|상대|잡|이기|막|카운터)[^?]{0,8}?(방법|법|수)"
+)
+
+
+def is_named_hero_howto_question(message: str) -> bool:
+    """영웅을 댄 채 그 영웅으로 상대하는 방법을 묻는 질문인지(추천을 구하는 질문은 제외)."""
+    text = message or ""
+    return bool(_NAMED_HERO_HOWTO_RE.search(text)) and bool(find_all_heroes(text)) and not is_pick_request(text) and not is_other_hero_request(text)
+
+
 # 조건에 맞는 영웅을 빠짐없이 묻는 표현("뭐가 있어", "누가 있어", "누구누구").
 _HERO_ENUMERATION_RE = re.compile(r"(뭐|무엇|누가|누구)\s*(가|이)?\s*있|누구\s*누구|다\s*알려|말해|전부|모두")
 
@@ -298,10 +333,23 @@ _ALLY_TARGET_CHOICE_RE = re.compile(
 _PICK_VERB_WORDS = ("추천", "골라", "고르", "픽", "뽑", "바꿔", "교체")
 
 
-def is_ally_target_choice_question(message: str) -> bool:
+def asks_skill_recipient(message: str) -> bool:
+    """스킬을 누구에게 쓸지 묻는 질문인지(대상 후보가 아군인지 상대인지는 따로 본다)."""
     if not message or any(w in message for w in _PICK_VERB_WORDS):
         return False
-    return bool(_ALLY_TARGET_CHOICE_RE.search(message)) and len(find_all_heroes(message)) >= 2
+    return bool(_ALLY_TARGET_CHOICE_RE.search(message))
+
+
+def is_ally_target_choice_question(message: str) -> bool:
+    return asks_skill_recipient(message) and len(find_all_heroes(message)) >= 2
+
+
+# 대상 후보를 이름 대신 "아군"으로 가리키는 표현("아군 누구한테", "우리팀 누구").
+_ALLY_WORDS = ("아군", "우리팀", "우리 팀", "팀원", "같은 팀")
+
+
+def mentions_ally_word(message: str) -> bool:
+    return any(w in (message or "") for w in _ALLY_WORDS)
 
 
 # 영웅의 스킬·궁극기·특전을 가리키는 표현.
@@ -343,9 +391,29 @@ ROSTER_ROLE_RANGES = {
     6: {"tank": (1, 2), "damage": (2, 3), "support": (2, 2)},
 }
 
-# 현재 패치 메타의 팀 인원수. 5대5 ↔ 6대6을 바꾸는 유일한 고정점이므로
-# 다른 곳에 5나 6을 직접 쓰지 마라(chat_모듈_구조.md 참고).
+# 현재 패치 메타의 팀 인원수 기본값. 관리자 페이지 설정(SiteSetting)이 있으면 그 값이 이긴다.
+# 다른 곳에 5나 6을 직접 쓰지 말고 current_meta_roster_size()를 거쳐라(chat_모듈_구조.md 참고).
 CURRENT_META_ROSTER_SIZE = 5
+
+# 관리자 설정을 읽는 함수(chat 앱이 시작할 때 등록한다). 이 모듈은 DB를 모른다.
+_meta_roster_provider = None
+
+
+def set_meta_roster_provider(provider) -> None:
+    global _meta_roster_provider
+    _meta_roster_provider = provider
+
+
+def current_meta_roster_size() -> int:
+    """지금 메타의 인원수: 관리자 설정, 없으면 CURRENT_META_ROSTER_SIZE."""
+    if _meta_roster_provider is not None:
+        try:
+            value = _meta_roster_provider()
+        except Exception:
+            value = None
+        if value in ROSTER_ROLE_RANGES:
+            return value
+    return CURRENT_META_ROSTER_SIZE
 
 # 아군 조합을 역할 좁히기에 쓸 수 있는 유효 기간.
 ROLE_NARROWING_MAX_AGE_SECONDS = 5 * 60
@@ -368,7 +436,32 @@ def resolve_roster_size(declared: Optional[int]) -> int:
     """이번 답변에 적용할 인원수. 밝힌 값이 없으면 현재 메타."""
     if declared in ROSTER_ROLE_RANGES:
         return declared
-    return CURRENT_META_ROSTER_SIZE
+    return current_meta_roster_size()
+
+
+def two_tanks_allowed(roster_size: Optional[int] = None) -> bool:
+    """이 인원수 규격에서 탱커 둘이 한 팀에 설 수 있는지(5대5는 불가)."""
+    return ROSTER_ROLE_RANGES[resolve_roster_size(roster_size)]["tank"][1] >= 2
+
+
+def is_tank_pair(hero: Optional[str], other: Optional[str]) -> bool:
+    return HERO_TO_ROLE.get(hero) == "tank" and HERO_TO_ROLE.get(other) == "tank"
+
+
+# 같은 팀에서 함께 할 영웅을 묻는 표현(교체 추천과 구분한다).
+_PARTNER_QUESTION_RE = re.compile(r"(?:같이|함께)\s*(?:하면|할|쓰면|쓸|플레이|하기)|궁합|잘\s*맞|어울리|시너지")
+
+
+def asks_partner_for_self(message: str, current_hero: Optional[str]) -> bool:
+    """내 영웅을 밝히고 같은 팀에서 함께 할 영웅을 묻는 질문인지."""
+    return bool(current_hero and message and _PARTNER_QUESTION_RE.search(message))
+
+
+def partner_open_roles(current_hero: Optional[str], ally_team: List[str], roster_size: Optional[int] = None) -> List[str]:
+    """내 영웅과 아군을 넣고도 인원수 규격상 자리가 남는 역할."""
+    ranges = ROSTER_ROLE_RANGES[resolve_roster_size(roster_size)]
+    taken = [HERO_TO_ROLE.get(h) for h in dict.fromkeys([current_hero, *(ally_team or [])]) if h]
+    return [role for role in ROLE_HEROES if taken.count(role) < ranges[role][1]]
 
 
 def alternate_roster_size(roster_size: Optional[int] = None) -> int:
@@ -389,7 +482,7 @@ def roster_size_button_label(roster_size: int) -> str:
 
 def roster_role_quota_text(roster_size: int) -> str:
     """프롬프트에 넣는 역할 정원 설명."""
-    ranges = ROSTER_ROLE_RANGES.get(roster_size) or ROSTER_ROLE_RANGES[CURRENT_META_ROSTER_SIZE]
+    ranges = ROSTER_ROLE_RANGES.get(roster_size) or ROSTER_ROLE_RANGES[current_meta_roster_size()]
     parts = []
     for role in ROLE_HEROES:
         low, high = ranges[role]
@@ -567,6 +660,39 @@ _ELLIPSIS_FOLLOWUP_MAP_PATTERN = re.compile(r"어떤\s*맵|맵에서")
 _PERK_QUESTION_PATTERN = re.compile(r"특전|퍼크|perk", re.IGNORECASE)
 
 
+# 어디에 서는지를 묻는 질문(포지션·위치 선정·자리 잡기).
+_POSITION_QUESTION_PATTERN = re.compile(
+    r"포지션|위치\s*(?:선정|를\s*잡|는\s*어디|잡)|자리\s*(?:를|는)?\s*(?:잡|선정)|어디(?:에|서)\s*(?:서야|서서|있어야|싸워)"
+)
+
+
+def is_position_question(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_POSITION_QUESTION_PATTERN.search(message))
+
+
+# 스킬을 잇는 연계·콤보를 묻는 질문.
+_COMBO_QUESTION_PATTERN = re.compile(r"연계|콤보|컴보|연속기")
+
+
+def is_combo_question(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_COMBO_QUESTION_PATTERN.search(message))
+
+
+def synergy_pair_ally(
+    message: str, current_hero: Optional[str], ally_team: List[str], enemy_named: bool,
+) -> Optional[str]:
+    """내 영웅으로 이번 메시지에 말한 아군 한 명과 어떻게 맞출지 묻는 질문이면 그 아군."""
+    if not current_hero or enemy_named or is_pick_request(message):
+        return None
+    named = set(find_all_heroes(message or ""))
+    allies = [h for h in (ally_team or []) if h != current_hero and h in named]
+    return allies[0] if len(allies) == 1 else None
+
+
 def is_perk_question(message: str) -> bool:
     if not message:
         return False
@@ -667,6 +793,7 @@ ENEMY_MENTION_PATTERNS = [
     rf"([가-힣A-Za-z0-9\.]+)[을를]?{_NARROWING_FILLER}\s*처리",
     r"상대[가은는]?\s*([가-힣A-Za-z0-9\.]+)",
     r"상대\s*([가-힣A-Za-z0-9\.]+)",
+    r"(?<![가-힣])적(?:군|팀)?[은는이가]?\s*([가-힣A-Za-z0-9\.]+)",
 ]
 
 # 역할로만 카운터 대상을 좁히는 경우.
@@ -762,8 +889,7 @@ def find_synergy_ally_heroes(text: str) -> List[str]:
 
 def find_enemy_mentioned_hero(text: str) -> Optional[str]:
     for pattern in ENEMY_MENTION_PATTERNS:
-        match = re.search(pattern, text)
-        if match:
+        for match in re.finditer(pattern, text):
             candidate = normalize_hero_candidate(match.group(1))
             if candidate:
                 return candidate
@@ -900,6 +1026,36 @@ _MULTI_ROLE_PATTERN = re.compile(
 )
 
 
+# 카운터를 묻는 말에 "힐러도 알려줘"처럼 추천받을 역할이 직접 들어 있는 경우.
+_COUNTER_WORD_RE = re.compile(r"카운터|상대법|상대하는|이기는|잡는|대처")
+_COUNTER_ROLE_AFTER_RE = re.compile(
+    r"(?:카운터|상대법|이기는|잡는)\s*(?:영웅\s*(?:중\s*)?)?"
+    r"((?:탱커|딜러|힐러|지원가)(?:\s*(?:랑|이랑|와|과|하고|이나|나|,|/)\s*(?:탱커|딜러|힐러|지원가))*)"
+)
+_COUNTER_ROLE_BEFORE_RE = re.compile(
+    r"(탱커|딜러|힐러|지원가)\s*(?:영웅\s*)?(?:쪽\s*)?"
+    r"(?:카운터|도\s*(?:알려|추천|보여|말해)|만\s*(?:알려|추천|보여)|로\s*(?:알려|추천)|중에서?)"
+)
+_ENEMY_BEFORE_ROLE_RE = re.compile(r"(상대|적|우리|아군|팀|내)\s*(?:팀\s*)?$")
+
+
+def counter_request_role(message: str) -> Optional[str]:
+    """카운터 질문 안에서 추천받을 역할을 직접 말했으면 그 필터를 돌려준다("겐지 카운터 힐러도 알려줘")."""
+    if not message or not _COUNTER_WORD_RE.search(message):
+        return None
+    roles = []
+    for pattern in (_COUNTER_ROLE_AFTER_RE, _COUNTER_ROLE_BEFORE_RE):
+        for m in pattern.finditer(message):
+            # "상대 힐러", "우리 탱커"처럼 편을 가리키는 역할 말은 추천받을 역할이 아니다.
+            if _ENEMY_BEFORE_ROLE_RE.search(message[: m.start(1)].rstrip()):
+                continue
+            roles += [_ROLE_WORDS[w] for w in re.findall(r"탱커|딜러|힐러|지원가", m.group(1))]
+    roles = list(dict.fromkeys(roles))
+    if not roles:
+        return None
+    return roles[0] if len(roles) == 1 else make_role_filter(roles)
+
+
 def role_filter_from_text(message: str) -> Optional[str]:
     stripped = re.sub(r"[\s,.!?~]+", "", message)
     # 역할 단어 하나에 서술격 어미만 붙은 짧은 대답.
@@ -913,6 +1069,11 @@ def role_filter_from_text(message: str) -> Optional[str]:
         if word in ("전체", "전부"):
             return "all"
         return _ROLE_WORDS[word]
+
+    # 앞 답을 이어 "힐러도 알려줘"처럼 역할만 바꿔 다시 묻는 짧은 말.
+    follow = re.match(r"^(탱커|딜러|힐러|지원가)(?:도|는|만|로|으로)?(?:알려|추천|보여|말해)", stripped)
+    if follow:
+        return _ROLE_WORDS[follow.group(1)]
 
     # 두 역할을 함께 고른 경우 복합 필터로 만든다.
     multi = _MULTI_ROLE_PATTERN.search(message)
@@ -934,7 +1095,7 @@ def role_filter_from_text(message: str) -> Optional[str]:
         return "support"
     if any(word in message for word in ["전체로", "전체 추천", "전부 알려", "다 알려"]):
         return "all"
-    return None
+    return counter_request_role(message)
 
 
 # 정정 메시지에서 지워도 되는 표현(역할/인원수/조사/요청 표현).
@@ -946,7 +1107,7 @@ _ROLE_CORRECTION_FILLER_PATTERN = re.compile(
     r"|기준으로|기준|중에서|중|으로만|로만|만"
     r"|입니다|이에요|에요|예요|이야|였어|이고|인데요|인데|임|이라|야|고|요"
     r"|할게요|할래요|할게|할래|맞아요|맞아|입장|플레이"
-    r"|은|는|이|가|을|를|로|으로|랑|이랑|하고|와|과)"
+    r"|은|는|이|가|을|를|도|로|으로|랑|이랑|하고|와|과)"
 )
 
 
@@ -1015,9 +1176,18 @@ _KOREAN_WORD_RE = re.compile(r"[가-힣A-Za-z]{2,}")
 _TRAILING_JOSA_RE = re.compile(r"(이라는|라는|다는|이란|이|가|은|는|을|를|의|에|로|으로|도|게|건)$")
 
 
+# 둘의 차이를 묻는 표현("~와 ~ 차이는 뭐야?", "뭐가 달라?").
+_DIFFERENCE_QUESTION_RE = re.compile(r"차이\s*(가|는|점|좀)?\s*(뭐|머|무엇|있|궁금|알려)|뭐가\s*(어떻게\s*)?달라|어떻게\s*달라|다른\s*점")
+# 알아내는 방법을 묻는 표현("스킬 빠진 거 어떻게 알아?").
+_KNOW_HOW_RE = re.compile(r"어떻게\s*알(?![가-힣]*\s*고)|알\s*수\s*(있|없)")
+
+
 def is_explanation_question(message: str) -> bool:
-    """할 일이 아니라 뜻·이유·사실 여부를 묻는 질문인지("3가지"를 붙이지 않는다)."""
-    return bool(message and (_MEANING_QUESTION_RE.search(message) or _CHECK_QUESTION_RE.search(message)))
+    """할 일이 아니라 뜻·이유·사실 여부·차이를 묻는 질문인지("3가지"를 붙이지 않는다)."""
+    return bool(message and (
+        _MEANING_QUESTION_RE.search(message) or _CHECK_QUESTION_RE.search(message) or _DIFFERENCE_QUESTION_RE.search(message)
+        or _KNOW_HOW_RE.search(message)
+    ))
 
 
 def is_previous_answer_followup(message: str, previous_answer: str) -> bool:
@@ -1079,7 +1249,12 @@ ROLE_CLARIFICATION_INTENTS = {
 HERO_CONTEXT_CLARIFICATION_INTENTS = {"situation", "stay", "performance_improve"}
 
 
-_ENEMY_MARKER_PATTERN = re.compile(r"상대|적팀|(?<![가-힣])적(?![가-힣])")
+_ANY_HERO_NAME = "|".join(
+    re.escape(n) for n in sorted(set(HEROES) | set(HERO_ALIASES), key=len, reverse=True)
+)
+_ENEMY_MARKER_PATTERN = re.compile(
+    rf"상대|적팀|(?<![가-힣])적(?![가-힣])|(?<![가-힣])적(?=(?:{_ANY_HERO_NAME}))"
+)
 
 
 def side_unclear_heroes(message: str) -> List[str]:

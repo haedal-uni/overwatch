@@ -1,0 +1,242 @@
+/* 관리자 테마: Django 기본 색·글꼴을 바꾸고, 폰에서는 목록 표를 카드로 보여 준다(theme.js가 칸 이름을 붙인다). */
+:root {
+  --primary: #5b5fef;
+  --secondary: #3f43c9;
+  --accent: #ffcf5a;
+  --primary-fg: #fff;
+
+  --body-fg: #1f2433;
+  --body-bg: #ffffff;
+  --body-quiet-color: #6b7285;
+  --body-medium-color: #3b4153;
+  --body-loud-color: #10131c;
+
+  --header-color: #c9cdf5;
+  --header-branding-color: #ffffff;
+  --header-bg: #1b1e33;
+  --header-link-color: #ffffff;
+
+  --breadcrumbs-fg: #6b7285;
+  --breadcrumbs-link-fg: #5b5fef;
+  --breadcrumbs-bg: transparent;
+
+  --link-fg: #4b4fd9;
+  --link-hover-color: #2b2fa8;
+  --link-selected-fg: #3f43c9;
+
+  --hairline-color: #e8eaf2;
+  --border-color: #d9dce8;
+  --error-fg: #d6455d;
+  --message-success-bg: #e3f7ec;
+  --message-warning-bg: #fff4d6;
+  --message-error-bg: #ffe8ec;
+
+  --darkened-bg: #f5f6fb;
+  --selected-bg: #eceefe;
+  --selected-row: #f1f0ff;
+
+  --button-fg: #fff;
+  --button-bg: #5b5fef;
+  --button-hover-bg: #4347d6;
+  --default-button-bg: #3f43c9;
+  --default-button-hover-bg: #2f33ae;
+  --close-button-bg: #8a90a3;
+  --close-button-hover-bg: #5f6578;
+  --delete-button-bg: #d6455d;
+  --delete-button-hover-bg: #b9334a;
+  --object-tools-fg: #fff;
+  --object-tools-bg: #5b5fef;
+  --object-tools-hover-bg: #4347d6;
+
+  --page-bg: #f4f6fb;
+  --card-shadow: 0 1px 2px rgba(20, 24, 50, 0.05), 0 6px 18px rgba(20, 24, 50, 0.06);
+  --font-family-primary: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --primary: #8b8ffb; --secondary: #6d71f0; --primary-fg: #fff;
+    --body-fg: #e8eaf4; --body-bg: #1a1d2c; --body-quiet-color: #a2a8bf; --body-medium-color: #cdd1e2; --body-loud-color: #fff;
+    --header-bg: #11131f; --breadcrumbs-fg: #a2a8bf; --breadcrumbs-link-fg: #a9acff; --breadcrumbs-bg: transparent;
+    --link-fg: #a9acff; --link-hover-color: #c9cbff; --link-selected-fg: #c9cbff;
+    --hairline-color: #2a2e42; --border-color: #363a52;
+    --darkened-bg: #222539; --selected-bg: #2b2f4a; --selected-row: #2a2c48;
+    --message-success-bg: #12402a; --message-warning-bg: #4a3a10; --message-error-bg: #4a1622;
+    --page-bg: #13152a; --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    color-scheme: dark;
+  }
+}
+html[data-theme="dark"] {
+  --primary: #8b8ffb; --secondary: #6d71f0; --primary-fg: #fff;
+  --body-fg: #e8eaf4; --body-bg: #1a1d2c; --body-quiet-color: #a2a8bf; --body-medium-color: #cdd1e2; --body-loud-color: #fff;
+  --header-bg: #11131f; --breadcrumbs-fg: #a2a8bf; --breadcrumbs-link-fg: #a9acff; --breadcrumbs-bg: transparent;
+  --link-fg: #a9acff; --link-hover-color: #c9cbff; --link-selected-fg: #c9cbff;
+  --hairline-color: #2a2e42; --border-color: #363a52;
+  --darkened-bg: #222539; --selected-bg: #2b2f4a; --selected-row: #2a2c48;
+  --message-success-bg: #12402a; --message-warning-bg: #4a3a10; --message-error-bg: #4a1622;
+  --page-bg: #13152a; --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
+}
+
+body { background: var(--page-bg); font-size: 14px; letter-spacing: -0.01em; }
+#container { background: var(--page-bg); }
+
+/* 위쪽 머리줄과 메뉴 */
+#header { background: linear-gradient(120deg, #1b1e33 0%, #2c2f63 100%); padding: 14px 28px; gap: 10px 20px; flex-wrap: wrap; min-width: 0; max-width: 100%; box-sizing: border-box; }
+#site-name a { display: inline-flex; align-items: center; gap: 8px; font-weight: 800; font-size: 19px; letter-spacing: -0.02em; }
+.ad-logo { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: linear-gradient(135deg, #ffcf5a, #ff7a9a); color: #1b1e33; font-size: 14px; }
+#user-tools { font-size: 12px; color: #c9cdf5; }
+#user-tools a, #logout-form button { border-bottom: 0; color: #fff; opacity: 0.85; }
+.ad-nav { flex-basis: 100%; align-self: stretch; order: 9; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 4px -4px -4px; padding: 2px 4px 4px; }
+.ad-nav::-webkit-scrollbar { display: none; }
+.ad-nav a { flex: none; padding: 7px 14px; border-radius: 99px; color: #d9dcfa; background: rgba(255, 255, 255, 0.08); font-size: 13px; font-weight: 600; white-space: nowrap; text-decoration: none; }
+.ad-nav a:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+#header .ad-nav a.on, #header .ad-nav a.on:visited { background: #fff; color: #2c2f63; }
+
+/* 경로 표시 */
+div.breadcrumbs { padding: 14px 28px 0; font-size: 12.5px; color: var(--breadcrumbs-fg); }
+div.breadcrumbs a { color: var(--breadcrumbs-link-fg); }
+
+#content { padding: 18px 28px 40px; }
+#content h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; color: var(--body-loud-color); margin-bottom: 14px; }
+
+/* 카드처럼 보이는 상자 */
+.module, #changelist .changelist-form-container, #changelist-filter, .inline-group, fieldset.module, .dashboard .module, #content-related .module {
+  border-radius: 14px; background: var(--body-bg); box-shadow: var(--card-shadow); border: 0;
+}
+.module { overflow: hidden; }
+.module h2, .module caption, .inline-group h2, #changelist-filter h2 {
+  background: transparent; color: var(--body-loud-color); font-size: 13px; font-weight: 800; letter-spacing: 0; text-transform: none; padding: 12px 16px;
+  border-bottom: 1px solid var(--hairline-color);
+}
+.module h2 a, .module caption a, .module caption a.section:link, .module caption a.section:visited { color: var(--body-loud-color); }
+#changelist-filter { overflow: hidden; }
+#changelist-filter h3 { font-size: 12px; font-weight: 700; color: var(--body-quiet-color); }
+#changelist-filter li.selected a { color: var(--primary); }
+
+/* 표 */
+table { border-radius: 0; }
+thead th, tfoot td { background: var(--darkened-bg); color: var(--body-quiet-color); font-size: 12px; font-weight: 700; text-transform: none; border-bottom: 1px solid var(--hairline-color); }
+thead th a:link, thead th a:visited { color: var(--body-quiet-color); }
+td, th { border-bottom: 1px solid var(--hairline-color); }
+tr:nth-child(even) td, tr:nth-child(even) th { background: transparent; }
+#result_list tbody tr:hover td, #result_list tbody tr:hover th { background: var(--selected-row); }
+#changelist #toolbar { background: transparent; border: 0; padding: 12px 14px 4px; }
+#changelist #toolbar form input[type="text"] { border-radius: 10px; height: 36px; padding: 0 12px; border: 1px solid var(--border-color); }
+#changelist .actions { background: transparent; border: 0; padding: 8px 14px; }
+#changelist .paginator { border-top: 1px solid var(--hairline-color); background: transparent; padding: 10px 14px; }
+.xfull { padding: 0 14px; }
+#changelist .changelist-form-container { overflow: hidden; }
+.change-list .toplinks, .change-list ul.toplinks { padding: 10px 14px 0; }
+
+/* 단추·입력칸 */
+.button, input[type="submit"], input[type="button"], .submit-row input, a.button { border-radius: 10px; font-weight: 700; padding: 9px 16px; }
+input[type="text"], input[type="password"], input[type="email"], input[type="number"], input[type="url"], textarea, select, .vTextField {
+  border-radius: 10px; border: 1px solid var(--border-color); padding: 7px 10px;
+}
+.object-tools a:link, .object-tools a:visited { border-radius: 99px; padding: 6px 14px; font-weight: 700; }
+.submit-row { border-radius: 14px; background: var(--body-bg); box-shadow: var(--card-shadow); border: 0; }
+ul.messagelist li { border-radius: 12px; margin: 0 0 8px; }
+
+/* 홈 앱 목록 */
+.dashboard .module table th { font-weight: 600; }
+.dashboard .module table td a { font-weight: 600; }
+
+/* 폰: 목록 표를 행마다 카드로 */
+@media (max-width: 767px) {
+  #header { padding: 12px 16px; flex-wrap: nowrap; align-items: flex-start; }
+  .ad-nav { flex-basis: auto; margin: 2px 0 0; }
+  #site-name a { font-size: 17px; }
+  #user-tools { font-size: 11.5px; }
+  div.breadcrumbs { padding: 10px 16px 0; }
+  #content { padding: 12px 12px 32px; }
+  #content h1 { font-size: 19px; }
+
+  #changelist .changelist-form-container { background: transparent; box-shadow: none; }
+  #changelist .results { overflow: visible; }
+  #result_list { display: block; background: transparent; }
+  #result_list thead { display: none; }
+  #result_list tbody { display: flex; flex-direction: column; gap: 10px; }
+  #result_list tbody tr { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 12px 14px 12px 44px; border-radius: 14px; background: var(--body-bg); box-shadow: var(--card-shadow); }
+  #result_list tbody td, #result_list tbody th { display: block; padding: 0; border: 0; background: transparent !important; font-size: 13px; min-width: 0; max-width: 100%; }
+  #result_list tbody td.action-checkbox { position: absolute; left: 14px; top: 13px; }
+  #result_list tbody th { flex-basis: 100%; font-size: 13.5px; font-weight: 700; }
+  #result_list tbody td[data-label]::before { content: attr(data-label); display: inline-block; margin-right: 5px; font-size: 11px; font-weight: 600; color: var(--body-quiet-color); }
+  #result_list tbody td.ad-wide { flex-basis: 100%; }
+  #result_list tbody td.ad-wide::before { display: block; margin-bottom: 2px; }
+  #result_list tbody td.ad-hide-m { display: none; }
+  #result_list tbody td span[style*="max-width:280px"] { max-width: 100% !important; white-space: normal !important; overflow: visible !important; display: -webkit-box !important; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden !important; }
+
+  #changelist #toolbar { padding: 0 0 8px; }
+  #changelist .actions { padding: 0 0 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  #changelist .paginator { border: 0; padding: 12px 2px; }
+
+  /* 필터는 위로 올리고 단추로 열고 닫는다(theme.js) */
+  #changelist { display: flex; flex-direction: column; }
+  #changelist-filter { order: -1; width: auto; margin: 0 0 12px; display: none; }
+  #changelist.ad-filter-open #changelist-filter { display: block; }
+  .ad-filter-btn { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 10px; padding: 8px 14px; border: 0; border-radius: 99px; background: var(--body-bg); color: var(--body-fg); box-shadow: var(--card-shadow); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .ad-filter-btn .n { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--primary); color: #fff; font-size: 11px; display: inline-grid; place-items: center; }
+  .xfull, .change-list .toplinks { padding: 0; }
+  #changelist .toplinks { display: flex; overflow-x: auto; gap: 10px; white-space: nowrap; }
+
+  /* 상세 화면 */
+  .aligned .form-row, .form-row { padding: 10px 12px; }
+  fieldset.module { margin-bottom: 12px; min-width: 0; width: 100%; box-sizing: border-box; }
+  #content-main, #content, .colM, .main, #container { min-width: 0; max-width: 100%; box-sizing: border-box; }
+  .form-row { min-width: 0; max-width: 100%; box-sizing: border-box; }
+  .form-row > div, .aligned label + div.readonly, .aligned label + p { min-width: 0; max-width: 100%; margin-left: 0 !important; box-sizing: border-box; }
+  .form-row .readonly * { max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }
+  .readonly { word-break: break-word; display: block; width: auto; max-width: 100%; box-sizing: border-box; min-width: 0; overflow-wrap: anywhere; }
+  .aligned .form-row > div, .form-row .flex-container { display: block; width: auto !important; max-width: 100% !important; min-width: 0; box-sizing: border-box; }
+  .aligned label { width: auto; min-width: 0; }
+  .readonly div[style*="pre-wrap"], .readonly pre { max-width: 100%; box-sizing: border-box; overflow-x: auto; }
+  .form-row input[type="text"], .form-row input[type="number"], .form-row textarea, .form-row select, .vTextField, .vLargeTextField { width: 100% !important; max-width: 100%; box-sizing: border-box; }
+  .form-row input.vDateField, .form-row input.vTimeField { width: 9.5em !important; }
+  .submit-row { flex-wrap: wrap; }
+}
+@media (min-width: 768px) {
+  .ad-filter-btn { display: none; }
+  #result_list td.field-enemy_team_display { min-width: 150px; }
+  #result_list td.field-intent { white-space: nowrap; }
+}
+
+/* 목록 줄 전체 클릭 / 게임 의견 반영 표시 */
+#result_list tbody tr.ad-row-link { cursor: pointer; }
+#result_list tbody tr.ad-row-link:hover td, #result_list tbody tr.ad-row-link:hover th { background: rgba(79, 140, 255, 0.08); }
+#result_list tbody tr.ad-open > * { box-shadow: inset 4px 0 0 #ff9f1c; }
+#result_list tbody tr.ad-open > * ~ * { box-shadow: none; }
+#result_list tbody tr.ad-done > * { opacity: 0.62; background: rgba(47, 191, 99, 0.07); }
+.fb-badge { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.fb-badge.open { background: #fff0d9; color: #b4600a; }
+.fb-badge.done { background: #dcf5e4; color: #1f7a45; }
+.fb-badge.new { background: #ffe0e6; color: #c21d45; }
+.fb-badge.seen { background: #ececf0; color: #5d5d6a; }
+.fb-badge.todo { background: #fff0d9; color: #b4600a; }
+@media (prefers-color-scheme: dark) {
+  .fb-badge.open { background: #4a3514; color: #ffc678; }
+  .fb-badge.done { background: #17402a; color: #8fe0ad; }
+  .fb-badge.new { background: #4a1823; color: #ff9fb3; }
+  .fb-badge.seen { background: #2b2b33; color: #b9b9c6; }
+  .fb-badge.todo { background: #4a3514; color: #ffc678; }
+}
+
+/* 관리자 화면 곳곳의 인라인 밝은 상자(메시지·카드·대화 기록·문맥 표)는 다크 모드에서 글자가 안 보여 어두운 바탕으로 바꾼다. */
+@media (prefers-color-scheme: dark) {
+:root:not([data-theme="light"]) div[style*="background:#fff"], :root:not([data-theme="light"]) div[style*="background:#f9fafb"], :root:not([data-theme="light"]) div[style*="background:#eff6ff"], :root:not([data-theme="light"]) th[style*="background:#f3f4f6"] {
+  background: var(--darkened-bg) !important; border-color: var(--border-color) !important; color: var(--body-fg) !important;
+}
+:root:not([data-theme="light"]) td[style*="background:#fef9c3"] { background: #4a4214 !important; color: var(--body-fg) !important; }
+:root:not([data-theme="light"]) div[style*="background:#fef2f2"], :root:not([data-theme="light"]) div[style*="background:#fef2f2"] * { background-color: #3d1b1b !important; border-color: #7f1d1d !important; color: #fecaca !important; }
+}
+html[data-theme="dark"] div[style*="background:#fff"], html[data-theme="dark"] div[style*="background:#f9fafb"], html[data-theme="dark"] div[style*="background:#eff6ff"], html[data-theme="dark"] th[style*="background:#f3f4f6"] {
+  background: var(--darkened-bg) !important; border-color: var(--border-color) !important; color: var(--body-fg) !important;
+}
+html[data-theme="dark"] td[style*="background:#fef9c3"] { background: #4a4214 !important; color: var(--body-fg) !important; }
+html[data-theme="dark"] div[style*="background:#fef2f2"], html[data-theme="dark"] div[style*="background:#fef2f2"] * { background-color: #3d1b1b !important; border-color: #7f1d1d !important; color: #fecaca !important; }
+
+/* 로그 메시지 상자는 글 사이가 붙어 읽기 힘들어 줄 간격을 넓힌다(PC·폰 공통). */
+.readonly div[style*="pre-wrap"] { line-height: 2 !important; letter-spacing: 0.01em; }
+
+.ad-nav .ad-badge.dim { background: #b7aca3; }
+.ad-nav .ad-badge { display: inline-block; min-width: 18px; margin-left: 6px; padding: 1px 6px; border-radius: 99px; background: #ff5c7a; color: #fff; font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }

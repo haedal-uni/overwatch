@@ -17,7 +17,15 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 
+from config import views
+
 urlpatterns = [
+    path("", views.home, name="home"),
+    path("transfer/", views.transfer, name="transfer"),
+    path("manifest.json", views.pwa_file, {"name": "manifest.json"}),
+    path("sw.js", views.pwa_file, {"name": "sw.js"}),
+    path("pwa/<str:name>", views.pwa_file),
     path("admin/", admin.site.urls),
     path("chat/", include("chat.urls")),
+    path("game/", include("game.urls")),
 ]

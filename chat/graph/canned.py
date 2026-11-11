@@ -513,6 +513,9 @@ def try_canned_shortcut(
     할 때 넘길 원문), context_updates(세션에 즉시 반영할 값).
     """
     style = answer_style or context.get("answer_style") or "detailed"
+    # 캐시 답은 간단히·자세히 두 벌뿐이라 명령조는 간단히 답을 쓴다.
+    if style == "command":
+        style = "simple"
     pending_topic = context.get("pending_canned_topic")
     pending_question = context.get("pending_canned_question") or ""
     context_updates = (

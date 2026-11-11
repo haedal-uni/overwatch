@@ -2,15 +2,20 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from collections import OrderedDict
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 from django import forms
+from django.apps import apps
 from django.contrib import admin
+from django.db.models import Count, Max, Min, Q, Value
+from django.db.models.functions import Coalesce, NullIf, TruncDate
 from django.http import FileResponse, Http404, HttpResponseRedirect
 from django.template.response import TemplateResponse
-from django.urls import path, reverse
-from django.utils.html import format_html, format_html_join
+from django.urls import NoReverseMatch, path, reverse
+from django.utils.html import escape, format_html, format_html_join
+from django.utils.safestring import mark_safe
 
 from chat.domain.heroes import role_filter_label
 from chat.graph.pipeline import ROLE_LABELS
@@ -19,9 +24,19 @@ from chat.vision.debug_images import (
     delete_scoreboard_debug_dirs as _delete_scoreboard_debug_dirs,
     scoreboard_debug_root,
 )
-from chat.models import ChatLog, ErrorChatLog, UnsatisfiedChatLog
+from chat.admin_pending import MarkSeenMixin, mark_seen, register_pending, register_pending_since, seen_since
+from chat.models import PatchNote, ChatLog, ChatOpinion, ErrorChatLog, MatchStat, Notice, SiteSetting, UnknownScoreboardLog, UnsatisfiedChatLog
+from chat.site_settings import clear_cache as clear_site_settings_cache
 
 logger = logging.getLogger(__name__)
+
+# 관리자 홈: "최근 활동" 대신 챗봇 대시보드.
+admin.site.index_template = "admin/chat/site_index.html"
+admin.site.site_header = "오버워치 코치 관리"
+admin.site.site_title = "오버워치 코치 관리"
+admin.site.index_title = "대시보드"
+# 위쪽 메뉴(base_site.html)가 있어 왼쪽 앱 목록은 끈다(목록 칸이 좁아졌다).
+admin.site.enable_nav_sidebar = False
 
 # 디버그 이미지 파일명 화이트리스트(경로 조작 방지).
 # _save_debug_images의 파일명 규칙과 일치해야 한다.
@@ -113,7 +128,7 @@ def _format_context_value(key, value):
     if key == "role_filter":
         return role_filter_label(value)
     if key == "answer_style":
-        return {"simple": "간단히", "detailed": "자세히"}.get(value, value)
+        return {"simple": "간단히", "detailed": "자세히", "command": "명령조"}.get(value, value)
     if key == "choice_buttons" and isinstance(value, list):
         return ", ".join(str(b.get("label", b)) if isinstance(b, dict) else str(b) for b in value)
     if isinstance(value, bool):
@@ -217,6 +232,10 @@ class ChatLogDisplayMixin:
         )
         self._warn_if_debug_dir_cleanup_failed(request, failed)
 
+    @admin.display(description="시각", ordering="created_at")
+    def created_display(self, obj):
+        return obj.created_at.strftime("%m/%d %H:%M") if obj.created_at else "-"
+
     @admin.display(description="구분", ordering="role")
     def role_badge(self, obj):
         bg, fg, label = ROLE_BADGE_STYLES.get(
@@ -236,7 +255,33 @@ class ChatLogDisplayMixin:
         if not obj.log_session_id:
             return "-"
         url = reverse("admin:chat_chatlog_session_transcript", args=[obj.log_session_id])
-        return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.log_session_id[:10])
+        return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.log_session_id[:8])
+
+    @admin.display(description="사용자", ordering="device_id")
+    def device_link(self, obj):
+        """이 로그를 남긴 기기의 전체 기록(날짜별·방문별) 화면으로 연결한다."""
+        if not obj.device_id:
+            return format_html('<span style="color:#9ca3af;">기기 정보 없음</span>')
+        person = obj.game_device_id or obj.device_id
+        url = reverse("admin:chat_chatlog_user_detail", args=[person])
+        game = " · 🎮 게임 연결" if obj.game_device_id else ""
+        return format_html('<a href="{}" style="font-weight:600;">{}</a>{}', url, person[:8], game)
+
+    @admin.display(description="이 턴의 대화")
+    def turn_chat(self, obj):
+        """이 질문과 답변만 따로 보여 주고, 같은 방문 전체·이 사람 전체 기록으로 가는 링크를 붙인다."""
+        logs = list(ChatLog.objects.filter(turn_id=obj.turn_id).exclude(role="ERROR").order_by("created_at", "id")[:6])
+        box = '<div style="margin:0 0 8px;"><div style="margin-bottom:3px;">{}</div><div style="max-height:260px;overflow:auto;">{}</div></div>'
+        rows = format_html_join("", box, ((self.role_badge(l), self.message_box(l)) for l in logs)) if logs else mark_safe("-")
+        links = []
+        if obj.log_session_id:
+            url = reverse("admin:chat_chatlog_session_transcript", args=[obj.log_session_id])
+            links.append(format_html('<a href="{}?turn={}#t-{}">이 방문의 대화 전체 보기</a>', url, obj.turn_id, obj.turn_id))
+        if obj.device_id:
+            person = obj.game_device_id or obj.device_id
+            links.append(format_html('<a href="{}">이 사람의 전체 기록(날짜별)</a>', reverse("admin:chat_chatlog_user_detail", args=[person])))
+        tail = format_html_join(" · ", "{}", ((l,) for l in links)) if links else ""
+        return format_html("{}<div>{}</div>", rows, tail)
 
     @admin.display(description="턴", ordering="turn_id")
     def turn_link(self, obj):
@@ -246,7 +291,7 @@ class ChatLogDisplayMixin:
             reverse("admin:chat_chatlog_changelist")
             + "?" + urlencode({"turn_id": obj.turn_id})
         )
-        return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.turn_id[:10])
+        return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.turn_id[:8])
 
     @admin.display(description="메시지 미리보기")
     def message_preview(self, obj):
@@ -740,8 +785,9 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
     actions = ["delete_selected", "delete_entire_session"]
 
     list_display = (
-        "created_at",
+        "created_display",
         "role_badge",
+        "device_link",
         "log_session_link",
         "turn_link",
         "intent",
@@ -762,6 +808,8 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
     )
 
     search_fields = (
+        "device_id",
+        "game_device_id",
         "log_session_id",
         "turn_id",
         "message",
@@ -780,6 +828,9 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         "role_badge",
         "log_session_id",
         "turn_id",
+        "device_link",
+        "game_device_id",
+        "turn_chat",
         "role",
         "intent",
         "current_hero",
@@ -799,7 +850,7 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
 
     fieldsets = (
         ("기본 정보", {
-            "fields": ("created_at", "role_badge", "role", "log_session_id", "turn_id"),
+            "fields": ("created_at", "role_badge", "device_link", "game_device_id", "log_session_id", "turn_id", "turn_chat"),
         }),
         ("분석 정보", {
             "fields": ("intent", "current_hero", "target_enemy", "enemy_team_display", "context_summary_display"),
@@ -822,6 +873,8 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
 
     def get_urls(self):
         custom_urls = [
+            path("users/", self.admin_site.admin_view(self.users_view), name="chat_chatlog_users"),
+            path("users/<str:device_id>/", self.admin_site.admin_view(self.user_detail_view), name="chat_chatlog_user_detail"),
             path(
                 "session/<str:log_session_id>/transcript/",
                 self.admin_site.admin_view(self.session_transcript_view),
@@ -839,6 +892,116 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
             ),
         ]
         return custom_urls + super().get_urls()
+
+    # ── 사용자(기기)별 보기: 누가 언제 얼마나 챗봇을 썼는지, 게임도 하는지 한눈에 본다.
+    @staticmethod
+    def _game_usage(game_ids):
+        """연결된 게임 기기 ID들의 이용 기록(게임 앱이 없으면 빈 값). chat은 game을 import하지 않고 앱 레지스트리로만 읽는다."""
+        if not game_ids or not apps.is_installed("game"):
+            return {}
+        try:
+            Visit = apps.get_model("game", "GameVisit")
+            rows = Visit.objects.filter(player_id__in=list(game_ids)).values("player_id", "game").annotate(
+                days=Count("date", distinct=True), last=Max("date"))
+            out = {}
+            for r in rows:
+                base = r["game"].partition(":")[0]
+                d = out.setdefault(r["player_id"], {})
+                e = d.setdefault(base, {"days": 0, "last": None})
+                e["days"] = max(e["days"], r["days"])
+                e["last"] = max(filter(None, [e["last"], r["last"]]), default=None)
+            return out
+        except Exception:
+            logger.exception("게임 이용 기록을 읽지 못했다")
+            return {}
+
+    @staticmethod
+    def _game_titles():
+        try:
+            from game.views import GAMES  # 관리자 화면에서만 읽는다(게임 앱이 있을 때).
+            return {g["slug"]: g["title"] for g in GAMES}
+        except Exception:
+            return {}
+
+    def users_view(self, request):
+        period = request.GET.get("p", "30")
+        days = {"1": 1, "7": 7, "30": 30}.get(period)
+        since = datetime.now() - timedelta(days=days) if days else None
+        qs = ChatLog.objects.exclude(device_id="")
+        if since:
+            qs = qs.filter(created_at__gte=since)
+        q = (request.GET.get("q") or "").strip()
+        if q:
+            qs = qs.filter(device_id__startswith=q) | qs.filter(game_device_id__startswith=q)
+        # 한 사람 = 같은 브라우저. 게임 기기 ID가 있으면 그것으로, 없으면 챗봇 기기 ID로 묶는다(둘이 같은 값이면 하나로 합쳐진다).
+        users = list(
+            qs.filter(role="USER").annotate(person=Coalesce(NullIf("game_device_id", Value("")), "device_id")).values("person").annotate(
+                first=Min("created_at"), last=Max("created_at"), questions=Count("id"), game=Max("game_device_id"),
+                visits=Count("log_session_id", distinct=True), active_days=Count(TruncDate("created_at"), distinct=True),
+            ).order_by("-last")[:300]
+        )
+        usage = self._game_usage({u["game"] for u in users if u["game"]})
+        titles = self._game_titles()
+        for u in users:
+            u["device_id"] = u.pop("person")
+            g = u.pop("game") or ""
+            u["game_id"] = g
+            u["games"] = [f"{titles.get(k, k)} {v['days']}일" for k, v in (usage.get(g) or {}).items()]
+            u["url"] = reverse("admin:chat_chatlog_user_detail", args=[u["device_id"]])
+        legacy = ChatLog.objects.filter(device_id="", role="USER")
+        if since:
+            legacy = legacy.filter(created_at__gte=since)
+        context = {
+            **self.admin_site.each_context(request),
+            "title": "사용자별 대화 기록", "users": users, "period": period, "q": q,
+            "legacy_count": legacy.count(), "opts": self.model._meta,
+        }
+        return TemplateResponse(request, "admin/chat/chat_users.html", context)
+
+    def user_detail_view(self, request, device_id):
+        logs = list(ChatLog.objects.filter(Q(device_id=device_id) | Q(game_device_id=device_id)).order_by("created_at", "id"))
+        if not logs:
+            raise Http404
+        game_ids = {l.game_device_id for l in logs if l.game_device_id}
+        usage = self._game_usage(game_ids)
+        titles = self._game_titles()
+        game_rows = []
+        for gid in sorted(game_ids):
+            for slug, v in (usage.get(gid) or {}).items():
+                game_rows.append({"title": titles.get(slug, slug), "days": v["days"], "last": v["last"]})
+        visits = OrderedDict()
+        for l in logs:
+            v = visits.setdefault(l.log_session_id or l.turn_id, {"sid": l.log_session_id, "start": l.created_at, "end": l.created_at, "q": 0, "first": "", "heroes": set()})
+            v["end"] = l.created_at
+            if l.role == "USER":
+                v["q"] += 1
+                if not v["first"]:
+                    v["first"] = (l.message or "")[:80]
+                if l.current_hero:
+                    v["heroes"].add(l.current_hero)
+        by_day = OrderedDict()
+        for v in sorted(visits.values(), key=lambda x: x["start"], reverse=True):
+            v["minutes"] = max(0, int((v["end"] - v["start"]).total_seconds() // 60))
+            v["heroes"] = ", ".join(sorted(v["heroes"])[:3])
+            v["url"] = reverse("admin:chat_chatlog_session_transcript", args=[v["sid"]]) if v["sid"] else ""
+            by_day.setdefault(v["start"].date(), []).append(v)
+        day_rows = [{"date": d, "visits": vs, "questions": sum(x["q"] for x in vs)} for d, vs in by_day.items()]
+        today = datetime.now().date()
+        count_by = {r["date"]: r["questions"] for r in day_rows}
+        strip = [{"date": today - timedelta(days=i), "n": count_by.get(today - timedelta(days=i), 0)} for i in range(13, -1, -1)]
+        top = max([x["n"] for x in strip] + [1])
+        for x in strip:
+            x["h"] = int(4 + 40 * x["n"] / top) if x["n"] else 3
+        context = {
+            **self.admin_site.each_context(request),
+            "title": f"사용자 기록 {device_id[:8]}", "device_id": device_id,
+            "game_ids": sorted(game_ids), "game_rows": game_rows,
+            "first": logs[0].created_at, "last": logs[-1].created_at,
+            "active_days": len(by_day), "visit_count": len(visits),
+            "question_count": sum(1 for l in logs if l.role == "USER"),
+            "day_rows": day_rows, "strip": strip, "opts": self.model._meta,
+        }
+        return TemplateResponse(request, "admin/chat/chat_user_detail.html", context)
 
     def session_delete_view(self, request, log_session_id):
         """"이 세션 전체 삭제" 버튼이 POST하는 곳(GET으로는 실행되지 않는다)."""
@@ -889,10 +1052,20 @@ class ChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
             }
             for log in logs
         ]
+        first = logs[0] if logs else None
+        last = logs[-1] if logs else None
+        device_id = next((l.device_id for l in logs if l.device_id), "")
         context = {
             **self.admin_site.each_context(request),
             "title": f"대화 전체 보기 — {log_session_id}",
             "log_session_id": log_session_id,
+            "highlight_turn": request.GET.get("turn", ""),
+            "device_id": device_id,
+            "game_id": next((l.game_device_id for l in logs if l.game_device_id), ""),
+            "user_url": reverse("admin:chat_chatlog_user_detail", args=[next((l.game_device_id for l in logs if l.game_device_id), device_id)]) if device_id else "",
+            "visit_start": first.created_at if first else None,
+            "visit_end": last.created_at if last else None,
+            "visit_minutes": int((last.created_at - first.created_at).total_seconds() // 60) if first else 0,
             "transcript_messages": transcript_messages,
             "opts": self.model._meta,
         }
@@ -905,8 +1078,12 @@ class ErrorChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
 
     actions = ["delete_selected", "delete_entire_session"]
 
+    def changelist_view(self, request, extra_context=None):
+        mark_seen(request, "error_log")
+        return super().changelist_view(request, extra_context)
+
     list_display = (
-        "created_at",
+        "created_display",
         "log_session_link",
         "turn_link",
         "intent",
@@ -952,13 +1129,14 @@ class ErrorChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
 
 
 @admin.register(UnsatisfiedChatLog)
-class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
+class UnsatisfiedChatLogAdmin(MarkSeenMixin, ChatLogDisplayMixin, admin.ModelAdmin):
+    seen_kind = "unsatisfied"
     """사용자가 불만족으로 표시한 AI 답변만 모아 보여준다."""
 
     actions = ["delete_selected", "delete_entire_session"]
 
     list_display = (
-        "created_at",
+        "created_display",
         "log_session_link",
         "turn_link",
         "intent",
@@ -967,8 +1145,11 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         "enemy_team_display",
         "message_preview",
         "feedback_reason_preview",
-        "resolved_badge",
+        "process_state",
+        "is_resolved",
     )
+    # 상세 화면을 열지 않고 목록에서 처리 완료를 체크한 뒤 아래 "저장"으로 한꺼번에 저장한다.
+    list_editable = ("is_resolved",)
     list_filter = ("intent", "current_hero", "is_resolved", "created_at")
     search_fields = ("log_session_id", "turn_id", "message", "feedback_reason", "resolution_note")
     date_hierarchy = "created_at"
@@ -1001,6 +1182,7 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         "suggested_questions_display",
         "scoreboard_admin_log_display",
         "feedback_reason",
+        "gift_link_display",
         "metadata_pretty",
     )
 
@@ -1012,7 +1194,7 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
             "fields": ("related_question", "message_box", "matchup_card_display", "recommend_card_display", "suggested_questions_display", "scoreboard_admin_log_display"),
         }),
         ("불만족 이유", {
-            "fields": ("feedback_reason",),
+            "fields": ("feedback_reason", "gift_link_display"),
         }),
         ("처리 상태 (관리자 메모)", {
             "fields": ("is_resolved", "resolution_note"),
@@ -1024,9 +1206,20 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
         }),
     )
 
-    @admin.display(description="처리 상태", ordering="is_resolved", boolean=True)
-    def resolved_badge(self, obj):
-        return obj.is_resolved
+    @admin.display(description="게임 선물")
+    def gift_link_display(self, obj):
+        # 게임 앱이 있을 때만 선물 추가 화면으로 보낸다(chat이 game 코드를 import하지 않게 URL 이름만 쓴다).
+        device = (obj.metadata or {}).get("feedback_device")
+        if not device:
+            return "이 사용자는 미니 게임을 연 적이 없어 선물을 보낼 수 없어요."
+        try:
+            url = reverse("admin:game_gamegift_add")
+        except NoReverseMatch:
+            return "-"
+        return format_html(
+            '<a class="button" href="{}?targets={}&title={}">이 사용자에게 선물 보내기</a> <span style="opacity:.7">기기 {}</span>',
+            url, device[:8], "의견 감사 선물", device[:8],
+        )
 
     @admin.display(description="불만족 이유")
     def feedback_reason_preview(self, obj):
@@ -1037,3 +1230,341 @@ class UnsatisfiedChatLogAdmin(ChatLogDisplayMixin, admin.ModelAdmin):
             'overflow:hidden; text-overflow:ellipsis;">{}</span>',
             truncated,
         )
+
+
+@admin.register(UnknownScoreboardLog)
+class UnknownScoreboardLogAdmin(MarkSeenMixin, ChatLogDisplayMixin, admin.ModelAdmin):
+    seen_kind = "unknown_scoreboard"
+    """영웅을 못 알아본 줄이 있는 스탯창 분석만 모아 보여준다(원본·크롭은 상세의 진단 정보에서 본다)."""
+
+    actions = ["delete_selected", "delete_entire_session"]
+
+    list_display = ("created_display", "log_session_link", "turn_link", "current_hero", "unknown_places", "process_state", "is_resolved")
+    # 확인을 마친 줄은 목록에서 체크해 "저장"으로 한꺼번에 표시한다.
+    list_editable = ("is_resolved",)
+    list_filter = ("is_resolved", "created_at")
+    search_fields = ("log_session_id", "turn_id", "message")
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+    list_per_page = 50
+
+    def has_change_permission(self, request, obj=None):
+        return True
+
+    def log_change(self, request, obj, message):
+        if not message:
+            return None
+        return super().log_change(request, obj, message)
+
+    readonly_fields = (
+        "created_at", "log_session_id", "turn_id", "current_hero", "unknown_places",
+        "message_box", "scoreboard_admin_log_display", "metadata_pretty",
+    )
+    fieldsets = (
+        ("기본 정보", {"fields": ("created_at", "log_session_id", "turn_id", "current_hero", "unknown_places")}),
+        ("분석 결과 / 진단 정보 (행별 크롭·원본 이미지)", {"fields": ("message_box", "scoreboard_admin_log_display")}),
+        ("확인 상태", {
+            "fields": ("is_resolved", "resolution_note"),
+            "description": "영웅 템플릿을 추가했거나 확인을 마쳤으면 체크해 두세요.",
+        }),
+        ("상세 컨텍스트 / 메타데이터", {"fields": ("metadata_pretty",), "classes": ("collapse",)}),
+    )
+
+    @admin.display(description="못 알아본 자리 (1순위 후보 · 점수)")
+    def unknown_places(self, obj):
+        rows = [r for r in ((obj.metadata or {}).get("admin_log") or {}).get("hero_rows") or [] if r.get("hero") == "unknown"]
+        lines = []
+        for r in rows:
+            team = "아군" if r.get("team") == "ally" else "상대"
+            top = (r.get("top_matches") or [None])[0]
+            if isinstance(top, dict):
+                cand = f"{top.get('hero') or top.get('name') or '?'} {top.get('score', '')}"
+            elif isinstance(top, (list, tuple)) and top:
+                cand = " ".join(str(x) for x in top[:2])
+            else:
+                cand = f"{r.get('rank1_hero') or '-'} {r.get('best_score', '')}"
+            lines.append(f"{team} {int(r.get('row_index', 0)) + 1}행({r.get('role') or '-'}): {cand}")
+        return format_html_join(mark_safe("<br>"), "{}", ((line,) for line in lines)) if lines else "-"
+
+
+@admin.register(ChatOpinion)
+class ChatOpinionAdmin(MarkSeenMixin, admin.ModelAdmin):
+    seen_kind = "chat_opinion"
+    """챗봇의 "의견 보내기"로 받은 글. 반영 여부와 처리 메모만 고친다."""
+
+    list_display = ("created_at", "message_preview", "process_state", "is_resolved")
+    list_editable = ("is_resolved",)
+    list_filter = ("is_resolved", "created_at")
+    search_fields = ("message", "resolution_note")
+    date_hierarchy = "created_at"
+    list_per_page = 50
+    readonly_fields = ("created_at", "message", "user_agent", "device_id", "gift_link_display")
+    fields = ("created_at", "message", "user_agent", "gift_link_display", "is_resolved", "resolution_note")
+
+    def has_add_permission(self, request):
+        return False
+
+    @admin.display(description="의견")
+    def message_preview(self, obj):
+        text = (obj.message or "").replace("\n", " ").strip()
+        return text[:80] + ("…" if len(text) > 80 else "")
+
+    @admin.display(description="상태")
+    def status_badge(self, obj):
+        if obj.is_resolved:
+            return format_html('<span style="color:#15803d;font-weight:700;">✔ 반영함</span>')
+        return format_html('<span style="color:#c2410c;font-weight:700;">● 미반영</span>')
+
+    @admin.display(description="게임 선물")
+    def gift_link_display(self, obj):
+        if not obj.device_id:
+            return "이 사용자는 미니 게임을 연 적이 없어 선물을 보낼 수 없어요."
+        try:
+            url = reverse("admin:game_gamegift_add")
+        except NoReverseMatch:
+            return "-"
+        return format_html(
+            '<a class="button" href="{}?targets={}&title={}">이 사용자에게 선물 보내기</a> <span style="opacity:.7">기기 {}</span>',
+            url, obj.device_id[:8], "의견 감사 선물", obj.device_id[:8],
+        )
+
+
+@admin.register(SiteSetting)
+class SiteSettingAdmin(admin.ModelAdmin):
+    """설정은 한 줄뿐이라 목록 대신 바로 수정 화면을 연다."""
+
+    fields = ("meta_roster_size", "updated_at")
+    readonly_fields = ("updated_at",)
+
+    def has_add_permission(self, request):
+        return not SiteSetting.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        obj, _ = SiteSetting.objects.get_or_create(pk=1)
+        return HttpResponseRedirect(reverse("admin:chat_sitesetting_change", args=[obj.pk]))
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        clear_site_settings_cache()
+
+
+class PatchNoteForm(forms.ModelForm):
+    class Meta:
+        model = PatchNote
+        fields = "__all__"
+        help_texts = {"body": "마크다운으로 쓴다: ## 큰 제목 / ### 작은 제목 / **굵게** / *기울임* / `코드` / [글자](주소) / - 목록(들여쓰면 하위 목록, 들여쓴 줄은 바로 위 항목에 이어지는 줄) / 1. 번호 목록 / > 인용 / | 표 | / --- 구분선 / ![설명](/static/chat/patch/파일이름.jpg) 그림 한 줄. 줄바꿈은 쓴 그대로 보이고, 빈 줄을 더 넣으면 그만큼 간격이 커진다(<br> 한 줄도 간격 하나)."}
+
+
+@admin.register(PatchNote)
+class PatchNoteAdmin(admin.ModelAdmin):
+    form = PatchNoteForm
+    """홈 화면 "패치 노트"에 보이는 업데이트 글. 공개한 글이 올린 날 순서로 쌓인다."""
+
+    list_display = ("title", "published_at", "is_published")
+    list_filter = ("is_published",)
+    list_editable = ("is_published",)
+    fields = ("title", "body", "published_at", "is_published")
+
+
+@admin.register(Notice)
+class NoticeAdmin(admin.ModelAdmin):
+    """홈 화면 공지. 켜져 있고 기간 안인 것이 위쪽·아래쪽에 보인다."""
+
+    list_display = ("message", "position", "is_active", "starts_at", "ends_at", "created_at")
+    list_filter = ("is_active", "position")
+    list_editable = ("is_active",)
+    fields = ("message", "position", "is_active", "starts_at", "ends_at")
+
+
+class MatchResultFilter(admin.SimpleListFilter):
+    title = "승패"
+    parameter_name = "res"
+
+    def lookups(self, request, model_admin):
+        return [("win", "승리"), ("loss", "패배"), ("draw", "무승부"), ("none", "미입력")]
+
+    def queryset(self, request, queryset):
+        v = self.value()
+        if v == "none":
+            return queryset.filter(result="")
+        return queryset.filter(result=v) if v in ("win", "loss", "draw") else queryset
+
+
+@admin.register(MatchStat)
+class MatchStatAdmin(admin.ModelAdmin):
+    """익명으로 모은 판 수치. 읽기 전용이고 지우기만 된다. 목록 위에 승률·영웅별·순위별 요약이 붙는다."""
+
+    list_display = ("created_at", "self_hero", "self_rank", "result_badge")
+    list_filter = (MatchResultFilter, "self_hero", "created_at")
+    readonly_fields = ("created_at", "stat_key", "self_hero", "self_rank", "result", "detail_tables", "raw_rows")
+    fieldsets = (
+        (None, {"fields": ("created_at", "self_hero", "self_rank", "result", "detail_tables")}),
+        ("원본 값", {"fields": ("stat_key", "raw_rows"), "classes": ("collapse",)}),
+    )
+
+    @admin.display(description="승패")
+    def result_badge(self, obj):
+        label, color = {"win": ("승리", "#15803d"), "loss": ("패배", "#b91c1c"), "draw": ("무승부", "#6b7280")}.get(obj.result, ("미입력", "#9ca3af"))
+        return format_html('<b style="color:{}">{}</b>', color, label)
+
+    @admin.display(description="저장된 줄 (JSON)")
+    def raw_rows(self, obj):
+        return format_html("<pre>{}</pre>", json.dumps({"ally": obj.ally, "enemy": obj.enemy}, ensure_ascii=False, indent=2))
+
+    @staticmethod
+    def _team_table(title, rows):
+        head = "".join(f"<th>{h}</th>" for h in ("영웅", "처치", "도움", "데스", "피해량", "치유량", "경감량"))
+        body = ""
+        for p in rows or []:
+            cells = [escape(p.get("hero") or "(못 알아봄)")] + [
+                "-" if p.get(k) is None else f"{int(p[k]):,}" for k in ("kills", "assists", "deaths", "damage", "healing", "mitigation")
+            ]
+            body += "<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+        return f'<h3 style="margin:14px 0 6px">{title}</h3><table class="ms-detail"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
+
+    @admin.display(description="양 팀 스탯과 순위 계산")
+    def detail_tables(self, obj):
+        from chat.domain import stat_verdicts as sv
+
+        def rows(team):
+            out = []
+            for p in team or []:
+                out.append({
+                    "hero": p.get("hero") or "unknown", "role_code": p.get("role"),
+                    "kda": {"kill": p.get("kills"), "death": p.get("deaths"), "assist": p.get("assists")},
+                    "damage": p.get("damage"), "healing": p.get("healing"), "mitigation": p.get("mitigation"),
+                    "is_me": bool(obj.self_hero) and p.get("hero") == obj.self_hero,
+                })
+            return out
+
+        html = self._team_table("우리팀", obj.ally) + self._team_table("상대팀", obj.enemy)
+        try:
+            report = sv.score_report_rows(sv.entries_from_scoreboard_rows(rows(obj.ally), rows(obj.enemy)))
+        except Exception:
+            report = []
+        if not report:
+            return mark_safe(html + "<p>순위를 다시 계산할 수 없어요(영웅을 못 알아본 줄이 많음).</p>")
+        mine = next((r["rank"] for r in report if r["is_me"]), None)
+        note = ""
+        if obj.self_rank is not None and mine is not None:
+            note = f"저장된 내 순위 {obj.self_rank}위 / 지금 코드로 다시 계산한 순위 {mine}위" + (" (같음)" if mine == obj.self_rank else " (다름)")
+        metric_keys = [m for m in sv.METRICS if any(m in r["metrics"] for r in report)]
+        head = "".join(f"<th>{h}</th>" for h in ("순위", "영웅", "유형", "팀 안 점수", "상대 비교 점수", "최종 점수")) + "".join(
+            f"<th>{sv.METRIC_LABELS[m]}</th>" for m in metric_keys
+        )
+
+        def n(v):
+            return "-" if v is None else f"{v:.0f}"
+
+        body = ""
+        for r in report:
+            cells = [str(r["rank"]), escape(r["hero"]) + (" ◀ 나" if r["is_me"] else ""), escape(r["type_label"]), n(r["team_score"]), n(r["enemy_score"]), f"<b>{r['final']:.1f}</b>"]
+            for m in metric_keys:
+                info = r["metrics"].get(m)
+                if not info:
+                    cells.append("")
+                    continue
+                shown = [v for v in (info["team"], info["enemy"]) if v is not None]
+                avg = f"{sum(shown) / len(shown):.0f}" if shown else "-"
+                cells.append(
+                    f"<b>{avg}점</b><br><small>비중 {info['weight']:g}%<br>팀 {n(info['team'])} · 상대 {n(info['enemy'])}</small>"
+                )
+            body += "<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+        html += f'<h3 style="margin:14px 0 6px">우리팀 순위 계산</h3><p>{escape(note)}</p>'
+        html += (
+            "<p style='font-size:12.5px;line-height:1.6'>"
+            "점수는 0~100이고 <b>50이면 비교 대상과 같은 수준</b>, 높을수록 낫습니다(데스는 적을수록 높음).<br>"
+            "<b>팀</b> = 우리팀의 같은 포지션과 비교한 점수, <b>상대</b> = 상대팀의 같은 포지션과 비교한 점수, 칸의 큰 숫자는 둘의 평균입니다. 같은 포지션이 없으면 '-'.<br>"
+            "<b>비중</b>은 그 영웅 유형이 이 지표를 얼마나 중요하게 보는지(합 100%)이고, 최종 점수 = 팀 안 점수 50% + 상대 비교 점수 50%, 각 점수는 지표 점수를 비중대로 더한 값입니다."
+            "</p>"
+        )
+        html += f'<table class="ms-detail"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
+        html += f"<p style='opacity:.7;font-size:12px'>{escape(sv.score_basis_label(sv.entries_from_scoreboard_rows(rows(obj.ally), rows(obj.enemy))))}. 영웅을 못 알아본 줄은 순위 계산에서 빠집니다.</p>"
+        return mark_safe(html)
+
+    class Media:
+        css = {"all": ("chat/admin/matchstat.css",)}
+
+    SAMPLE = 3000
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        extra = dict(extra_context or {})
+        extra["stats"] = self._summary()
+        return super().changelist_view(request, extra)
+
+    def _summary(self):
+        from collections import defaultdict
+
+        qs = MatchStat.objects.all()
+        total = qs.count()
+        if not total:
+            return None
+        counts = {r: qs.filter(result=r).count() for r in ("win", "loss", "draw")}
+        known = sum(counts.values())
+        decided = counts["win"] + counts["loss"]
+
+        def bucket(rows, key):
+            data = defaultdict(lambda: [0, 0, 0])
+            for hero_or_rank, result in rows:
+                b = data[hero_or_rank]
+                b[0] += 1
+                if result in ("win", "loss", "draw"):
+                    b[1] += 1
+                if result == "win":
+                    b[2] += 1
+            out = []
+            for k, (n, kn, w) in data.items():
+                out.append({"label": key(k), "n": n, "known": kn, "rate": round(100 * w / kn, 1) if kn else None, "_k": k})
+            return out
+
+        heroes = bucket(qs.exclude(self_hero="").values_list("self_hero", "result"), lambda k: k)
+        heroes.sort(key=lambda r: -r["n"])
+
+        sums = {"win": [0, 0, 0], "loss": [0, 0, 0]}
+        for ally, enemy, result in qs.filter(result__in=("win", "loss")).values_list("ally", "enemy", "result")[: self.SAMPLE]:
+            a = sum(int(p.get("deaths") or 0) for p in ally or [])
+            e = sum(int(p.get("deaths") or 0) for p in enemy or [])
+            s = sums[result]
+            s[0] += 1
+            s[1] += a
+            s[2] += e
+
+        def avg(result, idx):
+            n = sums[result][0]
+            return round(sums[result][idx] / n, 1) if n else "-"
+
+        deaths = {"win_ally": avg("win", 1), "loss_ally": avg("loss", 1), "win_enemy": avg("win", 2), "loss_enemy": avg("loss", 2)} if sums["win"][0] or sums["loss"][0] else None
+        return {
+            "total": total, "with_result": known, "wins": counts["win"], "losses": counts["loss"], "draws": counts["draw"],
+            "win_rate": round(100 * counts["win"] / decided, 1) if decided else None,
+            "heroes": heroes[:15], "deaths": deaths, "sample": self.SAMPLE,
+        }
+
+
+@register_pending("admin:chat_unsatisfiedchatlog_changelist", "unsatisfied")
+def _pending_unsatisfied():
+    return UnsatisfiedChatLog.objects.filter(is_resolved=False)
+
+
+@register_pending("admin:chat_unknownscoreboardlog_changelist", "unknown_scoreboard")
+def _pending_unknown():
+    return UnknownScoreboardLog.objects.filter(is_resolved=False)
+
+
+@register_pending("admin:chat_chatopinion_changelist", "chat_opinion")
+def _pending_opinion():
+    return ChatOpinion.objects.filter(is_resolved=False)
+
+
+@register_pending_since("admin:chat_errorchatlog_changelist")
+def _new_errors(request):
+    return ErrorChatLog.objects.filter(created_at__gt=seen_since(request, "error_log")).count()
